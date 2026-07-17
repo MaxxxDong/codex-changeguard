@@ -217,23 +217,38 @@ export class NdjsonFrameAccumulator {
         continue;
       }
 
-      // Append only up to maxBytes + 1 so we can detect overflow without
-      // unbounded accumulation.
-      const room = this.maxBytes - this.buf.length;
-      if (room <= 0) {
-        // Already at bound without newline → overflow.
+      // Inclusive bound: payload of length <= maxBytes is accepted.
+      // When payload is already exactly maxBytes, only a newline may complete
+      // the frame; any other next byte is overflow. Retained bytes stay bounded.
+      if (this.buf.length === this.maxBytes) {
+        if (data[0] === 0x0a) {
+          const frameBuf = this.buf;
+          this.buf = Buffer.alloc(0);
+          data = data.subarray(1);
+          if (frameBuf.length > 0) {
+            this.onFrame(frameBuf.toString("utf8"));
+          }
+          continue;
+        }
         this.emitOverflowAndDiscard(data);
         data = Buffer.alloc(0);
         continue;
       }
 
-      // Look for newline within the portion we can still accept.
+      if (this.buf.length > this.maxBytes) {
+        // Defensive: never retain past the inclusive bound.
+        this.emitOverflowAndDiscard(data);
+        data = Buffer.alloc(0);
+        continue;
+      }
+
+      const room = this.maxBytes - this.buf.length;
       const take = Math.min(room, data.length);
       const slice = data.subarray(0, take);
       const nlInSlice = slice.indexOf(0x0a);
 
       if (nlInSlice >= 0) {
-        // Complete frame within bound.
+        // Complete frame within inclusive bound (frame length <= maxBytes).
         const frameBuf = Buffer.concat([this.buf, slice.subarray(0, nlInSlice)]);
         this.buf = Buffer.alloc(0);
         data = data.subarray(nlInSlice + 1);
@@ -244,24 +259,11 @@ export class NdjsonFrameAccumulator {
         continue;
       }
 
-      // No newline in accepted slice.
-      if (take < data.length) {
-        // Accepting room bytes still leaves more — check if overflow.
-        // We have filled to maxBytes without a newline.
-        this.buf = Buffer.concat([this.buf, slice]);
-        data = data.subarray(take);
-        // If remaining starts with more non-newline content past bound → overflow.
-        // buf is exactly maxBytes; any additional byte without prior newline is overflow.
-        if (this.buf.length >= this.maxBytes) {
-          this.emitOverflowAndDiscard(data);
-          data = Buffer.alloc(0);
-        }
-        continue;
-      }
-
-      // Entire remaining chunk fits under the bound; hold for more data.
+      // No newline in the accepted payload slice.
       this.buf = Buffer.concat([this.buf, slice]);
-      data = Buffer.alloc(0);
+      data = data.subarray(take);
+      // Loop again: if more bytes remain, the exact-bound branch decides
+      // newline-accept vs overflow without unbounded accumulation.
     }
   }
 

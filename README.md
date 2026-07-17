@@ -50,12 +50,12 @@ node bin/changeguard.js diagnose fixtures/negative-control
 - CLI: `changeguard diagnose <isolated-target-directory>`
 - MCP tool: `changeguard_diagnose` with `{ "target": "<isolated-target-directory>" }` only
 - Skill: `/changeguard diagnose` orchestrates the same seams (see `skills/changeguard/SKILL.md`)
-- Package: `npm run package` writes `release/codex-changeguard-plugin/` (compiled JS + manifest + MCP + Skill + fixtures/docs/schemas; no `node_modules`)
+- Package: `npm run package` writes `release/codex-changeguard-plugin/` with the exact public top-level surface (compiled JS + manifest + MCP + Skill + fixtures/docs/schemas; no `node_modules` or `AGENTS.md`); `package:smoke` launches MCP via packaged `.mcp.json`
 
 Positive protected-process fixture may reach `SOURCE_COMPONENT_LOCATED` only when
 artifact bytes are independently hashed and the protected-process structural
-signature is measured locally (exactly one real shim block; comments/strings
-cannot spoof). Declared hashes or AST ids inside incident JSON never self-prove;
+signature is measured locally (exactly one real shim block; comments/strings/regex
+literals cannot spoof). Declared hashes or AST ids inside incident JSON never self-prove;
 surface/error/phase remain applicability gates. The negative control stays
 `INCONCLUSIVE` and does not claim a root cause. User-resolution and
 upstream-contribution receipts are always separate.

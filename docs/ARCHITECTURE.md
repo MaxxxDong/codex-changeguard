@@ -75,11 +75,11 @@ Core I/O rules:
 - fail-closed no-follow: refuse a target that is itself a symlink; refuse any symlink in any intermediate segment or leaf of named candidates (even if it currently resolves inside the target)
 - open with `O_NOFOLLOW` when available, `fstat` the fd, require a regular file, enforce the byte limit from the fd, and compare stable pre-open metadata where meaningful
 - explicit byte limits; never recursively crawl a project tree
-- independently measure artifact SHA-256 and a syntax-aware structural signature of the exact protected-process shim block; declared JSON hashes/ids never self-prove
+- independently measure artifact SHA-256 and a syntax-aware structural signature of the exact protected-process shim block; declared JSON hashes/ids never self-prove; fixture `.hash.txt`, incident declared hash, recovery original hash, and measured bytes must agree, and `local_facts_digest` must equal the core recomputation
 - surface / error class / failure phase remain applicability gates after independent measurements
-- MCP stdio uses a bounded byte-oriented NDJSON frame accumulator (`MAX_MCP_REQUEST_BYTES`) before `JSON.parse`
+- MCP stdio uses a bounded byte-oriented NDJSON frame accumulator; frames with byte length `<= MAX_MCP_REQUEST_BYTES` are accepted, only `>` the limit is rejected, before `JSON.parse`
 - Scenario Harness owns whole-target before/after hashing, not the diagnosis core
-- Packaging: `npm run package` builds `release/codex-changeguard-plugin/` with compiled JS + manifest + MCP config + Skill + fixtures/docs/schemas; no `node_modules`. A clean source checkout is not claimed runnable before `npm ci && npm run build` (or package).
+- Packaging: `npm run package` builds `release/codex-changeguard-plugin/` with exact public top-level surface (`.codex-plugin`, `.mcp.json`, `README.md`, `bin`, `dist`, `docs`, `fixtures`, `package.json`, `schemas`, `skills`); no `node_modules`, `AGENTS.md`, `src`, or `scripts`. Package smoke launches MCP via packaged `.mcp.json`. A clean source checkout is not claimed runnable before `npm ci && npm run build` (or package).
 
 ## 3. Detection and localization ladder
 
@@ -229,12 +229,12 @@ There is no assumed native software-update event.
 
 Inputs:
 
-- known affected `browser-client.mjs` SHA-256 (independently measured from fixture bytes)
+- known affected `browser-client.mjs` SHA-256 (independently measured from fixture bytes; also recorded in `.hash.txt`, incident `artifact_hashes`, and recovery `backup.original_sha256`)
 - the exact three-statement protected-process shim block (structural match, not regex over raw text):
   - `globalThis.process = <shim>;`
   - `globalThis.global = globalThis.global ?? globalThis;`
   - `globalThis.global.process = <same shim>;`
-- exactly one such block per file; comments and string/template contents cannot spoof a match
+- exactly one such block per file; comments, string/template contents, and regex literals cannot spoof a match
 - failure phase before extension handshake (applicability gate)
 - community Issue comment as untrusted workaround evidence
 

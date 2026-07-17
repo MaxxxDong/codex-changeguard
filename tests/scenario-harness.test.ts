@@ -19,9 +19,13 @@ import {
 } from "../src/harness/scenario.js";
 import { McpTestClient } from "../src/mcp/client.js";
 import { MAX_MCP_REQUEST_BYTES } from "../src/core/limits.js";
-import { measureProtectedProcessAst } from "../src/core/measure.js";
+import {
+  recomputeLocalFactsDigest,
+  parseIncidentJson,
+} from "../src/core/fingerprint.js";
+import { measureProtectedProcessAst, sha256Buffer } from "../src/core/measure.js";
 import { NdjsonFrameAccumulator } from "../src/mcp/server.js";
-import { baseIncident, makeTempDir, writeJson } from "./helpers.js";
+import { baseIncident, makeTempDir, writeJson, REPO_ROOT } from "./helpers.js";
 
 const ALLOWED_USER_STATUSES = new Set([
   "INCONCLUSIVE",
@@ -103,6 +107,62 @@ globalThis.process = __cg_shim;
 globalThis.global = globalThis.global ?? globalThis;
 globalThis.global.process = __cg_shim;
 `;
+
+const PROTECTED_ARTIFACT_SHA =
+  "33af4a7ad7a4ec2d18cb928a2ef69922e69031007dd07672334c5fe45faec48f";
+
+test("protected-process fixture metadata is consistent across four surfaces and core digest", () => {
+  const artifactPath = path.join(
+    REPO_ROOT,
+    "fixtures/protected-process/artifacts/browser-client.mjs",
+  );
+  const hashTxtPath = path.join(
+    REPO_ROOT,
+    "fixtures/protected-process/artifacts/.hash.txt",
+  );
+  const incidentPath = path.join(REPO_ROOT, "fixtures/protected-process/incident.json");
+  const recoveryPath = path.join(REPO_ROOT, "fixtures/protected-process/recovery.json");
+
+  const bytes = fs.readFileSync(artifactPath);
+  const measured = sha256Buffer(bytes);
+  const hashTxt = fs.readFileSync(hashTxtPath, "utf8").trim();
+  const incident = JSON.parse(fs.readFileSync(incidentPath, "utf8")) as {
+    artifact_hashes: { path_alias: string; sha256: string }[];
+    local_facts_digest: string;
+  };
+  const recovery = JSON.parse(fs.readFileSync(recoveryPath, "utf8")) as {
+    backup: { original_sha256: string };
+  };
+
+  assert.equal(measured, PROTECTED_ARTIFACT_SHA);
+  assert.equal(hashTxt, measured, ".hash.txt must match independently measured bytes");
+  assert.equal(
+    incident.artifact_hashes[0]?.sha256,
+    measured,
+    "incident declared artifact hash must match measured bytes",
+  );
+  assert.equal(
+    recovery.backup.original_sha256,
+    measured,
+    "recovery original hash must match measured bytes",
+  );
+
+  const declared = parseIncidentJson(fs.readFileSync(incidentPath, "utf8"));
+  const recomputed = recomputeLocalFactsDigest(
+    declared,
+    measured,
+    ["js.global-process-shim-redefinition.v1"],
+  );
+  assert.equal(
+    incident.local_facts_digest,
+    recomputed,
+    "incident local_facts_digest must equal core recomputeLocalFactsDigest output",
+  );
+  assert.equal(
+    recomputed,
+    "519559638bd3eb514c1cfcf0ddfc6000f8b99d27c65d601c5f4de6997fb3bc0b",
+  );
+});
 
 test("positive protected-process fixture reaches SOURCE_COMPONENT_LOCATED via CLI", () => {
   const tmp = makeTempDir("cg-pos-");
@@ -729,6 +789,79 @@ test("MCP frame accumulator rejects >128KiB with no newline without unbounded ac
   assert.ok(acc.retainedBytes <= MAX_MCP_REQUEST_BYTES);
 });
 
+test("MCP inclusive bound: exactly maxBytes + newline is accepted once", () => {
+  const frames: string[] = [];
+  let overflows = 0;
+  const limit = 64;
+  const acc = new NdjsonFrameAccumulator(
+    limit,
+    (f) => frames.push(f),
+    () => {
+      overflows += 1;
+    },
+  );
+  const payload = Buffer.alloc(limit, 0x61);
+  acc.push(Buffer.concat([payload, Buffer.from([0x0a])]));
+  assert.equal(overflows, 0);
+  assert.equal(frames.length, 1);
+  assert.equal(Buffer.byteLength(frames[0]!, "utf8"), limit);
+  assert.equal(acc.retainedBytes, 0);
+});
+
+test("MCP inclusive bound: maxBytes+1 without newline rejected once", () => {
+  const frames: string[] = [];
+  let overflows = 0;
+  const limit = 64;
+  const acc = new NdjsonFrameAccumulator(
+    limit,
+    (f) => frames.push(f),
+    () => {
+      overflows += 1;
+    },
+  );
+  acc.push(Buffer.alloc(limit + 1, 0x62));
+  assert.equal(overflows, 1);
+  assert.equal(frames.length, 0);
+  assert.ok(acc.retainedBytes <= limit);
+});
+
+test("MCP inclusive bound: split chunks around exact boundary", () => {
+  const frames: string[] = [];
+  let overflows = 0;
+  const limit = 64;
+  const acc = new NdjsonFrameAccumulator(
+    limit,
+    (f) => frames.push(f),
+    () => {
+      overflows += 1;
+    },
+  );
+  // Fill exactly to limit across two chunks, then newline alone.
+  acc.push(Buffer.alloc(limit - 10, 0x63));
+  acc.push(Buffer.alloc(10, 0x63));
+  assert.equal(acc.retainedBytes, limit);
+  assert.equal(overflows, 0);
+  assert.equal(frames.length, 0);
+  acc.push(Buffer.from([0x0a]));
+  assert.equal(overflows, 0);
+  assert.equal(frames.length, 1);
+  assert.equal(Buffer.byteLength(frames[0]!, "utf8"), limit);
+
+  // Same fill, then a non-newline extra byte → overflow once.
+  const acc2 = new NdjsonFrameAccumulator(
+    limit,
+    (f) => frames.push(f),
+    () => {
+      overflows += 1;
+    },
+  );
+  const before = overflows;
+  acc2.push(Buffer.alloc(limit, 0x64));
+  acc2.push(Buffer.from([0x65])); // one past bound
+  assert.equal(overflows, before + 1);
+  assert.ok(acc2.retainedBytes <= limit);
+});
+
 test("MCP frame accumulator recovers after oversized frame then valid ping", () => {
   const frames: string[] = [];
   let overflows = 0;
@@ -743,6 +876,7 @@ test("MCP frame accumulator recovers after oversized frame then valid ping", () 
   const big = Buffer.alloc(MAX_MCP_REQUEST_BYTES + 100, 0x62);
   acc.push(big);
   assert.equal(overflows, 1);
+  assert.ok(acc.retainedBytes <= MAX_MCP_REQUEST_BYTES);
   // End oversized with newline and append valid frame in same/next chunk.
   const ping = Buffer.from(
     '\n{"jsonrpc":"2.0","id":1,"method":"ping","params":{}}\n',
@@ -751,6 +885,7 @@ test("MCP frame accumulator recovers after oversized frame then valid ping", () 
   acc.push(ping);
   assert.equal(frames.length, 1);
   assert.match(frames[0]!, /"method":"ping"/);
+  assert.equal(overflows, 1);
 });
 
 test("MCP frame accumulator handles partial UTF-8 and multiple frames", () => {
@@ -816,6 +951,40 @@ globalThis.global.process = shim;\`;
   assert.equal(r.blockCount, 0);
 });
 
+test("structural signature ignores regex-literal-only spoof", () => {
+  // Regex-only source containing the three target statement texts.
+  // Unescaped dots inside the pattern body must not become structural tokens.
+  const src = `
+const re = /globalThis.process = shim; globalThis.global = globalThis.global ?? globalThis; globalThis.global.process = shim;/;
+const re2 = /globalThis\\.process = shim;\\nglobalThis\\.global = globalThis\\.global \\?\\? globalThis;\\nglobalThis\\.global\\.process = shim;/;
+`;
+  const r = measureProtectedProcessAst(src);
+  assert.equal(r.matched, false);
+  assert.equal(r.blockCount, 0);
+});
+
+test("structural signature keeps real block; division is not treated as regex spoof", () => {
+  // Positive: real block still matches when division operators appear nearby.
+  const withDivision = `
+const a = 10 / 2;
+${REAL_SHIM_BLOCK}
+const b = x / y / z;
+`;
+  const pos = measureProtectedProcessAst(withDivision);
+  assert.equal(pos.matched, true);
+  assert.equal(pos.blockCount, 1);
+
+  // Negative: division of identifiers must not invent a false block.
+  const onlyDivision = `
+const globalThis = { process: 1, global: { process: 2 } };
+const n = globalThis.process / shim;
+const m = globalThis.global / globalThis.global / globalThis;
+`;
+  const neg = measureProtectedProcessAst(onlyDivision);
+  assert.equal(neg.matched, false);
+  assert.equal(neg.blockCount, 0);
+});
+
 test("structural signature refuses two real blocks", () => {
   const src = REAL_SHIM_BLOCK + "\n" + REAL_SHIM_BLOCK;
   const r = measureProtectedProcessAst(src);
@@ -856,15 +1025,38 @@ test("no network entry points used (markers + independent boundary guard)", asyn
   const mcp = await runMcpDiagnose(target);
   assert.equal(cli.result!.network_used, false);
   assert.equal(mcp.network_used, false);
-  // Independent evidence: production boundary script must pass.
+  // Independent evidence: production boundary script must pass (includes self-tests).
   const guard = spawnSync(process.execPath, [repoPath("scripts/check-production-boundary.mjs")], {
     encoding: "utf8",
     env: { ...process.env, NO_COLOR: "1" },
   });
   assert.equal(guard.status, 0, guard.stdout + guard.stderr);
-  const report = JSON.parse(guard.stdout) as { ok: boolean; violations: string[] };
+  const report = JSON.parse(guard.stdout) as {
+    ok: boolean;
+    violations: string[];
+    self_test_ok?: boolean;
+  };
   assert.equal(report.ok, true);
   assert.deepEqual(report.violations, []);
+  assert.equal(report.self_test_ok, true);
+
+  const selfOnly = spawnSync(
+    process.execPath,
+    [repoPath("scripts/check-production-boundary.mjs"), "--self-test"],
+    {
+      encoding: "utf8",
+      env: { ...process.env, NO_COLOR: "1" },
+    },
+  );
+  assert.equal(selfOnly.status, 0, selfOnly.stdout + selfOnly.stderr);
+  const selfReport = JSON.parse(selfOnly.stdout) as {
+    ok: boolean;
+    mode: string;
+    failures: string[];
+  };
+  assert.equal(selfReport.ok, true);
+  assert.equal(selfReport.mode, "self-test");
+  assert.deepEqual(selfReport.failures, []);
 });
 
 test("invalid fixture path / missing incident fails safely", () => {

@@ -79,10 +79,12 @@ Mandatory cases (implemented in `tests/scenario-harness.test.ts`):
 - only named allowlisted candidates read; nested unreadable/sentinel path not read
 - incident size bound; malformed JSON; extra top-level and nested fields; duplicate `path_alias`; AST id length > 128
 - credential and full-width Unicode secret redaction after NFKC; generic POSIX/Windows/UNC absolute path redaction
-- MCP bounded frame accumulator (overflow without newline; recovery; partial UTF-8 / multi-frame); extra-arg and extra top-level param rejection
-- structural signature: exact block once; comment/string spoof; two blocks; missing/reordered/different-shim; old surrogate does not match
+- MCP bounded frame accumulator (inclusive bound: exactly-limit + newline accepted; limit+1 rejected; split chunks at boundary; overflow without newline; recovery; partial UTF-8 / multi-frame); extra-arg and extra top-level param rejection
+- structural signature: exact block once; comment/string/regex-literal spoof; division negative; two blocks; missing/reordered/different-shim; old surrogate does not match
+- fixture metadata: artifact bytes, `.hash.txt`, incident declared hash, recovery original hash agree; incident `local_facts_digest` equals core recomputation
 - no absolute disposable path or raw exception leak on public stdout
-- package smoke: `npm run package` then `npm run package:smoke` from a non-repo cwd (Node + package files only)
+- production-boundary guard self-tests on synthetic snippets (default/fs.promises mutations, dynamic import/require, WebSocket/fetch/computed, eval/Function/process.dlopen) plus production graph scan
+- package smoke: `npm run package` then `npm run package:smoke` from a non-repo cwd; smoke reads packaged `.mcp.json`, enforces exact top-level allowlist (no `AGENTS.md`/`src`/`scripts`/`node_modules`)
 
 ## Initial commands
 

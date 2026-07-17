@@ -89,8 +89,47 @@ copyDir(path.join(repoRoot, "fixtures"), path.join(outDir, "fixtures"));
 copyDir(path.join(repoRoot, "schemas"), path.join(outDir, "schemas"));
 copyDir(path.join(repoRoot, "docs"), path.join(outDir, "docs"));
 copyFile(path.join(repoRoot, "README.md"), path.join(outDir, "README.md"));
-copyFile(path.join(repoRoot, "AGENTS.md"), path.join(outDir, "AGENTS.md"));
+// AGENTS.md is repository/operator guidance — not a public runtime surface.
 copyFile(path.join(repoRoot, "package.json"), path.join(outDir, "package.json"));
+
+// Exact top-level public package surface allowlist.
+const ALLOWED_TOP_LEVEL = new Set([
+  ".codex-plugin",
+  ".mcp.json",
+  "README.md",
+  "bin",
+  "dist",
+  "docs",
+  "fixtures",
+  "package.json",
+  "schemas",
+  "skills",
+]);
+const FORBIDDEN_TOP_LEVEL = [
+  "AGENTS.md",
+  ".scratch",
+  "src",
+  "scripts",
+  "node_modules",
+];
+
+const entries = fs.readdirSync(outDir).sort();
+for (const name of entries) {
+  if (!ALLOWED_TOP_LEVEL.has(name)) {
+    throw new Error(`Package top-level entry not on allowlist: ${name}`);
+  }
+}
+for (const name of FORBIDDEN_TOP_LEVEL) {
+  if (fs.existsSync(path.join(outDir, name))) {
+    throw new Error(`Package must not contain ${name}`);
+  }
+}
+// No disposable/clone lifecycle paths
+for (const name of entries) {
+  if (name.startsWith(".grok") || name.includes("grok-worker") || name.includes("grok-disposable")) {
+    throw new Error(`Package must not contain clone/lifecycle path: ${name}`);
+  }
+}
 
 // Ensure no node_modules leaked
 const nm = path.join(outDir, "node_modules");
@@ -98,16 +137,15 @@ if (fs.existsSync(nm)) {
   throw new Error("Package must not contain node_modules");
 }
 
-// Rewrite package.json bin paths stay relative; strip scripts that need devDeps if desired.
-// Keep package.json as-is (private, no runtime deps).
-
 console.log(
   JSON.stringify(
     {
       ok: true,
       outDir: path.relative(repoRoot, outDir),
       has_node_modules: false,
-      entries: fs.readdirSync(outDir).sort(),
+      has_agents_md: false,
+      entries,
+      allowed_top_level: [...ALLOWED_TOP_LEVEL].sort(),
     },
     null,
     2,

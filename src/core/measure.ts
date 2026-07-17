@@ -7,8 +7,8 @@ export function sha256Buffer(buf: Buffer): string {
 
 /**
  * Minimal deterministic JS tokenizer for structural signature measurement.
- * Skips comments and all string/template literal contents so regex-style
- * spoofing via comments or strings cannot match.
+ * Skips comments, string/template contents, and regex literals so
+ * comment/string/regex spoofing cannot match.
  *
  * Production-self-contained: no runtime parser dependency.
  */
@@ -27,6 +27,24 @@ interface Tok {
   value: string;
 }
 
+/** Keywords after which `/` starts a regex literal, not division. */
+const REGEX_AFTER_KEYWORDS = new Set([
+  "return",
+  "throw",
+  "case",
+  "else",
+  "typeof",
+  "void",
+  "delete",
+  "await",
+  "new",
+  "in",
+  "of",
+  "instanceof",
+  "yield",
+  "do",
+]);
+
 function isIdentStart(ch: string): boolean {
   return /[A-Za-z_$]/.test(ch);
 }
@@ -36,9 +54,77 @@ function isIdentCont(ch: string): boolean {
 }
 
 /**
- * Tokenize source, omitting comments entirely and collapsing string/template
- * contents to a single placeholder token so structural comparison never sees
- * comment/string text.
+ * Conservative previous-token test: true → `/` may start a regex literal.
+ * Fail closed on residual ambiguity by preferring regex-literal skip
+ * (avoids promoting spoof text into a false structural match).
+ */
+function slashStartsRegex(prev: Tok | undefined): boolean {
+  if (!prev || prev.kind === "eof") return true;
+  if (prev.kind === "number" || prev.kind === "string" || prev.kind === "template") {
+    return false;
+  }
+  if (prev.kind === "ident") {
+    return REGEX_AFTER_KEYWORDS.has(prev.value);
+  }
+  if (prev.kind === "op") {
+    // Comparison / logical / nullish ops introduce an expression → regex.
+    return true;
+  }
+  if (prev.kind === "punct") {
+    // After primary expression tail, `/` is division.
+    if (prev.value === ")" || prev.value === "]" || prev.value === "}") {
+      return false;
+    }
+    // After assignment, comma, semicolon, open groups, operators → regex.
+    return true;
+  }
+  // Unknown prior kind — fail closed: treat as regex so spoof text is skipped.
+  return true;
+}
+
+/**
+ * Consume a JavaScript regex literal body starting at `i` (index of `/`).
+ * Handles escapes and character classes. Returns index after optional flags,
+ * or -1 if the span cannot be closed safely (caller should not promote).
+ */
+function skipRegexLiteral(text: string, i: number): number {
+  const n = text.length;
+  if (text[i] !== "/") return -1;
+  let j = i + 1;
+  let inClass = false;
+  while (j < n) {
+    const ch = text[j]!;
+    if (ch === "\\") {
+      j += 2;
+      continue;
+    }
+    if (ch === "[" && !inClass) {
+      inClass = true;
+      j += 1;
+      continue;
+    }
+    if (ch === "]" && inClass) {
+      inClass = false;
+      j += 1;
+      continue;
+    }
+    if (ch === "/" && !inClass) {
+      j += 1;
+      // Optional flags
+      while (j < n && /[a-zA-Z]/.test(text[j]!)) j += 1;
+      return j;
+    }
+    // Unterminated regex on newline — fail closed (do not invent tokens).
+    if (ch === "\n") return -1;
+    j += 1;
+  }
+  return -1;
+}
+
+/**
+ * Tokenize source, omitting comments entirely, collapsing string/template
+ * contents to a single placeholder token, and skipping regex literals so
+ * structural comparison never sees comment/string/regex text.
  */
 export function tokenizeJsIgnoringCommentsAndStrings(source: string): Tok[] {
   const text = source.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
@@ -49,6 +135,9 @@ export function tokenizeJsIgnoringCommentsAndStrings(source: string): Tok[] {
   const push = (kind: TokKind, value: string): void => {
     tokens.push({ kind, value });
   };
+
+  const lastTok = (): Tok | undefined =>
+    tokens.length > 0 ? tokens[tokens.length - 1] : undefined;
 
   while (i < n) {
     const ch = text[i]!;
@@ -71,6 +160,20 @@ export function tokenizeJsIgnoringCommentsAndStrings(source: string): Tok[] {
       i += 2;
       while (i < n && !(text[i] === "*" && text[i + 1] === "/")) i += 1;
       if (i < n) i += 2;
+      continue;
+    }
+
+    // Regex literal (before treating `/` as division / punct)
+    if (ch === "/" && slashStartsRegex(lastTok())) {
+      const end = skipRegexLiteral(text, i);
+      if (end >= 0) {
+        // Omit regex body entirely (like comments); no structural tokens.
+        i = end;
+        continue;
+      }
+      // Ambiguous / unclosed: fail closed — skip the `/` without emitting a
+      // punct that could glue spoof text into a false match stream.
+      i += 1;
       continue;
     }
 
@@ -168,7 +271,7 @@ export function tokenizeJsIgnoringCommentsAndStrings(source: string): Tok[] {
       continue;
     }
 
-    // Single punctuation / operators
+    // Single punctuation / operators (including `/` as division when not regex)
     if ("=.;(){}[],:+-*/%<>!&|^~?".includes(ch)) {
       push("punct", ch);
       i += 1;
@@ -266,7 +369,7 @@ function matchProtectedBlock(tokens: Tok[], start: number): number {
  * bytes. A hash or AST id merely declared in incident JSON never proves itself.
  *
  * Requires exactly one target block per file. Zero or more than one is not a
- * match. Comments and string/template contents cannot contribute matches.
+ * match. Comments, strings/templates, and regex literals cannot contribute matches.
  */
 export function measureProtectedProcessAst(source: string): {
   matched: boolean;
