@@ -222,12 +222,43 @@ function isBrowserCrashIncident(fp: IncidentFingerprint): boolean {
   return false;
 }
 
+/** Concrete page capabilities that define a family (not shared neutral/unknown). */
+function isConcretePageCapability(
+  cap: NonNullable<CrashMetadata["page_capability"]> | null | undefined,
+): boolean {
+  return cap !== null && cap !== undefined && cap !== "unknown" && cap !== "neutral";
+}
+
+/** Shared/soft interaction phases that must not alone promote a family. */
+function isSharedInteractionPhase(
+  phase: NonNullable<CrashMetadata["interaction_phase"]> | null | undefined,
+): boolean {
+  return phase === null || phase === undefined || phase === "unknown" || phase === "neutral_dom_ready";
+}
+
+function entryRequiresGpu(entry: CrashFamilyCatalogEntry): boolean {
+  return entry.gpu_child_exit_codes.length > 0 || entry.gpu_relaunch_codes.length > 0;
+}
+
+/**
+ * Entry is defined by exclusive concrete page capabilities (e.g. complex_login,
+ * media/canvas) with no neutral/unknown fallback.
+ */
+function entryRequiresConcretePageCapability(entry: CrashFamilyCatalogEntry): boolean {
+  return (
+    entry.page_capabilities.length > 0 &&
+    entry.page_capabilities.every((c) => isConcretePageCapability(c))
+  );
+}
+
 interface ScoredCandidate {
   entry: CrashFamilyCatalogEntry;
   score: number;
   hard_gated: boolean;
   gate_reasons: string[];
   structural_hits: number;
+  /** Hits on defining mechanism axes (exception/GPU/concrete page/…); not shared phase/component. */
+  defining_hits: number;
   title_only: boolean;
 }
 
@@ -274,17 +305,41 @@ function scoreCandidate(
     }
   }
 
-  // GPU family: if incident has GPU codes that don't match required ones.
-  if (entry.gpu_child_exit_codes.length > 0 && gpuExit !== null) {
-    if (!entry.gpu_child_exit_codes.includes(gpuExit)) {
+  // Defining-mechanism hard gate — GPU families require their GPU signals.
+  // Absent required codes hard-gate (not only mismatches when present).
+  // A foreign concrete exception also conflicts with a GPU-defined family that
+  // does not claim that exception code.
+  if (entryRequiresGpu(entry)) {
+    if (entry.gpu_child_exit_codes.length > 0) {
+      if (gpuExit === null) {
+        hard_gated = true;
+        gate_reasons.push("gpu_exit_required");
+      } else if (!entry.gpu_child_exit_codes.includes(gpuExit)) {
+        hard_gated = true;
+        gate_reasons.push(`gpu_exit_mismatch:${gpuExit}`);
+      }
+    }
+    if (entry.gpu_relaunch_codes.length > 0) {
+      if (gpuRel === null) {
+        hard_gated = true;
+        gate_reasons.push("gpu_relaunch_required");
+      } else if (!entry.gpu_relaunch_codes.includes(gpuRel)) {
+        hard_gated = true;
+        gate_reasons.push(`gpu_relaunch_mismatch:${gpuRel}`);
+      }
+    }
+    if (exc && !entry.exception_codes.includes(exc)) {
       hard_gated = true;
-      gate_reasons.push(`gpu_exit_mismatch:${gpuExit}`);
+      gate_reasons.push(`exception_conflict:${exc}`);
     }
   }
-  if (entry.gpu_relaunch_codes.length > 0 && gpuRel !== null) {
-    if (!entry.gpu_relaunch_codes.includes(gpuRel)) {
+
+  // Defining-mechanism hard gate — concrete page-capability families require a
+  // compatible observed capability (neutral/unknown cannot stand in).
+  if (entryRequiresConcretePageCapability(entry)) {
+    if (!pageCap || !entry.page_capabilities.includes(pageCap)) {
       hard_gated = true;
-      gate_reasons.push(`gpu_relaunch_mismatch:${gpuRel}`);
+      gate_reasons.push(`page_capability_required:${pageCap ?? "absent"}`);
     }
   }
 
@@ -328,6 +383,7 @@ function scoreCandidate(
       hard_gated: true,
       gate_reasons,
       structural_hits: 0,
+      defining_hits: 0,
       title_only: false,
     };
   }
@@ -335,24 +391,29 @@ function scoreCandidate(
   // Architecture-aligned score components (weights from docs/ARCHITECTURE.md §5).
   let score = 0;
   let structural_hits = 0;
+  let defining_hits = 0;
 
   // 0.28 exact_or_structural_signature
   let structural = 0;
   if (exc && entry.exception_codes.includes(exc)) {
     structural += 0.12;
     structural_hits += 1;
+    defining_hits += 1;
   }
   if (sym && entry.symbols.some((s) => s === sym)) {
     structural += 0.08;
     structural_hits += 1;
+    defining_hits += 1;
   }
   if (mod && entry.modules.includes(mod)) {
     structural += 0.04;
     structural_hits += 1;
+    defining_hits += 1;
   }
   if (off && entry.offset_buckets.includes(off)) {
     structural += 0.04;
     structural_hits += 1;
+    defining_hits += 1;
   }
   if (
     gpuExit !== null &&
@@ -362,12 +423,14 @@ function scoreCandidate(
   ) {
     structural += 0.2;
     structural_hits += 2;
+    defining_hits += 2;
   } else if (
     gpuExit !== null &&
     entry.gpu_child_exit_codes.includes(gpuExit)
   ) {
     structural += 0.1;
     structural_hits += 1;
+    defining_hits += 1;
   }
   score += Math.min(0.28, structural);
 
@@ -378,7 +441,7 @@ function scoreCandidate(
   if (fp.codex_version) score += 0.08;
   else score += 0.04;
 
-  // 0.12 surface_component
+  // 0.12 surface_component — component is structural but shared/soft, not defining
   if (entry.surfaces.includes(fp.surface)) score += 0.08;
   if (component && entry.components.includes(component)) {
     score += 0.04;
@@ -398,10 +461,14 @@ function scoreCandidate(
   if (fp.feature_ids?.includes("in_app_browser")) score += 0.06;
   else if (isBrowserishSurface(fp.surface)) score += 0.03;
 
-  // 0.10 failure_phase / interaction
+  // 0.10 failure_phase / interaction — shared phases (neutral_dom_ready/unknown)
+  // count as structural only; concrete family phases are defining.
   if (phase && entry.interaction_phases.includes(phase)) {
     score += 0.08;
     structural_hits += 1;
+    if (!isSharedInteractionPhase(phase)) {
+      defining_hits += 1;
+    }
   } else if (
     fp.failure_phase === "navigation" ||
     fp.failure_phase === "tab_discovery" ||
@@ -410,17 +477,21 @@ function scoreCandidate(
     score += 0.03;
   }
 
-  // page capability
+  // page capability — concrete capability match is defining; neutral is soft only
   if (pageCap && entry.page_capabilities.includes(pageCap)) {
     score += 0.06;
     structural_hits += 1;
+    if (isConcretePageCapability(pageCap)) {
+      defining_hits += 1;
+    }
   }
 
-  // concurrency
+  // concurrency — multi_side_chat is defining; single is soft residual score only
   if (conc && entry.concurrency_contexts.includes(conc)) {
     if (conc === "multi_side_chat") {
       score += 0.12;
       structural_hits += 1;
+      defining_hits += 1;
     } else {
       score += 0.03;
     }
@@ -452,7 +523,7 @@ function scoreCandidate(
   }
 
   // Model preference may only rerank *surviving* candidates within a tiny band;
-  // it cannot resurrect hard-gated or invent score past gates.
+  // it cannot resurrect hard-gated or invent score past gates / defining mechanism.
   if (modelPreferred && modelPreferred.includes(entry.issue_id) && !title_only) {
     score = Math.min(0.95, score + 0.03);
   }
@@ -466,6 +537,7 @@ function scoreCandidate(
     hard_gated: false,
     gate_reasons,
     structural_hits,
+    defining_hits,
     title_only,
   };
 }
@@ -673,21 +745,24 @@ export function classifyCrashFamily(
     return a.entry.issue_id.localeCompare(b.entry.issue_id);
   });
 
-  // Candidate promotion requires score threshold AND enough structural hits.
-  // A lone generic component/title match must not rank an Issue into Top 3.
+  // Candidate promotion requires score threshold, enough structural hits, AND
+  // at least one defining-mechanism hit. Shared surface/phase/component soft
+  // signals alone must not promote an incompatible catalog family into Top 3.
   const survivors = ordered.filter(
     (s) =>
       !s.hard_gated &&
       s.score >= CANDIDATE_THRESHOLD &&
       !s.title_only &&
-      s.structural_hits >= 2,
+      s.structural_hits >= 2 &&
+      s.defining_hits >= 1,
   );
   const rejected = ordered.filter(
     (s) =>
       s.hard_gated ||
       s.score < CANDIDATE_THRESHOLD ||
       s.title_only ||
-      s.structural_hits < 2,
+      s.structural_hits < 2 ||
+      s.defining_hits < 1,
   );
 
   const toRanked = (

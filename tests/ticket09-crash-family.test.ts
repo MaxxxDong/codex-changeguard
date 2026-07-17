@@ -162,6 +162,16 @@ test("0xC0000005 / CrBrowserMain / chrome.dll+offset ranks openai/codex#32683 To
   assert.equal(r.crash_classification?.family_id, "access_violation_crbrowser_dom_ready");
   // Other families must not outrank the canonical one.
   assert.equal(topIds(r)[0], "openai/codex#32683");
+  // T09-TOP3-MECHANISM-BLEED: GPU / complex-page families must not survive on
+  // shared neutral_dom_ready / in_app_browser soft signals alone.
+  assert.ok(
+    !topIds(r).includes("openai/codex#32094"),
+    `Top 3 must exclude GPU family #32094 without GPU codes; got [${topIds(r).join(", ")}]`,
+  );
+  assert.ok(
+    !topIds(r).includes("openai/codex#33762"),
+    `Top 3 must exclude complex-page #33762 without concrete page capability; got [${topIds(r).join(", ")}]`,
+  );
   assert.equal(hashTargetTree(tmp), before);
 });
 
@@ -376,6 +386,133 @@ test("incompatible mechanism hard-gates wrong family (exception mismatch)", () =
   assert.ok(
     interaction!.gate_reasons.some((g) => g.startsWith("exception_mismatch")),
   );
+});
+
+test("defining-mechanism gate: absent GPU codes hard-gates openai/codex#32094", () => {
+  const raw = fs.readFileSync(
+    path.join(REPO_ROOT, FAMILY_FIXTURES.access, "incident.json"),
+    "utf8",
+  );
+  const fp = parseIncidentJson(raw);
+  const classification = classifyCrashFamily(fp);
+  assert.ok(
+    !classification.ranked_candidates.some((c) => c.issue_id === "openai/codex#32094"),
+  );
+  const gpu = classification.rejected_candidates.find(
+    (c) => c.issue_id === "openai/codex#32094",
+  );
+  assert.ok(gpu);
+  assert.equal(gpu!.hard_gated, true);
+  assert.ok(
+    gpu!.gate_reasons.some(
+      (g) =>
+        g === "gpu_exit_required" ||
+        g === "gpu_relaunch_required" ||
+        g.startsWith("exception_conflict:"),
+    ),
+    `expected GPU defining-mechanism gate reasons, got ${gpu!.gate_reasons.join(",")}`,
+  );
+});
+
+test("defining-mechanism gate: absent concrete page capability hard-gates openai/codex#33762", () => {
+  const raw = fs.readFileSync(
+    path.join(REPO_ROOT, FAMILY_FIXTURES.access, "incident.json"),
+    "utf8",
+  );
+  const fp = parseIncidentJson(raw);
+  const classification = classifyCrashFamily(fp);
+  assert.ok(
+    !classification.ranked_candidates.some((c) => c.issue_id === "openai/codex#33762"),
+  );
+  const complex = classification.rejected_candidates.find(
+    (c) => c.issue_id === "openai/codex#33762",
+  );
+  assert.ok(complex);
+  assert.equal(complex!.hard_gated, true);
+  assert.ok(
+    complex!.gate_reasons.some((g) => g.startsWith("page_capability_required:")),
+    `expected page_capability_required, got ${complex!.gate_reasons.join(",")}`,
+  );
+});
+
+test("model preference cannot resurrect no-mechanism GPU/complex candidates", () => {
+  const raw = fs.readFileSync(
+    path.join(REPO_ROOT, FAMILY_FIXTURES.access, "incident.json"),
+    "utf8",
+  );
+  const fp = parseIncidentJson(raw);
+  const classification = classifyCrashFamily(fp, {
+    model_preferred_issue_ids: [
+      "openai/codex#32094",
+      "openai/codex#33762",
+    ],
+  });
+  const rankedIds = classification.ranked_candidates.map((c) => c.issue_id);
+  assert.ok(rankedIds.includes("openai/codex#32683"));
+  assert.ok(!rankedIds.includes("openai/codex#32094"));
+  assert.ok(!rankedIds.includes("openai/codex#33762"));
+  for (const id of ["openai/codex#32094", "openai/codex#33762"]) {
+    const rejected = classification.rejected_candidates.find((c) => c.issue_id === id);
+    assert.ok(rejected);
+    assert.equal(rejected!.hard_gated, true);
+  }
+});
+
+test("adversarial: no-mechanism candidate excluded when only shared soft signals match", () => {
+  // Synthetic: Windows desktop AV signature without GPU codes or complex page.
+  // Competing families that only share phase/component must not enter Top 3.
+  const dir = makeTempDir("cg-t09-nomech-");
+  writeJson(
+    path.join(dir, "incident.json"),
+    baseIncident({
+      surface: "desktop",
+      platform: { os: "windows", arch: "x64", sandbox_class: null },
+      failure_phase: "navigation",
+      error: {
+        class: "NativeCrash",
+        normalized_message: "browser crash after neutral page opens",
+        message_digest:
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      },
+      feature_ids: ["in_app_browser"],
+      crash_metadata: {
+        exception_code: "0xC0000005",
+        faulting_module: "chrome.dll",
+        faulting_symbol: "CrBrowserMain",
+        offset_bucket: "0x2e08f46",
+        gpu_child_exit_code: null,
+        gpu_relaunch_code: null,
+        interaction_phase: "neutral_dom_ready",
+        page_capability: "neutral",
+        concurrency_context: "single",
+        concurrent_side_chats: 1,
+        component: "in_app_browser",
+        isolation_available: true,
+        natural_failure_only: true,
+        active_probe_requested: false,
+        dump_contents_present: false,
+      },
+    }),
+  );
+  const classification = classifyCrashFamily(parseIncidentJson(
+    fs.readFileSync(path.join(dir, "incident.json"), "utf8"),
+  ));
+  const rankedIds = classification.ranked_candidates.map((c) => c.issue_id);
+  assert.ok(rankedIds.includes("openai/codex#32683"));
+  assert.ok(!rankedIds.includes("openai/codex#32094"));
+  assert.ok(!rankedIds.includes("openai/codex#33762"));
+  assert.ok(
+    classification.ranked_candidates.every((c) => c.hard_gated === false),
+  );
+  // Direct gate evidence on rejected no-mechanism families.
+  const gpu = classification.rejected_candidates.find(
+    (c) => c.issue_id === "openai/codex#32094",
+  );
+  const complex = classification.rejected_candidates.find(
+    (c) => c.issue_id === "openai/codex#33762",
+  );
+  assert.equal(gpu?.hard_gated, true);
+  assert.equal(complex?.hard_gated, true);
 });
 
 // --- CLI / MCP equivalence ---
