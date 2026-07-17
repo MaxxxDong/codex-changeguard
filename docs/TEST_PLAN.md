@@ -62,12 +62,40 @@ Stop or downscope the current implementation if any condition remains after the 
 6. The main demo does not include one model hypothesis being supported or refuted by a live probe.
 7. The product collapses into changelog summary or generic Issue search.
 
+## Ticket 01 Scenario Harness (public seams)
+
+Highest approved black-box seam: invoke CLI/MCP and observe outcomes plus the
+isolated target filesystem. The harness owns whole-target before/after hashing.
+
+Mandatory cases (implemented in `tests/scenario-harness.test.ts`):
+
+- positive fixture → `SOURCE_COMPONENT_LOCATED` from measured hash + AST only
+- negative control → `INCONCLUSIVE`, no root-cause claim
+- target bytes/hash unchanged before vs after diagnosis
+- CLI/MCP result equivalence for stable diagnosis fields
+- no network markers; no repair / `RESOLVED_VERIFIED`
+- symlink escape (incident or artifact) refused without reading outside content
+- only named allowlisted candidates read; no recursive crawl
+- incident size bound; malformed JSON; extra fields; AST id length > 128
+- credential and full-width Unicode secret redaction after NFKC
+- MCP partial stdout chunks, prompt timer cleanup, extra-arg rejection
+- no absolute disposable path or raw exception leak on public stdout
+
 ## Initial commands
 
-The concrete command set will be added with implementation. Until then, validation consists of:
+```bash
+npm ci
+npm run typecheck
+npm run build
+npm test
+node bin/changeguard.js diagnose fixtures/protected-process
+node bin/changeguard.js diagnose fixtures/negative-control
+```
 
-- official Plugin validator
+Additional static checks remain:
+
+- official Plugin validator (when available)
 - JSON syntax and JSON Schema meta-validation
-- fixture validation against all three schemas
+- fixture validation against schemas
 - Markdown link/path verification
 - clean Git status after a verified checkpoint

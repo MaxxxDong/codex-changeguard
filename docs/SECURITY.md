@@ -67,6 +67,19 @@ Issue bodies, comments, release prose, commit messages, and community workaround
 - results carry hashes and cannot be rewritten by the model
 - refused, timed-out, unsupported, and errored probes are separate states
 
+## Ticket 01 diagnosis surface safety
+
+The public CLI and MCP diagnosis seams enforce:
+
+- no network entry points and no target mutation
+- named candidate reads only (no recursive project crawl)
+- `lstat` / no-follow with symlink-escape refusal before any outside content is read
+- incident and MCP request size bounds
+- NFKC normalization then redaction of absolute paths and credential shapes
+  (Bearer, API key, token, password, secret), including full-width Unicode forms
+- generic path-free errors; no raw exception stacks or disposable clone paths in output
+- schema item/count/length limits, including 128 characters for AST signature ids
+
 ## Recovery safety
 
 Competition MVP recovery is preview-only. A future apply engine requires explicit per-action user approval and the full atomic transaction contract in [ARCHITECTURE.md](ARCHITECTURE.md).

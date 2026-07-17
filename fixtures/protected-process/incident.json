@@ -12,7 +12,7 @@
   "error": {
     "class": "TypeError",
     "normalized_message": "protected global process binding rejected assignment",
-    "message_digest": "57ee77a283eb230c6c6d47353af13a25cec4c331b511868c8fbf7ccd3dd1b2f6"
+    "message_digest": "3db6819d59600a85a1e86ed79148a47751eff83ca98019e8e17237c128ea12a4"
   },
   "stack_frames": [
     {
@@ -23,13 +23,17 @@
     }
   ],
   "config_keys": [],
-  "feature_ids": ["browser_control"],
+  "feature_ids": [
+    "browser_control"
+  ],
   "artifact_hashes": [
     {
       "path_alias": "BROWSER_CLIENT_COPY_A",
-      "sha256": "57ee77a283eb230c6c6d47353af13a25cec4c331b511868c8fbf7ccd3dd1b2f6"
+      "sha256": "125c00c84010d6c2f02549bcaa177f03e48037d35587920e8bd192e0196e2f58"
     }
   ],
-  "ast_signature_ids": ["js.global-process-shim-redefinition.v1"],
-  "local_facts_digest": "57ee77a283eb230c6c6d47353af13a25cec4c331b511868c8fbf7ccd3dd1b2f6"
+  "ast_signature_ids": [
+    "js.global-process-shim-redefinition.v1"
+  ],
+  "local_facts_digest": "5ce3c4fd7c7367c405bffad83d9f18ceaeb4eca31ca485760cddd0c27a316077"
 }

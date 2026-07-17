@@ -13,7 +13,7 @@ ChangeGuard is not a generic changelog summarizer, Issue chatbot, environment do
 - Competition: OpenAI Build Week 2026
 - Track: `track-openai-build-week-codex-changeguard-20260717`
 - Gate B: approved, option A
-- Local scope: architecture and plugin scaffold in progress
+- Local scope: Ticket 01 read-only diagnosis spine implemented (CLI + MCP + shared core)
 - Registration and external submission: not started; Gate C not authorized
 
 ## Start here
@@ -27,11 +27,35 @@ ChangeGuard is not a generic changelog summarizer, Issue chatbot, environment do
 - [Schemas](schemas/)
 - [Synthetic fixtures](fixtures/)
 
-## Planned Plugin surfaces
+## Read-only diagnosis (Ticket 01)
+
+Rescue CLI and MCP share one diagnosis core. Both return the same structured
+`DiagnosisResult` / `IncidentFingerprint`. The flow is read-only: no network,
+no target mutation, no repair, and never `RESOLVED_VERIFIED`.
+
+```bash
+npm ci
+npm run build
+node bin/changeguard.js diagnose fixtures/protected-process
+node bin/changeguard.js diagnose fixtures/negative-control
+npm test
+```
+
+- CLI: `changeguard diagnose <isolated-target-directory>`
+- MCP tool: `changeguard_diagnose` with `{ "target": "<isolated-target-directory>" }`
+- Skill: `/changeguard diagnose` orchestrates the same seams (see `skills/changeguard/SKILL.md`)
+
+Positive protected-process fixture may reach `SOURCE_COMPONENT_LOCATED` only when
+artifact bytes are independently hashed and the AST pattern is measured locally.
+Declared hashes or AST ids inside incident JSON never self-prove. The negative
+control stays `INCONCLUSIVE` and does not claim a root cause. User-resolution and
+upstream-contribution receipts are always separate.
+
+## Plugin surfaces
 
 - Skill commands for update scanning, incident diagnosis, and repro-pack export
-- A read-only local-facts MCP server with explicit tool approval
-- An optional trusted `SessionStart` hook that notices version changes
+- A read-only local-facts MCP server (`changeguard_diagnose`) with explicit tool approval
+- An optional trusted `SessionStart` hook that notices version changes (later tickets)
 - A manual scan path that always works when hooks are disabled or untrusted
 
 Official Codex documentation currently demonstrates lifecycle hooks such as `SessionStart`, but does not establish a dedicated software-update event. ChangeGuard therefore compares version fingerprints at session start and never claims native update-event coverage.

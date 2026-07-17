@@ -11,7 +11,7 @@
   },
   "backup": {
     "required": true,
-    "original_sha256": "57ee77a283eb230c6c6d47353af13a25cec4c331b511868c8fbf7ccd3dd1b2f6",
+    "original_sha256": "125c00c84010d6c2f02549bcaa177f03e48037d35587920e8bd192e0196e2f58",
     "receipt_id": null
   },
   "dry_run_checks": [

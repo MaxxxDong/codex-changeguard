@@ -1,0 +1,23 @@
+{
+  "name": "codex-changeguard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Evidence-bound Codex ChangeGuard Plugin — read-only diagnosis spine",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "changeguard": "./bin/changeguard.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.tests.json --noEmit",
+    "test": "npm run build && tsc -p tsconfig.tests.json && node --test --test-concurrency=1 dist-tests/tests/*.test.js",
+    "cli": "node bin/changeguard.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "typescript": "^5.8.3"
+  }
+}

@@ -48,10 +48,34 @@ Evidence-locked verdict + Recovery Capsule preview
 ### 2.1 Plugin surfaces
 
 - `skills/changeguard/`: user-facing orchestration instructions
-- `.mcp.json`: planned read-only MCP server definition
-- `hooks/hooks.json`: optional `SessionStart` hint after explicit trust
+- `.mcp.json`: read-only MCP server (`changeguard_diagnose` → shared core)
+- `bin/changeguard.js` / `dist/cli/main.js`: Rescue CLI (`changeguard diagnose`)
+- `src/core/diagnose.ts`: single shared diagnosis core used by CLI and MCP
+- `hooks/hooks.json`: optional `SessionStart` hint after explicit trust (later)
 - `schemas/`: portable contracts for fingerprints, claims, probes, and recovery
 - lightweight inspector UI: planned only after the CLI/fixture path is verified
+
+### 2.2 Ticket 01 read-only diagnosis spine
+
+Public seams:
+
+1. `changeguard diagnose <isolated-target>` (repository wrapper `bin/changeguard.js`)
+2. MCP tool `changeguard_diagnose` with argument `{ target }`
+
+Both call `diagnose()` and return the same `DiagnosisResult` shape:
+
+- `diagnosis_state` (evidence ladder state; Ticket 01 max is `SOURCE_COMPONENT_LOCATED`)
+- `incident_fingerprint` (schema-validated, redacted)
+- independent `user_resolution` and `upstream_contribution` receipts
+- `network_used: false`, `target_mutated: false`, `repair_applied: false`
+
+Core I/O rules:
+
+- read only named candidates (`incident.json`, optional `artifacts/browser-client.mjs`)
+- `lstat` first; refuse symlink candidates whose realpath escapes the target root without reading outside content
+- explicit byte limits; never recursively crawl a project tree
+- independently measure artifact SHA-256 and AST pattern; declared JSON hashes/ids are contextual only
+- Scenario Harness owns whole-target before/after hashing, not the diagnosis core
 
 ## 3. Detection and localization ladder
 

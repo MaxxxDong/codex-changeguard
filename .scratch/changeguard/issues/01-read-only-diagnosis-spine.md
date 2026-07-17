@@ -4,11 +4,20 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** implemented
 
-- [ ] Plugin、MCP 和 Rescue CLI 通过同一套共享核心处理诊断，不存在重复判断逻辑。
-- [ ] 对受支持 Fixture 执行公开诊断入口时，输出满足契约的 Incident Fingerprint 和双结果回执。
-- [ ] 证据不足时返回 `INCONCLUSIVE`，且不把症状相似性描述为根因。
-- [ ] 默认流程不访问外部网络、不修改本地目标，也不读取普通项目源代码或无关用户数据。
-- [ ] 发布产物为可直接运行的自包含 JavaScript，不在运行时安装依赖。
-- [ ] Scenario Harness 从公开入口验证最终状态、回执和零目标文件变更。
+- [x] Plugin、MCP 和 Rescue CLI 通过同一套共享核心处理诊断，不存在重复判断逻辑。
+- [x] 对受支持 Fixture 执行公开诊断入口时，输出满足契约的 Incident Fingerprint 和双结果回执。
+- [x] 证据不足时返回 `INCONCLUSIVE`，且不把症状相似性描述为根因。
+- [x] 默认流程不访问外部网络、不修改本地目标，也不读取普通项目源代码或无关用户数据。
+- [x] 发布产物为可直接运行的自包含 JavaScript，不在运行时安装依赖。
+- [x] Scenario Harness 从公开入口验证最终状态、回执和零目标文件变更。
+
+## Implementation notes (Ticket 01)
+
+- Shared core: `src/core/diagnose.ts` (named candidates only, `lstat`/no-follow, byte limits).
+- Public seams: `bin/changeguard.js` → `dist/cli/main.js` (`changeguard diagnose <target>`); MCP tool `changeguard_diagnose` via `dist/mcp/server.js`.
+- Skill orchestrates the same CLI/MCP contracts (`skills/changeguard/SKILL.md`).
+- Positive fixture may reach `SOURCE_COMPONENT_LOCATED` only from independently measured artifact hash + AST pattern.
+- Negative control remains `INCONCLUSIVE` with separate user/upstream receipts.
+- Never claims `RESOLVED_VERIFIED`, applies a repair, submits an Issue, uses the network, or mutates the target.

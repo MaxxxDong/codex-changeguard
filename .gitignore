@@ -4,7 +4,11 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .venv/
+node_modules/
 dist/
+dist-tests/
 build/
 .changeguard-state/
+.grok-output/
+.grok-worker/
 *.log

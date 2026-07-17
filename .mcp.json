@@ -1,3 +1,9 @@
 {
-  "mcpServers": {}
+  "mcpServers": {
+    "changeguard": {
+      "command": "node",
+      "args": ["dist/mcp/server.js"],
+      "env": {}
+    }
+  }
 }
