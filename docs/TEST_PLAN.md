@@ -43,6 +43,26 @@ This document owns the ChangeGuard verification matrix. Passing a model-generate
 - “disable Browser”, “move to SSD”, and “disable SecureLink” remain hypotheses or mitigations until their own controlled A/B tests pass
 - an open GitHub Issue without verified Issue/PR/commit/release linkage cannot reach `FIX_COMMIT_LINKED`
 
+## Ticket 09 Scenario Harness (Desktop Browser crash-family classifier)
+
+Black-box + classifier coverage in `tests/ticket09-crash-family.test.ts`
+(fixtures under `fixtures/crash-family/`):
+
+- `0xC0000005` / `CrBrowserMain` / `chrome.dll+0x2e08f46` → `openai/codex#32683` Top 3 (`UPSTREAM_BLOCKED`, no fix linkage)
+- `0xc06d007f` interaction family → `openai/codex#33710` Top 3
+- GPU `101457950 -> 18` media/canvas family → `openai/codex#32094` Top 3
+- concurrency / WebView attach family → `openai/codex#33202` Top 3
+- distinct families produce four distinct primary candidates
+- macOS / different-module negative control hard-gates Windows families
+- title / “click/open Browser then crash” similarity alone cannot reach high confidence or Top 3
+- ambiguous evidence → `INCONCLUSIVE` with concrete next evidence requirements
+- no-isolation + active probe → stop; refuse primary-instance crash
+- `local_mechanism` / `upstream_match` / `fix_applicability` remain separate axes
+- no Repair Capsule / authorization eligibility without safe applicability; `repair-preview` refused
+- optional model ranking cannot override hard gates or invent provenance
+- CLI/MCP stable-field equivalence; malformed extra crash_metadata key refused; oversized incident refused; path redaction; dump-contents parse/export refused
+- prior-ticket regression: protected-process + negative-control diagnose unchanged
+
 ### Session-expired evidence boundary
 
 - a symptom-only report returns `INCONCLUSIVE`, not an invented IP-change root cause
@@ -150,6 +170,7 @@ node scripts/cli-hash-proof.mjs
 node scripts/check-production-boundary.mjs --self-test
 node bin/changeguard.js diagnose fixtures/protected-process
 node bin/changeguard.js diagnose fixtures/negative-control
+node bin/changeguard.js diagnose fixtures/crash-family/access-violation-crbrowser
 node bin/changeguard.js impact fixtures/impact-local --disclose-refused
 # Ticket 02 (isolated disposable copy only):
 # node bin/changeguard.js repair-preview <isolated-target>

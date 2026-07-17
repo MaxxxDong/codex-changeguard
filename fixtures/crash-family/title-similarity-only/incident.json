@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "codex_version": "0.50.0",
+  "build_sha": null,
+  "surface": "desktop",
+  "platform": {
+    "os": "windows",
+    "arch": "x64",
+    "sandbox_class": "desktop_appx"
+  },
+  "failure_phase": "unknown",
+  "error": {
+    "class": "UserReport",
+    "normalized_message": "Codex crashes when Browser opens after click",
+    "message_digest": "c600000000000000000000000000000000000000000000000000000000000006"
+  },
+  "stack_frames": [],
+  "config_keys": [],
+  "feature_ids": [
+    "in_app_browser"
+  ],
+  "artifact_hashes": [],
+  "ast_signature_ids": [],
+  "crash_metadata": {
+    "exception_code": null,
+    "faulting_module": null,
+    "faulting_symbol": null,
+    "offset_bucket": null,
+    "gpu_child_exit_code": null,
+    "gpu_relaunch_code": null,
+    "interaction_phase": "unknown",
+    "page_capability": "unknown",
+    "concurrency_context": "unknown",
+    "concurrent_side_chats": null,
+    "component": null,
+    "isolation_available": false,
+    "natural_failure_only": true,
+    "active_probe_requested": false,
+    "dump_contents_present": false
+  },
+  "local_facts_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+}

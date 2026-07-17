@@ -107,6 +107,27 @@ Both call `assessImpact()` and return the same structured Impact Card. Productio
 - letting model payloads add or escalate Change-to-Local Graph edges
 - executing or interpolating upstream release/Issue/PR/commit prose as instructions
 
+## Ticket 09 — Desktop Browser crash-family classifier
+
+When the isolated target carries sanitized `crash_metadata` (or browser-crash signals), `changeguard diagnose` routes through the shared crash-family classifier after the protected-process path does not claim the component.
+
+### Required behavior
+
+1. Fork candidates on exception code, stack module/symbol/offset bucket, GPU exit/relaunch codes, interaction phase, page capability, and concurrency — not title similarity alone.
+2. Present ranked Issue candidates (Top 3) with separate `local_mechanism`, `upstream_match`, and `fix_applicability` axes from `crash_classification`.
+3. When no verified fix linkage exists, user-resolution is `UPSTREAM_BLOCKED` (or `INCONCLUSIVE` when evidence is weak); never claim official root cause.
+4. Prefer existing Event Viewer / Crashpad metadata and natural-failure logs. Without disposable isolation, refuse active crash probes of the primary Codex instance.
+5. Never authorize a symptom-level community patch: `repair_authorization_eligible` stays false; Repair Capsule preview remains the protected-process path only.
+6. List concrete next evidence requirements when inconclusive or upstream-blocked.
+
+### Forbidden in Ticket 09
+
+- collapsing distinct crash families under “Browser opens then crash”
+- treating model rerank preference as provenance or high-confidence override
+- parsing or exporting crash dump contents
+- actively crashing the user's primary Codex instance
+- promoting open Issues to `FIX_COMMIT_LINKED` without verified PR/commit/release linkage
+
 ## Planned commands
 
 - `/changeguard scan`: compare installed and last-seen Codex fingerprints via the shared instance core (Ticket 03)

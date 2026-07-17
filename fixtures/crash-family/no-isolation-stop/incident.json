@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "codex_version": "0.50.0",
+  "build_sha": null,
+  "surface": "desktop",
+  "platform": {
+    "os": "windows",
+    "arch": "x64",
+    "sandbox_class": "desktop_appx"
+  },
+  "failure_phase": "navigation",
+  "error": {
+    "class": "NativeCrash",
+    "normalized_message": "Codex crashes when Browser opens; active probe requested",
+    "message_digest": "c800000000000000000000000000000000000000000000000000000000000008"
+  },
+  "stack_frames": [],
+  "config_keys": [],
+  "feature_ids": [
+    "in_app_browser"
+  ],
+  "artifact_hashes": [],
+  "ast_signature_ids": [],
+  "crash_metadata": {
+    "exception_code": "0xC0000005",
+    "faulting_module": "chrome.dll",
+    "faulting_symbol": "CrBrowserMain",
+    "offset_bucket": "0x2e08f46",
+    "gpu_child_exit_code": null,
+    "gpu_relaunch_code": null,
+    "interaction_phase": "neutral_dom_ready",
+    "page_capability": "neutral",
+    "concurrency_context": "single",
+    "concurrent_side_chats": 1,
+    "component": "in_app_browser",
+    "isolation_available": false,
+    "natural_failure_only": false,
+    "active_probe_requested": true,
+    "dump_contents_present": false
+  },
+  "local_facts_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+}

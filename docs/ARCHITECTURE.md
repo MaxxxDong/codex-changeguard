@@ -51,6 +51,7 @@ Evidence-locked verdict + Recovery Capsule preview
 - `.mcp.json`: MCP server (`changeguard_diagnose`, `changeguard_impact`, recovery tools, `changeguard_scan`, `changeguard_scan_system`, `changeguard_session_start` → shared core)
 - `bin/changeguard.js` / `dist/cli/main.js`: Rescue CLI (`diagnose|impact|repair-*|verify|rollback|scan|scan-system|session-start`)
 - `src/core/diagnose.ts`: single shared diagnosis core used by CLI and MCP
+- `src/core/crash-family.ts`: Ticket 09 Desktop Browser crash-family classifier (deterministic gates; Fixture E)
 - `src/core/recovery/`: Ticket 02 isolated protected-process repair (preview/apply/verify/rollback)
 - `src/evidence/*` + `src/impact/*`: official evidence refresh/snapshot, Change-to-Local Graph, Impact Card (Ticket 04)
 - `src/instances/`: multi-instance enumeration, version-fingerprint state, affected-instance resolution, repair-target binding contract
@@ -377,7 +378,7 @@ A sanitized Windows fixture models a full desktop exit after the in-app Browser 
 - GPU child exit `101457950` followed by relaunch failure `18` on media/canvas-capable pages points toward openai/codex#32094.
 - a crash only under several concurrent side chats, immediately after Browser WebView attachment, points toward openai/codex#33202.
 
-The fixture may rank these as Issue candidates. It reaches `LOCAL_REPRO_CONFIRMED` only when a safe neutral-page probe reproduces the same local signature and a no-Browser control does not. Disabling the in-app Browser or using external Chrome is a mitigation, not proof of the native root cause. Security software, storage pressure, and GPU hypotheses remain separate until controlled A/B evidence supports them.
+The classifier (`src/core/crash-family.ts`, invoked from `diagnose`) uses optional sanitized `crash_metadata` on the incident fingerprint (exception code, normalized module/symbol/offset bucket, GPU child exit/relaunch codes, interaction phase, page capability, concurrency context, isolation flags). Dump bodies are never parsed or exported. Hard gates reject incompatible platform/surface/mechanism; title similarity cannot alone produce high confidence or root-cause attribution. Ranking keeps `local_mechanism`, `upstream_match`, and `fix_applicability` separate; optional model ranking cannot override gates or invent provenance. Without a disposable isolated profile, active crash probes are refused — prefer natural-failure metadata. Open Issues without verified fix linkage yield `ISSUE_CANDIDATE` / `HIGH_CONFIDENCE_MATCH` with user-resolution `UPSTREAM_BLOCKED` and `repair_authorization_eligible: false` (wrong symptom-level patches never enter authorization). `LOCAL_REPRO_CONFIRMED` remains reserved for a later safe neutral-page probe plus no-Browser control. Disabling the in-app Browser or using external Chrome is a mitigation, not proof of the native root cause.
 
 ### Fixture F — underspecified session-expired boundary
 

@@ -98,6 +98,48 @@
       "maxItems": 128,
       "items": {"type": "string", "maxLength": 128}
     },
+    "crash_metadata": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "exception_code": {"type": ["string", "null"], "maxLength": 64},
+        "faulting_module": {"type": ["string", "null"], "maxLength": 256},
+        "faulting_symbol": {"type": ["string", "null"], "maxLength": 256},
+        "offset_bucket": {"type": ["string", "null"], "maxLength": 64},
+        "gpu_child_exit_code": {"type": ["integer", "null"], "minimum": 0},
+        "gpu_relaunch_code": {"type": ["integer", "null"], "minimum": 0},
+        "interaction_phase": {
+          "type": ["string", "null"],
+          "enum": [
+            "neutral_dom_ready",
+            "link_click",
+            "button_click",
+            "webview_attach",
+            "media_canvas",
+            "unknown",
+            null
+          ]
+        },
+        "page_capability": {
+          "type": ["string", "null"],
+          "enum": ["neutral", "media", "canvas", "complex_login", "unknown", null]
+        },
+        "concurrency_context": {
+          "type": ["string", "null"],
+          "enum": ["single", "multi_side_chat", "unknown", null]
+        },
+        "concurrent_side_chats": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 1024
+        },
+        "component": {"type": ["string", "null"], "maxLength": 128},
+        "isolation_available": {"type": "boolean"},
+        "natural_failure_only": {"type": "boolean"},
+        "active_probe_requested": {"type": "boolean"},
+        "dump_contents_present": {"type": "boolean"}
+      }
+    },
     "local_facts_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
   }
 }

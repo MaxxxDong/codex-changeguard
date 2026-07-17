@@ -1,10 +1,22 @@
 export { diagnose } from "./diagnose.js";
+export {
+  classifyCrashFamily,
+  shouldClassifyCrashFamily,
+  CRASH_FAMILY_CATALOG,
+  normalizeExceptionCode,
+  normalizeOffsetBucket,
+  normalizeModuleName,
+} from "./crash-family.js";
 export type {
   DiagnosisResult,
   DiagnosisState,
   IncidentFingerprint,
   DiagnoseOptions,
   UserResolutionStatus,
+  CrashMetadata,
+  CrashClassificationResult,
+  RankedIssueCandidate,
+  AxisAssessment,
 } from "./types.js";
 export {
   MAX_INCIDENT_BYTES,

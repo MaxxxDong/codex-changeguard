@@ -18,6 +18,10 @@ import {
   resolveTargetDirectory,
 } from "./path-safety.js";
 import { assertNoLeakPaths, redactText } from "./redact.js";
+import {
+  classifyCrashFamily,
+  shouldClassifyCrashFamily,
+} from "./crash-family.js";
 import type {
   DiagnosisResult,
   DiagnoseOptions,
@@ -57,6 +61,8 @@ function baseResult(
     network_used: false,
     target_mutated: false,
     repair_applied: false,
+    crash_classification: partial.crash_classification ?? null,
+    model_ranking_applied: partial.model_ranking_applied ?? false,
   };
 }
 
@@ -113,9 +119,8 @@ function upstreamReceipt(
  */
 export function diagnose(
   targetPath: string,
-  _options: DiagnoseOptions = {},
+  options: DiagnoseOptions = {},
 ): DiagnosisResult {
-  void _options;
   let targetReal: string;
   try {
     ({ targetReal } = resolveTargetDirectory(targetPath));
@@ -308,6 +313,97 @@ export function diagnose(
     });
   }
 
+  // Ticket 09 — Desktop Browser crash-family classifier (Fixture E).
+  // Runs only when protected-process localization did not claim the component.
+  // Prefer natural-failure crash metadata; never actively crash primary Codex.
+  if (shouldClassifyCrashFamily(outFp)) {
+    const modelIds = options.model_preferred_issue_ids ?? null;
+    const classification = classifyCrashFamily(outFp, {
+      model_preferred_issue_ids: modelIds,
+    });
+
+    if (classification.applicable) {
+      evidence.push({
+        kind: "crash_family_classification",
+        detail: classification.summary,
+        measured: true,
+      });
+      evidence.push({
+        kind: "local_mechanism",
+        detail: `${classification.local_mechanism.status}: ${classification.local_mechanism.summary}`,
+        measured: true,
+      });
+      evidence.push({
+        kind: "upstream_match",
+        detail: `${classification.upstream_match.status}: ${classification.upstream_match.summary}`,
+        measured: true,
+      });
+      evidence.push({
+        kind: "fix_applicability",
+        detail: `${classification.fix_applicability.status}: ${classification.fix_applicability.summary}`,
+        measured: true,
+      });
+      if (classification.repair_authorization_eligible === false) {
+        evidence.push({
+          kind: "repair_authorization_refused",
+          detail:
+            "No Repair Capsule / authorization eligibility without verified fix applicability; wrong symptom-level patches blocked.",
+          measured: true,
+        });
+      }
+      for (const action of classification.refused_actions) {
+        evidence.push({
+          kind: "refused_action",
+          detail: action,
+          measured: true,
+        });
+      }
+      for (const req of classification.next_evidence_requirements) {
+        evidence.push({
+          kind: "next_evidence_requirement",
+          detail: req,
+          measured: true,
+        });
+      }
+      if (modelIds && modelIds.length > 0) {
+        evidence.push({
+          kind: "model_ranking_note",
+          detail:
+            "Optional model ranking may only nudge surviving candidates; hard gates and provenance are deterministic.",
+          measured: true,
+        });
+      }
+
+      const topIds = classification.ranked_candidates.map((c) => c.issue_id);
+      const upstreamStatus =
+        topIds.length > 0 ? ("CANDIDATE_ONLY" as const) : ("NONE" as const);
+      const upstreamSummary =
+        topIds.length > 0
+          ? `Ranked Issue candidates (Top ${topIds.length}): ${topIds.join(", ")}. Not official root-cause assertions; no verified fix linkage.`
+          : classification.summary;
+
+      return baseResult({
+        ok: true,
+        diagnosis_state: classification.diagnosis_state,
+        incident_fingerprint: outFp,
+        user_resolution: userReceipt(
+          classification.user_resolution_status,
+          classification.summary,
+        ),
+        upstream_contribution: upstreamReceipt(
+          upstreamStatus,
+          upstreamSummary,
+          topIds,
+        ),
+        evidence,
+        error_code: null,
+        error_message: null,
+        crash_classification: classification,
+        model_ranking_applied: Boolean(modelIds && modelIds.length > 0),
+      });
+    }
+  }
+
   // Negative / insufficient evidence → INCONCLUSIVE; never invent root cause.
   return baseResult({
     ok: true,
@@ -325,5 +421,7 @@ export function diagnose(
     evidence,
     error_code: null,
     error_message: null,
+    crash_classification: null,
+    model_ranking_applied: false,
   });
 }

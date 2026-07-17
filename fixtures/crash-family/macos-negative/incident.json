@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "codex_version": "0.50.0",
+  "build_sha": null,
+  "surface": "desktop",
+  "platform": {
+    "os": "macos",
+    "arch": "arm64",
+    "sandbox_class": "desktop_app"
+  },
+  "failure_phase": "navigation",
+  "error": {
+    "class": "NativeCrash",
+    "normalized_message": "Codex crashes when Browser opens",
+    "message_digest": "c500000000000000000000000000000000000000000000000000000000000005"
+  },
+  "stack_frames": [
+    {
+      "module": "AppKit",
+      "file": null,
+      "symbol": "NSApplicationMain",
+      "line_bucket": null
+    }
+  ],
+  "config_keys": [],
+  "feature_ids": [
+    "in_app_browser"
+  ],
+  "artifact_hashes": [],
+  "ast_signature_ids": [],
+  "crash_metadata": {
+    "exception_code": "SIGSEGV",
+    "faulting_module": "AppKit",
+    "faulting_symbol": "NSApplicationMain",
+    "offset_bucket": null,
+    "gpu_child_exit_code": null,
+    "gpu_relaunch_code": null,
+    "interaction_phase": "neutral_dom_ready",
+    "page_capability": "neutral",
+    "concurrency_context": "single",
+    "concurrent_side_chats": 1,
+    "component": "in_app_browser",
+    "isolation_available": true,
+    "natural_failure_only": true,
+    "active_probe_requested": false,
+    "dump_contents_present": false
+  },
+  "local_facts_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+}

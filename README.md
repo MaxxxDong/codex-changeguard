@@ -43,6 +43,7 @@ npm run package
 npm run package:smoke
 node bin/changeguard.js diagnose fixtures/protected-process
 node bin/changeguard.js diagnose fixtures/negative-control
+node bin/changeguard.js diagnose fixtures/crash-family/access-violation-crbrowser
 ```
 
 Implemented public commands (repository wrapper: `node bin/changeguard.js …`):
@@ -86,6 +87,15 @@ Disclosure manifest is shown before any external refresh. Refusing disclosure st
 allows local snapshot Impact Cards. Production CLI/MCP do not open network sockets by
 default; Change-to-Local Graph edges are deterministic only; unmapped changes are
 labeled `UNMAPPED_CHANGE` without declaring an entire version unsupported.
+
+### Desktop Browser crash-family classifier (Ticket 09)
+
+Sanitized Windows crash fixtures under `fixtures/crash-family/` fork distinct
+exception / GPU / interaction / concurrency families via deterministic gates.
+Compatible fixtures rank the correct `openai/codex#…` Issue in the Top 3;
+title similarity alone cannot create high confidence. Without a verified fix,
+diagnosis returns `UPSTREAM_BLOCKED` (or `INCONCLUSIVE`) and never authorizes a
+symptom-level Repair Capsule. Active crash probes require disposable isolation.
 
 ## Plugin surfaces
 
