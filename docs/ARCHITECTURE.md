@@ -48,11 +48,15 @@ Evidence-locked verdict + Recovery Capsule preview
 ### 2.1 Plugin surfaces
 
 - `skills/changeguard/`: user-facing orchestration instructions
-- `.mcp.json`: read-only MCP server (`changeguard_diagnose` → shared core)
-- `bin/changeguard.js` / `dist/cli/main.js`: Rescue CLI (`changeguard diagnose`)
+- `.mcp.json`: MCP server (`changeguard_diagnose`, recovery tools, `changeguard_scan`, `changeguard_scan_system`, `changeguard_session_start` → shared core)
+- `bin/changeguard.js` / `dist/cli/main.js`: Rescue CLI (`diagnose|repair-*|verify|rollback|scan|scan-system|session-start`)
 - `src/core/diagnose.ts`: single shared diagnosis core used by CLI and MCP
-- `hooks/hooks.json`: optional `SessionStart` hint after explicit trust (later)
-- `schemas/`: portable contracts for fingerprints, claims, probes, and recovery
+- `src/core/recovery/`: Ticket 02 isolated protected-process repair (preview/apply/verify/rollback)
+- `src/instances/`: multi-instance enumeration, version-fingerprint state, affected-instance resolution, repair-target binding contract
+- `src/instances/system-adapter.ts`: production registered system enumeration (capability-injectable)
+- `src/hooks/`: trusted SessionStart core, packaged SessionStart entrypoint, bounded read-only health check
+- `hooks/hooks.json`: optional `SessionStart` registration with `$PLUGIN_ROOT` / `%PLUGIN_ROOT%` (host must explicitly trust)
+- `schemas/`: portable contracts for fingerprints, claims, probes, recovery, and version-fingerprint state
 - lightweight inspector UI: planned only after the CLI/fixture path is verified
 
 ### 2.2 Ticket 01 read-only diagnosis spine
@@ -79,7 +83,7 @@ Core I/O rules:
 - surface / error class / failure phase remain applicability gates after independent measurements
 - MCP stdio uses a bounded byte-oriented NDJSON frame accumulator; frames with byte length `<= MAX_MCP_REQUEST_BYTES` are accepted, only `>` the limit is rejected, before `JSON.parse`
 - Scenario Harness owns whole-target before/after hashing, not the diagnosis core
-- Packaging: `npm run package` builds `release/codex-changeguard-plugin/` with exact public top-level surface (`.codex-plugin`, `.mcp.json`, `README.md`, `bin`, `dist`, `docs`, `fixtures`, `package.json`, `schemas`, `skills`); public `docs/` is only `ARCHITECTURE.md`, `SECURITY.md`, `TEST_PLAN.md`, and `CASE_STUDIES.md` (no `docs/agents`); packaged `README.md` omits the repository-only `HANDOFF.md` link; no `node_modules`, `AGENTS.md`, `HANDOFF.md`, `src`, or `scripts`. Package smoke launches MCP via packaged `.mcp.json` and fails on broken local Markdown links or forbidden packaged paths. A clean source checkout is not claimed runnable before `npm ci && npm run build` (or package).
+- Packaging: `npm run package` builds `release/codex-changeguard-plugin/` with exact public top-level surface (`.codex-plugin`, `.mcp.json`, `README.md`, `bin`, `dist`, `docs`, `fixtures`, `hooks`, `package.json`, `schemas`, `skills`); public `docs/` is only `ARCHITECTURE.md`, `SECURITY.md`, `TEST_PLAN.md`, and `CASE_STUDIES.md` (no `docs/agents`); packaged `README.md` omits the repository-only `HANDOFF.md` link; no `node_modules`, `AGENTS.md`, `HANDOFF.md`, `src`, or `scripts`. Package smoke launches MCP via packaged `.mcp.json` and fails on broken local Markdown links or forbidden packaged paths. A clean source checkout is not claimed runnable before `npm ci && npm run build` (or package).
 
 ### 2.3 Ticket 02 protected-process verified repair (isolated target)
 
@@ -244,15 +248,66 @@ Ticket 02 implements the explicitly authorized apply path for the isolated prote
 7. restore exact original bytes on any failure (automatic rollback);
 8. emit receipts without secrets or full file contents; never claim external submission.
 
-## 9. Update detection
+## 9. Update detection (Ticket 03)
 
 There is no assumed native software-update event.
 
-- Trusted `SessionStart` hook: enumerate Desktop-bundled and PATH Codex binaries separately, compare version/build fingerprints with last-seen local state, and offer a scan when any fingerprint changes.
-- First install: establish a baseline; do not claim an update.
-- Downgrade: display a reverse delta.
-- Multiple binaries: never collapse them; show path hashes and surface labels.
-- Hook skipped, untrusted, or failed: preserve `/changeguard scan` and expose hook status honestly.
+### 9.1 Instance enumeration
+
+ChangeGuard enumerates Desktop-bundled, PATH, supported package-manager, Windows MSIX, and WSL candidates as **separate identities**. Multiple instances never collapse into one row.
+
+Two public enumeration modes share the same scan core:
+
+| Mode | Public seams | Discovery |
+| --- | --- | --- |
+| Fixture inventory | `changeguard scan <inventory-root>`, MCP `changeguard_scan` | Isolated `inventory.json` under an explicit inventory root (tests/demo) |
+| Registered system adapter | `changeguard scan-system`, MCP `changeguard_scan_system`, packaged SessionStart | Bounded known candidates only: Desktop paths, PATH `codex` entries (hard-capped), registered package-manager roots, Windows MSIX / App Execution Alias paths, WSL paths |
+
+Production system defaults inspect only known Codex locations and PATH entries under hard caps. They never perform broad home traversal and never execute discovered binaries. Missing permissions or version metadata yield explicit `version_provenance: "unavailable"`.
+
+Platform / env / filesystem capability injection supports deterministic macOS / Windows / Linux / WSL tests.
+
+Each public identity includes:
+
+- stable `instance_id` and `path_hash` / `path_alias` (raw user paths are never exported)
+- `surface`, `install_source`, `platform`, `arch`
+- profile/config root **aliases** only
+- `version` / `build` with `version_provenance`
+
+Version/build evidence is read only from metadata/manifest files (`version.json`, `package.json`, `Info.plist`, `AppxManifest.xml`, or fixture-declared fields) and only under **explicit allowed roots** (inventory root and/or system-adapter trusted install roots). Implicit parent traversal (`../Info.plist`, npm parent paths) is not used; parent metadata requires a separately registered trusted root and remains bounded with Ticket 01-equivalent no-follow checks.
+
+### 9.2 Affected-instance resolution
+
+The actually affected instance is resolved from observed process, log, and launch-context evidence (path hash or sole-instance rules). ChangeGuard **never** selects the highest/newest version by default. When evidence does not identify exactly one instance, `affected_resolution` remains `ambiguous`.
+
+### 9.3 Transition classification
+
+Comparing current identities to local version-fingerprint state classifies:
+
+- `first_baseline` (no prior state)
+- `upgrade` / `downgrade` / `unchanged`
+- `newly_discovered` / `removed`
+- `path_precedence_drift` (PATH order changes without collapsing instances)
+
+### 9.4 Version-fingerprint state
+
+Local state is versioned JSON (`schema_version: 1`) under an isolated state directory:
+
+- atomic safe write (temp sibling + rename)
+- strict schema, size bound, and no-symlink handling
+- no daemon, no telemetry, no network, no continuous logging
+
+### 9.5 SessionStart and manual scan
+
+- Packaged plugin `SessionStart` uses a dedicated entrypoint `dist/hooks/session-start-entry.js` invoked with POSIX `$PLUGIN_ROOT` and Windows `commandWindows` `%PLUGIN_ROOT%` (see `hooks/hooks.json`). Codex runs hooks with session `cwd`, supplies `PLUGIN_ROOT` / `PLUGIN_DATA`, and JSON on stdin. Version-fingerprint state is stored under `PLUGIN_DATA`, never the project/session cwd. Stdin is parsed under a size bound; `cwd` is observed context only.
+- Trusted packaged SessionStart runs the **system** enumeration + shared scan core only when the **overall** fingerprint changed, then completes a bounded read-only health check under 10 seconds.
+- With no fingerprint change, the packaged hook exits **0 with no stdout** (and `silent: true` on the internal result). On change it may emit valid SessionStart JSON (`hookSpecificOutput.additionalContext`) without raw paths.
+- Hook timeout remains **10 seconds**. Untrusted / skipped / failed behavior is enforced by Codex hook trust; manual paths still represent those states for tests (`changeguard session-start … --hook-trust=`).
+- Manual scan paths: fixture `changeguard scan` / `changeguard_scan`, and production `changeguard scan-system` / `changeguard_scan_system`. All share one `ScanResult` shape without duplicate decision logic.
+
+### 9.6 Repair-target binding
+
+`bindRepairTarget` accepts exactly one observed `instance_id` (optionally corroborated by instance fingerprint) and refuses broadcast / multi-id / ambiguous targets. Integration with Ticket 02 is this interface/contract only — no mutation engine here.
 
 ## 10. Primary fixtures
 
@@ -335,7 +390,7 @@ The playbook never reads or exports cookie values, tokens, passwords, one-time c
 ### Should
 
 - Fixture B or C
-- `SessionStart` version-change hint after trust
+- `SessionStart` version-change detection after trust (Ticket 03 core implemented; host trust still explicit)
 - Recovery Capsule preview (Ticket 02 implements isolated protected-process preview + authorized apply/verify/rollback)
 - lightweight inspector UI
 

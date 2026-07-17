@@ -1,7 +1,8 @@
 /**
  * ChangeGuard MCP server — shared core with Rescue CLI.
  * Tools: diagnose (read-only) + Ticket 02 recovery tools (authorized mutation
- * only under an isolated target via registered recovery operations).
+ * only under an isolated target via registered recovery operations) + Ticket 03
+ * multi-instance scan / SessionStart tools (state writes only under PLUGIN_DATA).
  *
  * Wire protocol: newline-delimited JSON-RPC 2.0 over stdio.
  * Request frames are accumulated as bounded bytes (not unbounded readline).
@@ -17,12 +18,18 @@ import {
 import { assertNoLeakPaths, redactText } from "../core/redact.js";
 import type { DiagnosisResult } from "../core/types.js";
 import type { RepairResult } from "../core/recovery/types.js";
+import { scanInstances } from "../instances/scan.js";
+import type { HookTrustState, ScanResult } from "../instances/types.js";
+import { runSessionStart } from "../hooks/session-start.js";
 
 const TOOL_DIAGNOSE = "changeguard_diagnose";
 const TOOL_REPAIR_PREVIEW = "changeguard_repair_preview";
 const TOOL_REPAIR_APPLY = "changeguard_repair_apply";
 const TOOL_VERIFY = "changeguard_verify";
 const TOOL_ROLLBACK = "changeguard_rollback";
+const TOOL_SCAN = "changeguard_scan";
+const TOOL_SCAN_SYSTEM = "changeguard_scan_system";
+const TOOL_SESSION = "changeguard_session_start";
 
 const KNOWN_TOOLS = new Set([
   TOOL_DIAGNOSE,
@@ -30,6 +37,9 @@ const KNOWN_TOOLS = new Set([
   TOOL_REPAIR_APPLY,
   TOOL_VERIFY,
   TOOL_ROLLBACK,
+  TOOL_SCAN,
+  TOOL_SCAN_SYSTEM,
+  TOOL_SESSION,
 ]);
 
 /** Extra top-level tools/call params beyond name/arguments are refused. */
@@ -137,6 +147,61 @@ function toolSchemas() {
         properties: { target: targetProp },
       },
     },
+    {
+      name: TOOL_SCAN,
+      description:
+        "Deterministic multi-instance / version-fingerprint scan over an isolated inventory fixture. Returns ScanResult. Never executes discovered binaries for version, never exposes raw paths, never uses the network.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["target"],
+        properties: {
+          target: {
+            type: "string",
+            description:
+              "Absolute or relative path to an isolated inventory root (inventory.json).",
+          },
+        },
+      },
+    },
+    {
+      name: TOOL_SCAN_SYSTEM,
+      description:
+        "Production registered system adapter: enumerates bounded known Codex candidates (Desktop, PATH, package roots, MSIX, WSL) without executing them. Returns ScanResult with hashes/aliases only. Requires state_dir (or PLUGIN_DATA).",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["state_dir"],
+        properties: {
+          state_dir: {
+            type: "string",
+            description:
+              "Writable ChangeGuard state directory (typically under PLUGIN_DATA). Never the session cwd.",
+          },
+        },
+      },
+    },
+    {
+      name: TOOL_SESSION,
+      description:
+        "Trusted SessionStart equivalent over an isolated inventory fixture: silent when fingerprint unchanged; otherwise bounded read-only health check. Hook trust must be explicit. Packaged SessionStart uses the dedicated PLUGIN_ROOT entrypoint.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["target"],
+        properties: {
+          target: {
+            type: "string",
+            description: "Isolated inventory root for SessionStart scan.",
+          },
+          hook_trust: {
+            type: "string",
+            enum: ["trusted", "untrusted", "skipped", "failed"],
+            description: "Hook trust state (default trusted).",
+          },
+        },
+      },
+    },
   ];
 }
 
@@ -157,7 +222,7 @@ function requireTarget(a: Record<string, unknown>): string {
 }
 
 function handleToolsCall(params: unknown): {
-  payload: DiagnosisResult | RepairResult;
+  payload: DiagnosisResult | RepairResult | ScanResult;
   ok: boolean;
 } {
   if (!params || typeof params !== "object" || Array.isArray(params)) {
@@ -238,6 +303,82 @@ function handleToolsCall(params: unknown): {
     }
     const payload = rollbackRepair(requireTarget(a));
     return { payload, ok: payload.ok };
+  }
+
+  if (p.name === TOOL_SCAN) {
+    const keys = Object.keys(a);
+    if (keys.some((k) => k !== "target")) {
+      throw Object.assign(new Error("Unknown or extra arguments."), {
+        code: "EXTRA_ARGS",
+      });
+    }
+    if (typeof a.target !== "string" || a.target.length === 0) {
+      throw Object.assign(new Error("Invalid target."), {
+        code: "INVALID_TARGET",
+      });
+    }
+    const payload = scanInstances({
+      inventoryRoot: a.target,
+      mode: "manual_scan",
+      enumeration: "fixture_inventory",
+    });
+    return { payload, ok: payload.ok };
+  }
+
+  if (p.name === TOOL_SCAN_SYSTEM) {
+    const keys = Object.keys(a);
+    if (keys.some((k) => k !== "state_dir")) {
+      throw Object.assign(new Error("Unknown or extra arguments."), {
+        code: "EXTRA_ARGS",
+      });
+    }
+    if (typeof a.state_dir !== "string" || a.state_dir.length === 0) {
+      throw Object.assign(new Error("Invalid state_dir."), {
+        code: "INVALID_ARGS",
+      });
+    }
+    const payload = scanInstances({
+      mode: "manual_scan",
+      enumeration: "system_registered",
+      stateDir: a.state_dir,
+    });
+    return { payload, ok: payload.ok };
+  }
+
+  if (p.name === TOOL_SESSION) {
+    const keys = Object.keys(a);
+    if (keys.some((k) => k !== "target" && k !== "hook_trust")) {
+      throw Object.assign(new Error("Unknown or extra arguments."), {
+        code: "EXTRA_ARGS",
+      });
+    }
+    if (typeof a.target !== "string" || a.target.length === 0) {
+      throw Object.assign(new Error("Invalid target."), {
+        code: "INVALID_TARGET",
+      });
+    }
+    let hookTrust: HookTrustState = "trusted";
+    if (a.hook_trust !== undefined) {
+      if (
+        a.hook_trust !== "trusted" &&
+        a.hook_trust !== "untrusted" &&
+        a.hook_trust !== "skipped" &&
+        a.hook_trust !== "failed"
+      ) {
+        throw Object.assign(new Error("Invalid hook_trust."), {
+          code: "INVALID_ARGS",
+        });
+      }
+      hookTrust = a.hook_trust;
+    }
+    const payload = runSessionStart({
+      inventoryRoot: a.target,
+      enumeration: "fixture_inventory",
+      hookTrust,
+    });
+    // SessionStart silent no-change is a successful empty outcome.
+    const ok = payload.ok || payload.silent === true;
+    return { payload, ok };
   }
 
   throw Object.assign(new Error("Unknown tool."), { code: "UNKNOWN_TOOL" });

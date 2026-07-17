@@ -69,12 +69,24 @@ Orchestration:
 6. Explicit rollback is mitigation (`MITIGATED_VERIFIED_BY_ROLLBACK`), not root-cause resolution.
 7. Keep user-resolution and upstream-contribution receipts separate; never claim external submission.
 
+## Ticket 03 — multi-instance scan / SessionStart
+
+### Public seams (same core)
+
+1. Rescue CLI: `changeguard scan <inventory-root>`
+2. Rescue CLI: `changeguard scan-system [--state-dir=<dir>]` (production registered system adapter; state under `PLUGIN_DATA` or explicit dir)
+3. Rescue CLI: `changeguard session-start <inventory-root> [--hook-trust=trusted|untrusted|skipped|failed]`
+4. MCP tools: `changeguard_scan` `{ "target" }`, `changeguard_scan_system` `{ "state_dir" }`, and `changeguard_session_start` `{ "target", "hook_trust?" }`
+5. Packaged `SessionStart` via `hooks/hooks.json` → `dist/hooks/session-start-entry.js` with `$PLUGIN_ROOT` / `%PLUGIN_ROOT%` and state under `PLUGIN_DATA`
+
+All scan seams return the same structured `ScanResult`. Raw install paths are never exported (path hashes/aliases only). Version evidence is metadata-only under explicit allowed roots (no binary execution, no parent/symlink escape). SessionStart is silent (exit 0, no stdout) when the overall fingerprint is unchanged; on change it runs a bounded read-only health check under 10 seconds. Untrusted/skipped/failed hooks are explicit; manual scan remains the fallback. Repair-target binding accepts exactly one observed instance id and refuses broadcast/ambiguous targets.
+
 ## Planned commands
 
-- `/changeguard scan`: compare installed and last-seen Codex fingerprints and map official changes to local surfaces
+- `/changeguard scan`: compare installed and last-seen Codex fingerprints via the shared instance core (Ticket 03)
 - `/changeguard diagnose`: build an incident fingerprint via the shared core (Ticket 01 implemented for isolated targets)
 - `/changeguard repro-pack`: show the disclosure manifest and export a redacted evidence package after confirmation
 - `/changeguard recovery-preview` / repair-preview: build a Repair Capsule (Ticket 02 for protected-process isolated targets)
 - `/changeguard verify` / `/changeguard rollback`: Ticket 02 recovery seams
 
-Upstream submission remains a later ticket. This Skill freezes the safety contract and routes diagnosis/repair through the shared core only.
+Upstream submission remains a later ticket. This Skill freezes the safety contract and routes diagnosis/repair/scan through the shared core only.

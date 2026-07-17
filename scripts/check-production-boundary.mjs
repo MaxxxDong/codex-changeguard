@@ -1,12 +1,13 @@
 /**
- * Independent production-boundary guard (Ticket 01 + Ticket 02 recovery seam).
+ * Independent production-boundary guard (Ticket 01 + Ticket 02 recovery + Ticket 03 state).
  * Scans production TypeScript sources with the TypeScript compiler API
  * (devDependency only — never a production runtime dependency).
  *
  * Diagnosis modules remain read-only. Ticket 02 registers a narrow recovery
  * write allowlist only for files under `src/core/recovery/` (exact registered
- * fs methods + proven write-capable open flags). Network, shell, loaders,
- * eval, and host-capability rules still apply to recovery modules.
+ * fs methods + proven write-capable open flags). Ticket 03 allows atomic
+ * version-fingerprint state writes only in `src/instances/state.ts`. Network,
+ * shell, loaders, eval, and host-capability rules still apply everywhere.
  *
  * Fails if the diagnosis path introduces:
  * - network APIs/modules (fetch, http/https/net/tls/dns/dgram/undici, WebSocket)
@@ -68,13 +69,50 @@ import ts from "typescript";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SRC_ROOT = path.join(repoRoot, "src");
 
-/** Production entry graph: CLI + MCP + shared core (exclude harness/tests). */
+/** Production entry graph: CLI + MCP + packaged SessionStart + shared core. */
 const ENTRY_FILES = [
   path.join(SRC_ROOT, "cli", "main.ts"),
   path.join(SRC_ROOT, "mcp", "server.ts"),
   path.join(SRC_ROOT, "core", "diagnose.ts"),
   path.join(SRC_ROOT, "core", "index.ts"),
+  path.join(SRC_ROOT, "hooks", "session-start-entry.ts"),
 ];
+
+/** Ticket 01 diagnosis spine entry — must remain free of fs mutation APIs. */
+const DIAGNOSIS_ENTRY_FILES = [
+  path.join(SRC_ROOT, "core", "diagnose.ts"),
+];
+
+/**
+ * ChangeGuard-owned version-fingerprint state may use atomic file replace.
+ * These methods remain forbidden on the diagnosis-only graph and in self-tests
+ * unless allowStateWrites is enabled **and** the current file is on the exact
+ * state-write allowlist (src/instances/state.ts only). CLI/MCP/other instance
+ * modules must remain mutation-free. Ticket 02 recovery writes remain separate
+ * (RECOVERY_WRITE_FS_METHODS under atomic-write.ts).
+ */
+const STATE_WRITE_FS_METHODS = new Set([
+  "mkdirSync",
+  "writeFileSync",
+  "renameSync",
+  "unlinkSync",
+]);
+
+/** Exact production files permitted to use atomic state-write methods. */
+const DEFAULT_STATE_WRITE_ALLOWLIST = new Set(["src/instances/state.ts"]);
+
+/**
+ * @type {{
+ *   allowStateWrites: boolean,
+ *   stateWriteAllowlist: Set<string> | null,
+ *   currentRel: string | null,
+ * }}
+ */
+let scanPolicy = {
+  allowStateWrites: false,
+  stateWriteAllowlist: null,
+  currentRel: null,
+};
 
 /**
  * Allowlist of Node builtins permitted on the production diagnosis graph.
@@ -422,7 +460,15 @@ function staticTerminalName(expr) {
  */
 function isReadonlyFsMethod(method, nsKind = "fs") {
   if (nsKind === "fs.promises") return READONLY_FS_PROMISES_METHODS.has(method);
-  return READONLY_FS_METHODS.has(method);
+  if (READONLY_FS_METHODS.has(method)) return true;
+  // Ticket 03: product graph may atomically write ChangeGuard-owned state only
+  // inside the exact allowlisted state module.
+  if (scanPolicy.allowStateWrites && STATE_WRITE_FS_METHODS.has(method)) {
+    if (!scanPolicy.stateWriteAllowlist || !scanPolicy.currentRel) return false;
+    const cur = scanPolicy.currentRel.replace(/\\/g, "/");
+    return scanPolicy.stateWriteAllowlist.has(cur);
+  }
+  return false;
 }
 
 /**
@@ -2514,15 +2560,48 @@ function scanSourceText(file, text, rel) {
  * @param {string[]} files
  * @returns {{ ok: boolean, violations: string[] }}
  */
-export function scanFiles(files) {
-  /** @type {string[]} */
-  const violations = [];
-  for (const file of files) {
-    const text = fs.readFileSync(file, "utf8");
-    const rel = path.isAbsolute(file) ? path.relative(repoRoot, file) || file : file;
-    violations.push(...scanSourceText(file, text, rel));
+/**
+ * @param {string[]} files
+ * @param {{
+ *   allowStateWrites?: boolean,
+ *   stateWriteAllowlist?: string[] | Set<string>,
+ * }} [opts]
+ */
+export function scanFiles(files, opts = {}) {
+  const prev = scanPolicy;
+  /** @type {Set<string> | null} */
+  let allowlist = null;
+  if (opts.allowStateWrites) {
+    if (opts.stateWriteAllowlist) {
+      allowlist = new Set(
+        [...opts.stateWriteAllowlist].map((p) =>
+          String(p).replace(/\\/g, "/"),
+        ),
+      );
+    } else {
+      allowlist = new Set(DEFAULT_STATE_WRITE_ALLOWLIST);
+    }
   }
-  return { ok: violations.length === 0, violations };
+  scanPolicy = {
+    allowStateWrites: !!opts.allowStateWrites,
+    stateWriteAllowlist: allowlist,
+    currentRel: null,
+  };
+  try {
+    /** @type {string[]} */
+    const violations = [];
+    for (const file of files) {
+      const text = fs.readFileSync(file, "utf8");
+      const rel = path.isAbsolute(file)
+        ? path.relative(repoRoot, file) || file
+        : file;
+      scanPolicy.currentRel = String(rel).replace(/\\/g, "/");
+      violations.push(...scanSourceText(file, text, rel));
+    }
+    return { ok: violations.length === 0, violations };
+  } finally {
+    scanPolicy = prev;
+  }
 }
 
 /**
@@ -3553,6 +3632,60 @@ fs.closeSync(fd);
     failures.push("temp file scan of node:net should fail");
   }
 
+  // Ticket 03: state-write allowlist is exact-file scoped, not product-global.
+  {
+    const writeSrc = `import fs from "node:fs";\nfs.writeFileSync("x", "y");\nfs.mkdirSync("d");\nfs.renameSync("a", "b");\nfs.unlinkSync("c");\n`;
+    const prevPolicy = scanPolicy;
+    try {
+      scanPolicy = {
+        allowStateWrites: true,
+        stateWriteAllowlist: new Set(["src/instances/state.ts"]),
+        currentRel: "src/instances/state.ts",
+      };
+      const okState = scanSourceSnippet(writeSrc, "src/instances/state.ts");
+      if (okState.length > 0) {
+        failures.push(
+          `state.ts atomic writes should be allowed under allowlist: ${okState.join("; ")}`,
+        );
+      }
+      scanPolicy = {
+        allowStateWrites: true,
+        stateWriteAllowlist: new Set(["src/instances/state.ts"]),
+        currentRel: "src/cli/main.ts",
+      };
+      const badCli = scanSourceSnippet(writeSrc, "src/cli/main.ts");
+      if (badCli.length === 0) {
+        failures.push(
+          "cli/main.ts state writes must be rejected even when allowStateWrites=true",
+        );
+      }
+      scanPolicy = {
+        allowStateWrites: true,
+        stateWriteAllowlist: new Set(["src/instances/state.ts"]),
+        currentRel: "src/mcp/server.ts",
+      };
+      const badMcp = scanSourceSnippet(writeSrc, "src/mcp/server.ts");
+      if (badMcp.length === 0) {
+        failures.push(
+          "mcp/server.ts state writes must be rejected even when allowStateWrites=true",
+        );
+      }
+      scanPolicy = {
+        allowStateWrites: true,
+        stateWriteAllowlist: new Set(["src/instances/state.ts"]),
+        currentRel: "src/instances/scan.ts",
+      };
+      const badScan = scanSourceSnippet(writeSrc, "src/instances/scan.ts");
+      if (badScan.length === 0) {
+        failures.push(
+          "instances/scan.ts state writes must be rejected; only state.ts may write",
+        );
+      }
+    } finally {
+      scanPolicy = prevPolicy;
+    }
+  }
+
   // Graph-closure self-test: relative re-export must reach a hidden mutator.
   const graphRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cg-boundary-graph-"));
   const entryPath = path.join(graphRoot, "entry.ts");
@@ -3655,17 +3788,33 @@ function main() {
     process.exit(1);
   }
 
+  // Diagnosis spine: strict read-only (no state-write methods).
+  const diagnosisFiles = collectStaticEsmGraph(DIAGNOSIS_ENTRY_FILES, {
+    root: SRC_ROOT,
+  });
+  const diagnosisResult = scanFiles(diagnosisFiles, { allowStateWrites: false });
+
+  // Full product graph: atomic state writes only in src/instances/state.ts.
   const files = collectProductionFiles();
-  const result = scanFiles(files);
+  const result = scanFiles(files, {
+    allowStateWrites: true,
+    stateWriteAllowlist: ["src/instances/state.ts"],
+  });
+  const ok = diagnosisResult.ok && result.ok;
   const report = {
-    ok: result.ok,
+    ok,
     scanned_files: files.map((f) => path.relative(repoRoot, f)),
-    violations: result.violations,
+    diagnosis_scanned_files: diagnosisFiles.map(
+      (f) => path.relative(repoRoot, f),
+    ),
+    violations: [...diagnosisResult.violations, ...result.violations],
+    diagnosis_ok: diagnosisResult.ok,
+    product_ok: result.ok,
     self_test_ok: true,
-    note: "Independent AST boundary evidence; does not rely on network_used:false alone.",
+    note: "Independent AST boundary evidence; diagnosis graph remains mutation-free; product graph allows ChangeGuard-owned atomic state writes only.",
   };
   console.log(JSON.stringify(report, null, 2));
-  if (!result.ok) {
+  if (!ok) {
     process.exit(1);
   }
 }

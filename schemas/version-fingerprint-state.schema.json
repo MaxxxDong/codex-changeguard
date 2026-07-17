@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-changeguard/version-fingerprint-state.schema.json",
+  "title": "VersionFingerprintState",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "updated_at",
+    "overall_fingerprint",
+    "instances"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "updated_at": { "type": "string", "maxLength": 64 },
+    "overall_fingerprint": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "instances": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "instance_id",
+          "path_hash",
+          "path_alias",
+          "surface",
+          "install_source",
+          "platform",
+          "arch",
+          "profile_root_alias",
+          "config_root_alias",
+          "version",
+          "build",
+          "version_provenance",
+          "path_precedence"
+        ],
+        "properties": {
+          "instance_id": { "type": "string", "maxLength": 128 },
+          "path_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "path_alias": { "type": "string", "maxLength": 64 },
+          "surface": { "enum": ["desktop", "cli", "unknown"] },
+          "install_source": {
+            "enum": [
+              "desktop_bundled",
+              "path",
+              "package_manager",
+              "windows_msix",
+              "wsl",
+              "unknown"
+            ]
+          },
+          "platform": {
+            "enum": ["macos", "windows", "linux", "wsl", "unknown"]
+          },
+          "arch": { "type": "string", "maxLength": 64 },
+          "profile_root_alias": { "type": ["string", "null"], "maxLength": 128 },
+          "config_root_alias": { "type": ["string", "null"], "maxLength": 128 },
+          "version": { "type": ["string", "null"], "maxLength": 128 },
+          "build": { "type": ["string", "null"], "maxLength": 128 },
+          "version_provenance": {
+            "enum": [
+              "package_json",
+              "plist_metadata",
+              "msix_manifest",
+              "version_file",
+              "fixture_declared",
+              "unavailable"
+            ]
+          },
+          "path_precedence": {
+            "type": ["integer", "null"],
+            "minimum": 0
+          }
+        }
+      }
+    }
+  }
+}

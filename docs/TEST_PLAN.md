@@ -15,7 +15,7 @@ This document owns the ChangeGuard verification matrix. Passing a model-generate
 | Probe registry | registered IDs only; no shell text; platform guard; timeout/output cap; result hash; refusal and error are distinct |
 | Privacy | token/env/path fixtures redacted; disclosure manifest exactly matches exported fields; Issue injection is quarantined |
 | Recovery | trust-tier policy; exact target hash/pattern count; disposable-copy dry-run; backup/smoke/rollback receipt tests |
-| Hooks | first install, upgrade, downgrade, multiple binaries, hook untrusted, hook failure, and manual scan fallback |
+| Hooks / instances (Ticket 03) | first baseline, unchanged silent SessionStart, multi-instance upgrade, downgrade, PATH precedence drift, actual-instance evidence, ambiguous repair refusal, hook untrusted/skipped/failed, manual scan fallback, CLI/MCP scan equivalence, SessionStart changed/no-change duration &lt;10s, raw-path non-disclosure, symlink state refusal |
 | Judge path | clean install; no judge API key; live matcher/probe; offline snapshot; visible evidence state; under 90 seconds |
 
 ## Fixture expectations
@@ -103,6 +103,21 @@ Mandatory cases (implemented in `tests/scenario-harness.test.ts`):
 - production-boundary guard self-tests on synthetic snippets (default/fs.promises non-read-only methods under a read-only allowlist policy, descriptor write/truncate/createWriteStream, mkdtemp/lchown/lchmod and unknown-future-API fail-closed, require/dynamic-import/`node:module`/`createRequire` loader prohibition, static `process`/`node:process` import and re-export prohibition at the module-policy layer (default/namespace/named import forms plus bare `process` and re-export controls) with opposite safe global-`process` control (`process.argv`/`process.cwd`/`process.env.NODE_ENV`/`globalThis.process.argv` without any `node:process` import), receiver wrappers `as`/non-null/comma-sequence, proven `node:fs` namespace **value-escape** closure — namespace may not escape via simple/chained alias (including former “safe” read-only alias open forms), Proxy, object spread, `Object.create`, `Object.assign`, container/shorthand store, return, pass, or nested `fs.promises` escape while direct `fs.promises.readFile` and named static read-only method imports remain allowed — plus destructured mutation/`open`/object-rest capability extracts including chained/renamed forms, capability-reference bypasses — value pass, `Reflect.apply`, comma-sequence call, `.bind`, callback supply, array/object storage, and bare `open`/`openSync` references or named imports — conditional open flags with proven `fs.constants` provenance including fake-object / unknown-parameter / object-literal `O_RDONLY` bypasses, parameter and nested-local shadowing of imported `fs` / `constants` aliases, and real unshadowed `fsConstants.O_RDONLY | O_NOFOLLOW` / `fs.constants.O_RDONLY` direct-namespace read-only open allowances with direct calls only, indirect eval/Function acquisition and sequence use, network globals `fetch`/`WebSocket`/`XMLHttpRequest` as capability references including alias/pass/`Reflect.apply`/sequence/construct-through-alias and `globalThis`/`global`/`window` member plus static-string element forms, process native-loader surfaces `dlopen`/`binding`/`getBuiltinModule`/`_linkedBinding`/`mainModule` as property references or calls on proven `process`/alias/`globalThis.process` roots with dynamic-key fail-closed, process object value-escape closure — whole-`process` must not escape via destructure (including `getBuiltinModule` extract and rest), `Proxy`, object spread, `Object.create`, simple/chained alias, return, pass, or array/object container forms — opposite safe controls for direct `process.argv`/`process.cwd`/`process.env`/`process.env.NODE_ENV`/`process.stdout.write`/`globalThis.process.argv` and static ESM read-only `fs.openSync`, CommonJS `module` and global `Reflect` host/meta capability prohibition, computed/reflective require loaders (`module["require"]`, `process["mainModule"]["require"]`, mainModule alias + computed require, `Reflect.get(module|process.mainModule, "require")`, any-receiver static terminal `require` property/element access) with opposite safe `frame.module` property-name control, and existing `require` alias/`module.require`/`process.mainModule.require`/`require.main.require` controls) plus production graph scan that follows relative static ESM re-exports (graph-closure self-test for a hidden mutator reached only via `export … from`)
 - package smoke: `npm run package` then `npm run package:smoke` from a non-repo cwd; smoke reads packaged `.mcp.json`, enforces exact top-level allowlist, exact public docs set (`ARCHITECTURE.md`/`SECURITY.md`/`TEST_PLAN.md`/`CASE_STUDIES.md` only), no broken local Markdown links, and no repository-only paths (`AGENTS.md`/`HANDOFF.md`/`docs/agents`/`src`/`scripts`/`node_modules`/`.scratch`)
 
+## Ticket 03 Scenario Harness
+
+Implemented in `tests/instance-scan.test.ts` (public CLI/MCP + shared core):
+
+- first baseline across Desktop / PATH / package-manager / MSIX / WSL identities
+- unchanged SessionStart is silent and does not rewrite state
+- multi-instance upgrade does not auto-select highest version as affected
+- downgrade classification
+- PATH precedence drift without collapsing instances
+- untrusted / skipped / failed hook statuses; manual scan fallback
+- SessionStart on change runs bounded read-only health check under 10s
+- actual process-path evidence identifies the failing instance
+- ambiguous multi-instance refuses repair binding; broadcast refused
+- CLI/MCP scan stable-field consistency; raw-path non-disclosure; symlink state refused
+
 ## Initial commands
 
 ```bash
@@ -122,6 +137,10 @@ node bin/changeguard.js diagnose fixtures/negative-control
 # node bin/changeguard.js repair-apply <isolated-target> <authorization_binding>
 # node bin/changeguard.js verify <isolated-target>
 # node bin/changeguard.js rollback <isolated-target>
+# Ticket 03 (inventory fixtures built in tests; illustrative CLI forms):
+# node bin/changeguard.js scan <inventory-root>
+# node bin/changeguard.js scan-system --state-dir=<dir>
+# node bin/changeguard.js session-start <inventory-root> --hook-trust=trusted
 ```
 
 A clean source checkout is not claimed runnable before `npm ci && npm run build`

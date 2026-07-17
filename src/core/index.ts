@@ -21,3 +21,14 @@ export {
   rollbackRepair,
 } from "./recovery/index.js";
 export type { RepairResult, RepairCapsule } from "./recovery/index.js";
+
+// Ticket 03 re-exports (shared core surface for CLI/MCP consumers).
+export { scanInstances, bindRepairTarget } from "../instances/index.js";
+export type {
+  ScanResult,
+  ScanOptions,
+  InstanceIdentity,
+  RepairTargetBinding,
+  RepairTargetRequest,
+} from "../instances/types.js";
+export { runSessionStart } from "../hooks/session-start.js";

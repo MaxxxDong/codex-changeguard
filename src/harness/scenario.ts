@@ -109,12 +109,54 @@ export function runCliRollback(target: string) {
   return runCliJson(["rollback", target]);
 }
 
+export function runCliScan(inventoryRoot: string): {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  result: unknown;
+} {
+  return runCliJson(["scan", inventoryRoot]);
+}
+
+export function runCliSessionStart(
+  inventoryRoot: string,
+  hookTrust: "trusted" | "untrusted" | "skipped" | "failed" = "trusted",
+): {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  result: unknown;
+  durationMs: number;
+} {
+  const t0 = performance.now();
+  const out = runCliJson([
+    "session-start",
+    inventoryRoot,
+    `--hook-trust=${hookTrust}`,
+  ]);
+  return {
+    ...out,
+    durationMs: performance.now() - t0,
+  };
+}
+
 export async function runMcpDiagnose(target: string): Promise<DiagnosisResult> {
   const client = new McpTestClient({ serverEntry: mcpServerEntry() });
   try {
     client.start();
     const result = await client.diagnose(target);
     return result as DiagnosisResult;
+  } finally {
+    await client.close();
+  }
+}
+
+export async function runMcpScan(target: string): Promise<unknown> {
+  const client = new McpTestClient({ serverEntry: mcpServerEntry() });
+  try {
+    client.start();
+    const result = await client.callTool("changeguard_scan", { target });
+    return result;
   } finally {
     await client.close();
   }

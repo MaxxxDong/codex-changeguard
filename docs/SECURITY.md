@@ -67,6 +67,19 @@ Issue bodies, comments, release prose, commit messages, and community workaround
 - results carry hashes and cannot be rewritten by the model
 - refused, timed-out, unsupported, and errored probes are separate states
 
+## Ticket 03 instance / fingerprint safety
+
+Multi-instance scan and SessionStart add:
+
+- **No raw path export:** public `ScanResult` uses `path_hash` / `path_alias` only; absolute user paths, usernames, and disposable clone paths are redacted on the wire
+- **No binary execution for version:** version evidence comes from metadata/manifest reads (or fixture-declared fields), never by running discovered candidates
+- **Metadata path clamping:** every metadata candidate is clamped to an explicit allowed root (fixture `inventoryRoot` and/or system-adapter trusted install roots). Implicit parent traversal is removed. Intermediate and leaf symlinks are refused with Ticket 01-equivalent no-follow open/fstat/identity/size checks — no out-of-root reads
+- **System enumeration bounds:** production adapter only probes registered Desktop / PATH / package-root / MSIX / WSL candidates under hard caps; missing permissions or metadata become `unavailable`, never broad home crawls or execution
+- **State writes are ChangeGuard-owned only:** version-fingerprint JSON uses atomic temp+rename under an explicit state directory (`PLUGIN_DATA` for packaged hooks) with size limits and symlink refusal; diagnosis targets and inventory fixtures are not mutated (`target_mutated: false`)
+- **Production boundary dual pass:** the diagnosis AST graph remains free of fs mutation APIs; the product graph may use `mkdirSync` / `writeFileSync` / `renameSync` / `unlinkSync` **only inside the exact** `src/instances/state.ts` implementation (CLI/MCP/other instance modules stay mutation-free; self-tests enforce the file allowlist). Ticket 02 recovery writes remain separately constrained to `src/core/recovery/atomic-write.ts`
+- **Hook honesty:** packaged SessionStart is silent (exit 0, no stdout) when unchanged; untrusted/skipped/failed states remain explicit on manual paths; Codex hook trust still gates execution
+- **Repair binding:** refuses broadcast and ambiguous multi-instance targets so a later repair cannot hit the wrong install
+
 ## Ticket 01 diagnosis surface safety
 
 The public CLI and MCP diagnosis seams enforce:

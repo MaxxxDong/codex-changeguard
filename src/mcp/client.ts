@@ -140,7 +140,7 @@ export class McpTestClient {
     this.initialized = true;
   }
 
-  private async callTool(
+  async callTool(
     name: string,
     args: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {

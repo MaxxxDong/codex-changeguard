@@ -95,10 +95,12 @@ mkdirp(outDir);
 const required = [
   ["dist/cli/main.js", "compiled CLI"],
   ["dist/mcp/server.js", "compiled MCP server"],
+  ["dist/hooks/session-start-entry.js", "packaged SessionStart entrypoint"],
   ["bin/changeguard.js", "CLI wrapper"],
   [".codex-plugin/plugin.json", "plugin manifest"],
   [".mcp.json", "MCP config"],
   ["skills/changeguard/SKILL.md", "Skill"],
+  ["hooks/hooks.json", "SessionStart hooks manifest"],
   ["package.json", "package.json"],
   ["README.md", "README"],
   ...PUBLIC_DOCS.map((name) => [`docs/${name}`, `public doc ${name}`]),
@@ -117,6 +119,8 @@ copyDir(path.join(repoRoot, ".codex-plugin"), path.join(outDir, ".codex-plugin")
 copyFile(path.join(repoRoot, ".mcp.json"), path.join(outDir, ".mcp.json"));
 // Skill
 copyDir(path.join(repoRoot, "skills"), path.join(outDir, "skills"));
+// Optional trusted SessionStart hook registration (host must trust explicitly)
+copyDir(path.join(repoRoot, "hooks"), path.join(outDir, "hooks"));
 // Fixtures + schemas
 copyDir(path.join(repoRoot, "fixtures"), path.join(outDir, "fixtures"));
 copyDir(path.join(repoRoot, "schemas"), path.join(outDir, "schemas"));
@@ -139,6 +143,7 @@ const ALLOWED_TOP_LEVEL = new Set([
   "dist",
   "docs",
   "fixtures",
+  "hooks",
   "package.json",
   "schemas",
   "skills",

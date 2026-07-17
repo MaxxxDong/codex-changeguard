@@ -28,6 +28,7 @@ const ALLOWED_TOP_LEVEL = new Set([
   "dist",
   "docs",
   "fixtures",
+  "hooks",
   "package.json",
   "schemas",
   "skills",
@@ -341,6 +342,104 @@ if (path.resolve(outside) === path.resolve(packageDir)) {
   fail("Smoke cwd must be outside package dir.");
 }
 
+// Hook manifest discovery + entrypoint existence (packaged SessionStart contract).
+const hooksManifestPath = path.join(packageDir, "hooks", "hooks.json");
+if (!fs.existsSync(hooksManifestPath)) {
+  fail("Packaged hooks/hooks.json missing.");
+}
+let hooksManifest;
+try {
+  hooksManifest = JSON.parse(fs.readFileSync(hooksManifestPath, "utf8"));
+} catch {
+  fail("Packaged hooks/hooks.json is not valid JSON.");
+}
+const sessionStart = hooksManifest?.hooks?.SessionStart;
+if (!Array.isArray(sessionStart) || sessionStart.length < 1) {
+  fail("hooks.json must declare SessionStart hooks.");
+}
+const hookHandlers = sessionStart.flatMap((g) =>
+  Array.isArray(g?.hooks) ? g.hooks : [],
+);
+if (hookHandlers.length < 1) {
+  fail("SessionStart must declare at least one command handler.");
+}
+const handler = hookHandlers[0];
+if (handler.type !== "command" || typeof handler.command !== "string") {
+  fail("SessionStart handler must be type=command with command string.");
+}
+if (!handler.command.includes("$PLUGIN_ROOT") && !handler.command.includes("${PLUGIN_ROOT}")) {
+  fail("SessionStart command must reference PLUGIN_ROOT (POSIX).");
+}
+if (typeof handler.commandWindows !== "string" || !handler.commandWindows.includes("%PLUGIN_ROOT%")) {
+  fail("SessionStart must declare commandWindows with %PLUGIN_ROOT%.");
+}
+if (handler.timeout !== 10) {
+  fail(`SessionStart timeout must be 10 seconds; got ${handler.timeout}`);
+}
+const entryRel = "dist/hooks/session-start-entry.js";
+const entryAbs = path.join(packageDir, entryRel);
+if (!fs.existsSync(entryAbs)) {
+  fail(`Packaged SessionStart entrypoint missing: ${entryRel}`);
+}
+
+// Arbitrary-cwd hook smoke: MODULE_NOT_FOUND must not occur when cwd ≠ package root.
+const pluginData = fs.mkdtempSync(path.join(os.tmpdir(), "cg-plugin-data-"));
+const hookCwd = fs.mkdtempSync(path.join(os.tmpdir(), "cg-session-cwd-"));
+const hookEnv = {
+  ...process.env,
+  NO_COLOR: "1",
+  PLUGIN_ROOT: packageDir,
+  PLUGIN_DATA: pluginData,
+};
+const hookInput = JSON.stringify({
+  session_id: "smoke-session",
+  cwd: hookCwd,
+  hook_event_name: "SessionStart",
+  source: "startup",
+});
+const hook1 = spawnSync(process.execPath, [entryAbs], {
+  cwd: hookCwd,
+  encoding: "utf8",
+  env: hookEnv,
+  input: hookInput,
+  maxBuffer: 2 * 1024 * 1024,
+});
+if (hook1.status !== 0) {
+  fail(
+    `Packaged SessionStart first run failed status=${hook1.status}\nstdout=${hook1.stdout}\nstderr=${hook1.stderr}`,
+  );
+}
+if (/MODULE_NOT_FOUND|Cannot find module/i.test(hook1.stderr || "")) {
+  fail("Packaged SessionStart must not MODULE_NOT_FOUND from session cwd.");
+}
+// First baseline is a change → may emit additionalContext JSON; must not leak paths.
+if (hook1.stdout && (hook1.stdout.includes(hookCwd) || hook1.stdout.includes(packageDir))) {
+  fail("SessionStart stdout must not disclose raw plugin/session paths.");
+}
+// Second run with same system view: unchanged → exit 0, no stdout.
+const hook2 = spawnSync(process.execPath, [entryAbs], {
+  cwd: hookCwd,
+  encoding: "utf8",
+  env: hookEnv,
+  input: hookInput,
+  maxBuffer: 2 * 1024 * 1024,
+});
+if (hook2.status !== 0) {
+  fail(`Unchanged SessionStart must exit 0; got ${hook2.status}\n${hook2.stderr}`);
+}
+if ((hook2.stdout || "") !== "") {
+  fail(`Unchanged SessionStart must emit no stdout; got ${JSON.stringify(hook2.stdout)}`);
+}
+// State must live under PLUGIN_DATA, not session cwd.
+const stateFile = path.join(pluginData, "version-state", "version-fingerprint.json");
+if (!fs.existsSync(stateFile)) {
+  fail("SessionStart must persist version state under PLUGIN_DATA.");
+}
+const cwdListing = fs.readdirSync(hookCwd);
+if (cwdListing.includes("state") || cwdListing.includes("version-fingerprint.json")) {
+  fail("SessionStart must not write state into session cwd.");
+}
+
 console.log(
   JSON.stringify(
     {
@@ -361,6 +460,13 @@ console.log(
       no_docs_agents: true,
       local_markdown_links_ok: true,
       forbidden_paths_absent: FORBIDDEN_PACKAGED_PATHS,
+      session_start_entrypoint: entryRel,
+      session_start_command_uses_plugin_root: true,
+      session_start_command_windows: handler.commandWindows,
+      session_start_timeout: handler.timeout,
+      session_start_arbitrary_cwd_ok: true,
+      session_start_unchanged_no_stdout: true,
+      session_start_state_under_plugin_data: true,
     },
     null,
     2,

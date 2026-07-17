@@ -6,6 +6,9 @@
  *   changeguard repair-apply <isolated-target> <authorization-token>
  *   changeguard verify <isolated-target>
  *   changeguard rollback <isolated-target>
+ *   changeguard scan <inventory-root>          (fixture inventory adapter)
+ *   changeguard scan-system                    (production registered system adapter)
+ *   changeguard session-start <inventory-root> [--hook-trust=…]  (manual fixture path)
  */
 import { diagnose } from "../core/diagnose.js";
 import {
@@ -17,6 +20,9 @@ import {
 import { assertNoLeakPaths, redactText } from "../core/redact.js";
 import type { DiagnosisResult } from "../core/types.js";
 import type { RepairResult } from "../core/recovery/types.js";
+import { scanInstances } from "../instances/scan.js";
+import type { HookTrustState, ScanResult } from "../instances/types.js";
+import { runSessionStart } from "../hooks/session-start.js";
 
 function printJson(value: unknown, exitCode: number): never {
   const text = assertNoLeakPaths(redactText(JSON.stringify(value, null, 2)));
@@ -44,15 +50,163 @@ function usageDiagnosis(): DiagnosisResult {
     evidence: [],
     error_code: "USAGE",
     error_message:
-      "Usage: changeguard diagnose|repair-preview|repair-apply|verify|rollback <isolated-target> [authorization]",
+      "Usage: changeguard diagnose|repair-preview|repair-apply|verify|rollback|scan|scan-system|session-start …",
     network_used: false,
     target_mutated: false,
     repair_applied: false,
   };
 }
 
+function scanUsageError(
+  kind: "scan" | "session-start" | "scan-system",
+): never {
+  const result: ScanResult = {
+    schema_version: 1,
+    ok: false,
+    mode: kind === "session-start" ? "session_start" : "manual_scan",
+    fingerprint_changed: false,
+    overall_fingerprint: "",
+    previous_fingerprint: null,
+    primary_transition: "unchanged",
+    transitions: [],
+    instances: [],
+    affected_instance_id: null,
+    affected_resolution: "none",
+    hook_status: kind === "session-start" ? "failed" : null,
+    health_check: null,
+    silent: false,
+    state_updated: false,
+    network_used: false,
+    target_mutated: false,
+    repair_applied: false,
+    error_code: "USAGE",
+    error_message:
+      kind === "scan"
+        ? "Usage: changeguard scan <inventory-root>"
+        : kind === "scan-system"
+          ? "Usage: changeguard scan-system [--state-dir=<dir>]"
+          : "Usage: changeguard session-start <inventory-root> [--hook-trust=trusted|untrusted|skipped|failed]",
+  };
+  printJson(result, 2);
+}
+
 function isFlag(s: string): boolean {
   return s.startsWith("-");
+}
+
+function parseHookTrust(args: string[]): HookTrustState {
+  for (const a of args) {
+    if (a.startsWith("--hook-trust=")) {
+      const v = a.slice("--hook-trust=".length);
+      if (
+        v === "trusted" ||
+        v === "untrusted" ||
+        v === "skipped" ||
+        v === "failed"
+      ) {
+        return v;
+      }
+      scanUsageError("session-start");
+    }
+  }
+  return "trusted";
+}
+
+function parseStateDir(args: string[]): string | undefined {
+  for (const a of args) {
+    if (a.startsWith("--state-dir=")) {
+      const v = a.slice("--state-dir=".length);
+      if (v.length > 0) return v;
+    }
+  }
+  return undefined;
+}
+
+function runScan(inventoryRoot: string): void {
+  try {
+    const result = scanInstances({
+      inventoryRoot,
+      mode: "manual_scan",
+      enumeration: "fixture_inventory",
+    });
+    printJson(result, result.ok ? 0 : 1);
+  } catch {
+    printJson(
+      {
+        schema_version: 1,
+        ok: false,
+        mode: "manual_scan",
+        error_code: "INTERNAL",
+        error_message: "Scan failed.",
+        network_used: false,
+        target_mutated: false,
+        repair_applied: false,
+      },
+      1,
+    );
+  }
+}
+
+function runScanSystem(stateDir?: string): void {
+  try {
+    // Prefer explicit --state-dir, then PLUGIN_DATA, else a temp-safe refusal with USAGE.
+    const pluginData =
+      process.env.PLUGIN_DATA || process.env.CLAUDE_PLUGIN_DATA || null;
+    const resolvedState =
+      stateDir ??
+      (pluginData ? `${pluginData.replace(/[/\\]$/, "")}/version-state` : null);
+    if (!resolvedState) {
+      scanUsageError("scan-system");
+    }
+    const result = scanInstances({
+      mode: "manual_scan",
+      enumeration: "system_registered",
+      stateDir: resolvedState,
+    });
+    printJson(result, result.ok ? 0 : 1);
+  } catch {
+    printJson(
+      {
+        schema_version: 1,
+        ok: false,
+        mode: "manual_scan",
+        error_code: "INTERNAL",
+        error_message: "Scan failed.",
+        network_used: false,
+        target_mutated: false,
+        repair_applied: false,
+      },
+      1,
+    );
+  }
+}
+
+function runSession(inventoryRoot: string, hookTrust: HookTrustState): void {
+  try {
+    const result = runSessionStart({
+      inventoryRoot,
+      enumeration: "fixture_inventory",
+      hookTrust,
+    });
+    // Manual CLI path always emits structured JSON for inspectability.
+    // Packaged hook silence is owned by session-start-entry (no stdout when silent).
+    printJson(result, result.ok || result.silent ? 0 : 1);
+  } catch {
+    printJson(
+      {
+        schema_version: 1,
+        ok: false,
+        mode: "session_start",
+        hook_status: "failed",
+        error_code: "HOOK_FAILED",
+        error_message: "SessionStart hook failed; use manual scan.",
+        network_used: false,
+        target_mutated: false,
+        repair_applied: false,
+      },
+      1,
+    );
+  }
 }
 
 export function runCli(argv: string[]): void {
@@ -103,6 +257,35 @@ export function runCli(argv: string[]): void {
       }
       const result: RepairResult = rollbackRepair(rest[0]!);
       printJson(result, result.ok ? 0 : 1);
+    }
+
+    if (cmd === "scan") {
+      if (rest.length !== 1 || isFlag(rest[0]!)) scanUsageError("scan");
+      runScan(rest[0]!);
+      return;
+    }
+
+    if (cmd === "scan-system") {
+      const flags = rest.filter((a) => a.startsWith("-"));
+      const positional = rest.filter((a) => !a.startsWith("-"));
+      if (positional.length !== 0) scanUsageError("scan-system");
+      for (const f of flags) {
+        if (!f.startsWith("--state-dir=")) scanUsageError("scan-system");
+      }
+      runScanSystem(parseStateDir(flags));
+      return;
+    }
+
+    if (cmd === "session-start") {
+      const positional = rest.filter((a) => !a.startsWith("-"));
+      const flags = rest.filter((a) => a.startsWith("-"));
+      if (positional.length !== 1) scanUsageError("session-start");
+      for (const f of flags) {
+        if (!f.startsWith("--hook-trust=")) scanUsageError("session-start");
+      }
+      const trust = parseHookTrust(flags);
+      runSession(positional[0]!, trust);
+      return;
     }
 
     printJson(usageDiagnosis(), 2);
