@@ -6,16 +6,22 @@
  * Fails if the diagnosis path introduces:
  * - network APIs/modules (fetch, http/https/net/tls/dns/dgram/undici, WebSocket)
  * - child processes / arbitrary shell
- * - filesystem mutation APIs (write/append/rm/mkdir/rename/copy/chmod/…)
- * - forbidden fs mutation / open capability references (pass, bind, sequence,
- *   Reflect.apply, store in array/object, destructure/extract) without requiring
+ * - non-read-only filesystem capabilities on a proven `node:fs` namespace
+ *   (read-only method allowlist; unknown methods fail closed)
+ * - forbidden fs capability references (pass, bind, sequence, Reflect.apply,
+ *   store in array/object, destructure/extract/object-rest) without requiring
  *   a later direct call
- * - eval / Function / process.dlopen / process.binding bypass surfaces
+ * - dynamic `import(...)`, `require(...)`, or `node:module` / `createRequire`
+ *   loader surfaces (static ESM imports only on the production graph)
+ * - eval / Function capability acquisition or use / process.dlopen / process.binding
  *
  * open/openSync are allowed only as a direct call through a proven `node:fs`
  * namespace (or simple namespace alias) with statically proven read-only flags.
  * Mere references, extracts, binds, callbacks, or reflective invokes of open
  * are unproven and fail closed.
+ *
+ * Production module graph follows static ESM ImportDeclaration and relative
+ * ExportDeclaration re-exports only.
  *
  * network_used:false in diagnosis output is NOT treated as proof.
  *
@@ -61,7 +67,7 @@ const ALLOWED_NODE_BUILTINS = new Set([
   "tty",
   "zlib",
   "constants",
-  "module",
+  // "module" intentionally absent: node:module / createRequire are forbidden loaders.
   "perf_hooks",
   "process",
   "v8",
@@ -82,63 +88,76 @@ const FORBIDDEN_MODULES = new Set([
   "cluster",
   "inspector",
   "async_hooks",
+  "module",
 ]);
 
 /**
- * Unconditionally forbidden filesystem mutation / write-surface APIs.
- * open/openSync are handled separately (conditional on statically provable flags).
+ * Conservative read-only allowlist for proven `fs` namespace methods (sync +
+ * callback forms that do not mutate path contents/metadata). Anything else on
+ * a proven fs namespace fails closed, including unknown future Node APIs.
+ * open/openSync are NOT allowlisted — they use conditional flag proof instead.
  */
-const FORBIDDEN_FS_METHODS = new Set([
-  "write",
-  "writeSync",
-  "writeFile",
-  "writeFileSync",
-  "writev",
-  "writevSync",
-  "appendFile",
-  "appendFileSync",
-  "rm",
-  "rmSync",
-  "rmdir",
-  "rmdirSync",
-  "mkdir",
-  "mkdirSync",
-  "rename",
-  "renameSync",
-  "copyFile",
-  "copyFileSync",
-  "cp",
-  "cpSync",
-  "unlink",
-  "unlinkSync",
-  "chmod",
-  "chmodSync",
-  "chown",
-  "chownSync",
-  "truncate",
-  "truncateSync",
-  "createWriteStream",
-  "openAsBlob",
-  "link",
-  "linkSync",
-  "symlink",
-  "symlinkSync",
-  "fchmod",
-  "fchmodSync",
-  "fchown",
-  "fchownSync",
-  "ftruncate",
-  "ftruncateSync",
-  "futimes",
-  "futimesSync",
-  "lutimes",
-  "lutimesSync",
-  "utimes",
-  "utimesSync",
+const READONLY_FS_METHODS = new Set([
+  "access",
+  "accessSync",
+  "close",
+  "closeSync",
+  "createReadStream",
+  "exists",
+  "existsSync",
+  "fstat",
+  "fstatSync",
+  "lstat",
+  "lstatSync",
+  "opendir",
+  "opendirSync",
+  "read",
+  "readSync",
+  "readv",
+  "readvSync",
+  "readdir",
+  "readdirSync",
+  "readFile",
+  "readFileSync",
+  "readlink",
+  "readlinkSync",
+  "realpath",
+  "realpathSync",
+  "stat",
+  "statSync",
+  "statfs",
+  "statfsSync",
 ]);
+
+/**
+ * Read-only allowlist for proven `fs.promises` methods. `open` is conditional
+ * (same flag proof as openSync) and is not listed here.
+ */
+const READONLY_FS_PROMISES_METHODS = new Set([
+  "access",
+  "close",
+  "lstat",
+  "opendir",
+  "read",
+  "readdir",
+  "readFile",
+  "readlink",
+  "realpath",
+  "stat",
+  "statfs",
+]);
+
+/** Namespace / meta properties on fs that are not method capabilities. */
+const FS_NAMESPACE_META_PROPERTIES = new Set(["promises", "constants"]);
 
 /** open / openSync / promises.open — allowed only with statically read-only flags. */
 const CONDITIONAL_OPEN_METHODS = new Set(["open", "openSync"]);
+
+/** Global names treated as forbidden code-execution capabilities (any value use). */
+const FORBIDDEN_CODE_EXEC_GLOBALS = new Set(["eval", "Function"]);
+
+/** Loader APIs forbidden even as named identifiers / imports. */
+const FORBIDDEN_LOADER_APIS = new Set(["createRequire", "require"]);
 
 /** String modes that open a path for reading only (Node.js). */
 const READ_ONLY_STRING_MODES = new Set(["r", "rs", "sr"]);
@@ -213,75 +232,10 @@ function isForbiddenModule(spec) {
 }
 
 /**
- * Resolve a property access / element access chain into string segments.
- * Returns null when a segment is non-literal / non-ident (fail-closed check
- * happens at call sites for computed non-literal keys).
- *
- * Also recognizes direct `require("fs")` / `require("node:fs")` (and
- * `fs/promises`) call expressions as synthetic roots so
- * `require("fs").writeFileSync(...)` is visible to the shared scanner.
- * Non-literal require roots are marked so callers can fail closed without
- * weakening the existing nonliteral-require rejection.
- *
- * @param {ts.Expression} expr
- * @returns {string[] | null}
- */
-function resolveMemberChain(expr) {
-  if (ts.isIdentifier(expr)) {
-    return [expr.text];
-  }
-  if (ts.isPropertyAccessExpression(expr)) {
-    const base = resolveMemberChain(expr.expression);
-    if (!base) return null;
-    return [...base, expr.name.text];
-  }
-  if (ts.isElementAccessExpression(expr)) {
-    const base = resolveMemberChain(expr.expression);
-    if (!base) return null;
-    const arg = expr.argumentExpression;
-    if (arg && ts.isStringLiteral(arg)) {
-      return [...base, arg.text];
-    }
-    // Non-literal computed key — return special marker for fail-closed handling.
-    return [...base, "\0computed"];
-  }
-  if (ts.isParenthesizedExpression(expr)) {
-    return resolveMemberChain(expr.expression);
-  }
-  // require("fs").method / require("node:fs").promises.method
-  if (ts.isCallExpression(expr) && ts.isIdentifier(expr.expression) && expr.expression.text === "require") {
-    const arg0 = expr.arguments[0];
-    if (!arg0 || !ts.isStringLiteral(arg0)) {
-      return ["\0nonliteral_require"];
-    }
-    const bare = normalizeModuleSpec(arg0.text);
-    if (bare === "fs") return ["\0require_fs"];
-    if (bare === "fs/promises") return ["\0require_fs_promises"];
-    // Other literal requires are not fs namespace roots for method checks.
-    return null;
-  }
-  return null;
-}
-
-/**
- * Terminal property/element name of an expression, if statically known.
- * @param {ts.Expression} expr
- * @returns {string | null}
- */
-function staticTerminalName(expr) {
-  if (ts.isIdentifier(expr)) return expr.text;
-  if (ts.isPropertyAccessExpression(expr)) return expr.name.text;
-  if (ts.isElementAccessExpression(expr)) {
-    const arg = expr.argumentExpression;
-    if (arg && ts.isStringLiteral(arg)) return arg.text;
-    return null;
-  }
-  if (ts.isParenthesizedExpression(expr)) return staticTerminalName(expr.expression);
-  return null;
-}
-
-/**
- * Unwrap parentheses, type assertions, and non-null assertions for static checks.
+ * Unwrap parentheses, type assertions, non-null assertions, and comma/sequence
+ * expressions (rightmost value) for static checks. Used consistently for
+ * member-chain and namespace resolution so `(fs as any)`, `fs!`, `(0, fs)`,
+ * and nested combinations resolve the same way as a bare identifier.
  * @param {ts.Expression} expr
  * @returns {ts.Expression}
  */
@@ -304,8 +258,101 @@ function unwrapStaticExpr(expr) {
       cur = /** @type {ts.TypeAssertion} */ (cur).expression;
       continue;
     }
+    // Comma / sequence: value is the rightmost operand.
+    if (ts.isBinaryExpression(cur) && cur.operatorToken.kind === ts.SyntaxKind.CommaToken) {
+      cur = cur.right;
+      continue;
+    }
     return cur;
   }
+}
+
+/**
+ * Resolve a property access / element access chain into string segments.
+ * Returns null when a segment is non-literal / non-ident (fail-closed check
+ * happens at call sites for computed non-literal keys).
+ *
+ * Unwraps TS `as`, non-null, parentheses, and comma receivers consistently.
+ * Also recognizes direct `require("fs")` / `require("node:fs")` (and
+ * `fs/promises`) call expressions as synthetic roots so residual require
+ * member chains remain visible even though `require(...)` itself is forbidden.
+ *
+ * @param {ts.Expression} expr
+ * @returns {string[] | null}
+ */
+function resolveMemberChain(expr) {
+  const cur = unwrapStaticExpr(expr);
+  if (ts.isIdentifier(cur)) {
+    return [cur.text];
+  }
+  if (ts.isPropertyAccessExpression(cur)) {
+    const base = resolveMemberChain(cur.expression);
+    if (!base) return null;
+    return [...base, cur.name.text];
+  }
+  if (ts.isElementAccessExpression(cur)) {
+    const base = resolveMemberChain(cur.expression);
+    if (!base) return null;
+    const arg = cur.argumentExpression;
+    if (arg && ts.isStringLiteral(arg)) {
+      return [...base, arg.text];
+    }
+    // Non-literal computed key — return special marker for fail-closed handling.
+    return [...base, "\0computed"];
+  }
+  // require("fs").method / require("node:fs").promises.method (defense in depth)
+  if (ts.isCallExpression(cur)) {
+    const callee = unwrapStaticExpr(cur.expression);
+    if (ts.isIdentifier(callee) && callee.text === "require") {
+      const arg0 = cur.arguments[0];
+      if (!arg0 || !ts.isStringLiteral(arg0)) {
+        return ["\0nonliteral_require"];
+      }
+      const bare = normalizeModuleSpec(arg0.text);
+      if (bare === "fs") return ["\0require_fs"];
+      if (bare === "fs/promises") return ["\0require_fs_promises"];
+      // Other literal requires are not fs namespace roots for method checks.
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Terminal property/element name of an expression, if statically known.
+ * @param {ts.Expression} expr
+ * @returns {string | null}
+ */
+function staticTerminalName(expr) {
+  const cur = unwrapStaticExpr(expr);
+  if (ts.isIdentifier(cur)) return cur.text;
+  if (ts.isPropertyAccessExpression(cur)) return cur.name.text;
+  if (ts.isElementAccessExpression(cur)) {
+    const arg = cur.argumentExpression;
+    if (arg && ts.isStringLiteral(arg)) return arg.text;
+    return null;
+  }
+  return null;
+}
+
+/**
+ * True when method name is an allowlisted read-only fs API for the namespace kind.
+ * @param {string} method
+ * @param {"fs" | "fs.promises"} [nsKind]
+ * @returns {boolean}
+ */
+function isReadonlyFsMethod(method, nsKind = "fs") {
+  if (nsKind === "fs.promises") return READONLY_FS_PROMISES_METHODS.has(method);
+  return READONLY_FS_METHODS.has(method);
+}
+
+/**
+ * True when name is a non-method meta property on the fs namespace.
+ * @param {string} name
+ * @returns {boolean}
+ */
+function isFsNamespaceMetaProperty(name) {
+  return FS_NAMESPACE_META_PROPERTIES.has(name);
 }
 
 /**
@@ -804,10 +851,8 @@ function collectDestructuredFsMethodAliases(scopeRoot, bindings, provenance, nsA
           if (!ts.isIdentifier(el.name)) continue;
           const original = bindingElementStaticPropertyName(el);
           if (!original) continue;
-          if (
-            FORBIDDEN_FS_METHODS.has(original) ||
-            CONDITIONAL_OPEN_METHODS.has(original)
-          ) {
+          // Track non-read-only / open extracts for call-site alias resolution.
+          if (isFsCapabilityMethod(original, nsKind)) {
             map.set(el.name.text, { original, nsKind });
           }
         }
@@ -903,14 +948,12 @@ function resolveLocalFsMethodAlias(
     if (ts.isPropertyAccessExpression(init) || ts.isElementAccessExpression(init)) {
       const method = staticTerminalName(init);
       const base = propertyAccessBase(init);
-      if (
-        method &&
-        base &&
-        method !== "\0computed" &&
-        (FORBIDDEN_FS_METHODS.has(method) || CONDITIONAL_OPEN_METHODS.has(method))
-      ) {
+      if (method && base && method !== "\0computed") {
         const nsKind = resolveTrustedFsNsKind(base, bindings, provenance, nsAliases);
-        if (nsKind === "fs" || nsKind === "fs.promises") {
+        if (
+          (nsKind === "fs" || nsKind === "fs.promises") &&
+          isFsCapabilityMethod(method, nsKind)
+        ) {
           return { original: method, nsKind };
         }
       }
@@ -1011,13 +1054,102 @@ function isDirectCallExpressionCallee(expr) {
 }
 
 /**
- * True when method is an unconditionally forbidden fs mutation or a
- * conditional open surface that requires direct proven-namespace call policy.
- * @param {string} method
+ * True when an identifier is used as a value-level capability reference
+ * (alias, pass, sequence operand, etc.), not as a declaration name or type.
+ * @param {ts.Identifier} id
  * @returns {boolean}
  */
-function isFsCapabilityMethod(method) {
-  return FORBIDDEN_FS_METHODS.has(method) || CONDITIONAL_OPEN_METHODS.has(method);
+function isForbiddenCapabilityIdentifierUse(id) {
+  const p = id.parent;
+  if (!p) return false;
+
+  // Declaration / binding names are not value acquisitions of the global.
+  if ("name" in p && /** @type {{ name?: ts.Node }} */ (p).name === id) {
+    if (
+      ts.isFunctionDeclaration(p) ||
+      ts.isFunctionExpression(p) ||
+      ts.isClassDeclaration(p) ||
+      ts.isClassExpression(p) ||
+      ts.isMethodDeclaration(p) ||
+      ts.isPropertyDeclaration(p) ||
+      ts.isParameter(p) ||
+      ts.isBindingElement(p) ||
+      ts.isVariableDeclaration(p) ||
+      ts.isPropertyAssignment(p) ||
+      ts.isShorthandPropertyAssignment(p) ||
+      ts.isPropertySignature(p) ||
+      ts.isMethodSignature(p) ||
+      ts.isEnumMember(p) ||
+      ts.isInterfaceDeclaration(p) ||
+      ts.isTypeAliasDeclaration(p) ||
+      ts.isNamespaceImport(p) ||
+      ts.isImportClause(p)
+    ) {
+      return false;
+    }
+  }
+  if (ts.isImportSpecifier(p) && (p.name === id || p.propertyName === id)) {
+    // Named import of createRequire still acquires the loader capability.
+    return FORBIDDEN_LOADER_APIS.has(id.text);
+  }
+  if (ts.isExportSpecifier(p) && (p.name === id || p.propertyName === id)) {
+    return false;
+  }
+
+  // Skip pure type positions (const x: Function, type aliases, etc.).
+  let cur = /** @type {ts.Node} */ (id);
+  while (cur.parent) {
+    const parent = cur.parent;
+    if (typeof ts.isTypeNode === "function" && ts.isTypeNode(parent)) {
+      return false;
+    }
+    if (ts.isTypeReferenceNode(parent) && parent.typeName === cur) {
+      return false;
+    }
+    if (ts.isExpressionWithTypeArguments(parent) && parent.expression === cur) {
+      const h = parent.parent;
+      if (h && ts.isHeritageClause(h)) {
+        if (h.token === ts.SyntaxKind.ImplementsKeyword) return false;
+        if (h.parent && ts.isInterfaceDeclaration(h.parent)) return false;
+      }
+    }
+    if (
+      ts.isCallExpression(parent) ||
+      ts.isNewExpression(parent) ||
+      ts.isVariableDeclaration(parent) ||
+      ts.isBinaryExpression(parent) ||
+      ts.isPropertyAccessExpression(parent) ||
+      ts.isElementAccessExpression(parent) ||
+      ts.isParenthesizedExpression(parent) ||
+      ts.isAsExpression(parent) ||
+      ts.isNonNullExpression(parent) ||
+      ts.isArrayLiteralExpression(parent) ||
+      ts.isObjectLiteralExpression(parent) ||
+      ts.isReturnStatement(parent) ||
+      ts.isExpressionStatement(parent) ||
+      ts.isSourceFile(parent) ||
+      ts.isBlock(parent)
+    ) {
+      break;
+    }
+    cur = parent;
+  }
+  return true;
+}
+
+/**
+ * True when method on a proven fs namespace is a capability that must be
+ * policed: conditional open, or anything not on the read-only allowlist.
+ * Meta properties (`promises`, `constants`) are not method capabilities.
+ * @param {string} method
+ * @param {"fs" | "fs.promises"} [nsKind]
+ * @returns {boolean}
+ */
+function isFsCapabilityMethod(method, nsKind = "fs") {
+  if (!method || method === "\0computed") return true;
+  if (isFsNamespaceMetaProperty(method)) return false;
+  if (CONDITIONAL_OPEN_METHODS.has(method)) return true;
+  return !isReadonlyFsMethod(method, nsKind);
 }
 
 /**
@@ -1317,14 +1449,18 @@ function scanSourceText(file, text, rel) {
             if (kind === "fs" && original === "promises") {
               // import { promises as fsp } from "fs"
               nsAliases.set(local, "fs.promises");
-            } else if (FORBIDDEN_FS_METHODS.has(original)) {
-              namedFsMethods.set(local, original);
-              violations.push(`${rel}: forbidden fs import '${original}' as '${local}'`);
+            } else if (kind === "fs" && original === "constants") {
+              // import { constants as c } — not a method; flag provenance owns it.
             } else if (CONDITIONAL_OPEN_METHODS.has(original)) {
               // Named open/openSync import is an unproven open capability extract.
               namedFsMethods.set(local, original);
               violations.push(
                 `${rel}: forbidden unproven fs open import '${original}' as '${local}'`,
+              );
+            } else if (!isReadonlyFsMethod(original, kind)) {
+              namedFsMethods.set(local, original);
+              violations.push(
+                `${rel}: forbidden non-read-only fs import '${original}' as '${local}'`,
               );
             } else {
               namedFsMethods.set(local, original);
@@ -1375,8 +1511,8 @@ function scanSourceText(file, text, rel) {
       violations.push(`${rel}: computed fs method call (fail-closed)`);
       return;
     }
-    if (FORBIDDEN_FS_METHODS.has(method)) {
-      violations.push(`${rel}: forbidden fs mutation '${displayRoot}.${method}'`);
+    if (isFsNamespaceMetaProperty(method)) {
+      // `fs.promises` / `fs.constants` as a bare value callee is not a method call.
       return;
     }
     if (CONDITIONAL_OPEN_METHODS.has(method)) {
@@ -1391,6 +1527,12 @@ function scanSourceText(file, text, rel) {
         flagProvenance,
       );
       if (msg) violations.push(msg);
+      return;
+    }
+    if (!isReadonlyFsMethod(method, nsKind)) {
+      violations.push(
+        `${rel}: forbidden non-read-only fs method '${displayRoot}.${method}'`,
+      );
     }
   }
 
@@ -1447,9 +1589,6 @@ function scanSourceText(file, text, rel) {
       }
       return;
     }
-    if (!isFsCapabilityMethod(method)) {
-      return;
-    }
 
     let nsKind = resolveTrustedFsNsKind(base, refBindings, flagProvenance, nsAliases);
     if (nsKind !== "fs" && nsKind !== "fs.promises") {
@@ -1475,7 +1614,7 @@ function scanSourceText(file, text, rel) {
     }
     if (nsKind !== "fs" && nsKind !== "fs.promises") {
       // Import-map fallback for unshadowed namespace roots only when expression
-      // root maps to fs (mirrors call-site fail-closed mutation policy).
+      // root maps to fs (mirrors call-site fail-closed capability policy).
       const chain = resolveMemberChain(access);
       if (chain && chain.length >= 2) {
         const mapped = nsAliases.get(chain[0]);
@@ -1495,15 +1634,15 @@ function scanSourceText(file, text, rel) {
     if (nsKind !== "fs" && nsKind !== "fs.promises") {
       return;
     }
-    if (!isFsCapabilityMethod(method)) {
+    if (!isFsCapabilityMethod(method, nsKind)) {
       return;
     }
-    if (FORBIDDEN_FS_METHODS.has(method)) {
-      violations.push(`${rel}: forbidden fs capability reference '${method}'`);
-    } else {
+    if (CONDITIONAL_OPEN_METHODS.has(method)) {
       violations.push(
         `${rel}: forbidden unproven fs open capability reference '${method}'`,
       );
+    } else {
+      violations.push(`${rel}: forbidden fs capability reference '${method}'`);
     }
   }
 
@@ -1515,33 +1654,39 @@ function scanSourceText(file, text, rel) {
    */
   function checkCallOrNew(callee, isNew, args, callNode) {
     const callBindings = bindingsForNode(callNode, sf);
+    // Unwrap as/non-null/paren/comma so (0, eval), (fs as any).m, etc. share policy.
+    const bareCallee = unwrapStaticExpr(callee);
 
     // Direct identifier callees (eval, Function, fetch, named imports, local aliases).
-    if (ts.isIdentifier(callee)) {
-      const name = callee.text;
+    if (ts.isIdentifier(bareCallee)) {
+      const name = bareCallee.text;
       if (FORBIDDEN_GLOBALS.has(name)) {
         violations.push(`${rel}: forbidden global '${name}'`);
       }
-      if (name === "eval") {
-        violations.push(`${rel}: forbidden eval()`);
+      if (FORBIDDEN_CODE_EXEC_GLOBALS.has(name)) {
+        violations.push(
+          name === "eval"
+            ? `${rel}: forbidden eval()`
+            : `${rel}: forbidden Function constructor`,
+        );
       }
-      if (name === "Function") {
-        violations.push(`${rel}: forbidden Function constructor`);
+      if (FORBIDDEN_LOADER_APIS.has(name)) {
+        violations.push(`${rel}: forbidden loader API '${name}'`);
       }
       if (namedFsMethods.has(name)) {
         const original = namedFsMethods.get(name);
-        if (FORBIDDEN_FS_METHODS.has(original)) {
-          violations.push(`${rel}: forbidden fs call '${name}'`);
-        } else if (CONDITIONAL_OPEN_METHODS.has(original)) {
+        if (CONDITIONAL_OPEN_METHODS.has(original)) {
           // open/openSync may only be a direct call through a proven namespace;
           // a named import / local name is unproven even with read-only flags.
           violations.push(`${rel}: forbidden unproven fs open call '${name}'`);
+        } else if (!isReadonlyFsMethod(original, "fs")) {
+          violations.push(`${rel}: forbidden fs call '${name}'`);
         }
       } else {
         // Destructuring / property-copy aliases: const { writeFileSync } = fs;
         // const { writeFileSync: write } = fs; const write = fs.writeFileSync;
         const localAlias = resolveLocalFsMethodAlias(
-          callee,
+          bareCallee,
           callNode,
           sf,
           callBindings,
@@ -1549,12 +1694,12 @@ function scanSourceText(file, text, rel) {
           nsAliases,
         );
         if (localAlias) {
-          const { original } = localAlias;
-          if (FORBIDDEN_FS_METHODS.has(original)) {
-            violations.push(`${rel}: forbidden fs call '${name}'`);
-          } else if (CONDITIONAL_OPEN_METHODS.has(original)) {
+          const { original, nsKind } = localAlias;
+          if (CONDITIONAL_OPEN_METHODS.has(original)) {
             // Extracted / property-copied open is unproven; do not accept flags.
             violations.push(`${rel}: forbidden unproven fs open call '${name}'`);
+          } else if (!isReadonlyFsMethod(original, nsKind)) {
+            violations.push(`${rel}: forbidden fs call '${name}'`);
           }
         }
       }
@@ -1582,7 +1727,11 @@ function scanSourceText(file, text, rel) {
         violations.push(`${rel}: computed globalThis property call (fail-closed)`);
         return;
       }
-      if (FORBIDDEN_GLOBALS.has(prop) || prop === "eval" || prop === "Function") {
+      if (
+        FORBIDDEN_GLOBALS.has(prop) ||
+        FORBIDDEN_CODE_EXEC_GLOBALS.has(prop) ||
+        FORBIDDEN_LOADER_APIS.has(prop)
+      ) {
         violations.push(`${rel}: forbidden ${chain[0]}.${prop}`);
       }
     }
@@ -1695,31 +1844,28 @@ function scanSourceText(file, text, rel) {
     }
 
     // require('mod') / import('mod') — CallExpression
+    // Ticket 01 production loaders are static ESM only: every dynamic import and
+    // every require is a violation (including relative specs).
     if (ts.isCallExpression(node)) {
       const expr = node.expression;
+      const bareExpr = unwrapStaticExpr(expr);
       const arg0 = node.arguments[0];
 
-      // import(...) dynamic
+      // import(...) dynamic — always forbidden
       if (expr.kind === ts.SyntaxKind.ImportKeyword) {
         if (!arg0 || !ts.isStringLiteral(arg0)) {
-          violations.push(`${rel}: non-literal dynamic import`);
+          violations.push(`${rel}: forbidden non-literal dynamic import`);
         } else {
-          const spec = arg0.text;
-          if (!(spec.startsWith(".") || spec.startsWith("/"))) {
-            checkModuleSpec(spec, "dynamic import");
-          }
+          violations.push(`${rel}: forbidden dynamic import '${arg0.text}'`);
         }
       }
 
-      // require(...)
-      if (ts.isIdentifier(expr) && expr.text === "require") {
+      // require(...) — always forbidden (static ESM only)
+      if (ts.isIdentifier(bareExpr) && bareExpr.text === "require") {
         if (!arg0 || !ts.isStringLiteral(arg0)) {
-          violations.push(`${rel}: non-literal require`);
+          violations.push(`${rel}: forbidden non-literal require`);
         } else {
-          const spec = arg0.text;
-          if (!(spec.startsWith(".") || spec.startsWith("/"))) {
-            checkModuleSpec(spec, "require");
-          }
+          violations.push(`${rel}: forbidden require('${arg0.text}')`);
         }
       }
 
@@ -1728,19 +1874,21 @@ function scanSourceText(file, text, rel) {
 
     // new WebSocket(...), new Function(...)
     if (ts.isNewExpression(node) && node.expression) {
-      if (ts.isIdentifier(node.expression)) {
-        if (node.expression.text === "Function") {
+      const bareNew = unwrapStaticExpr(node.expression);
+      if (ts.isIdentifier(bareNew)) {
+        if (bareNew.text === "Function") {
           violations.push(`${rel}: forbidden new Function(...)`);
         }
-        if (FORBIDDEN_GLOBALS.has(node.expression.text)) {
-          violations.push(`${rel}: forbidden new ${node.expression.text}(...)`);
+        if (FORBIDDEN_GLOBALS.has(bareNew.text)) {
+          violations.push(`${rel}: forbidden new ${bareNew.text}(...)`);
         }
       }
       checkCallOrNew(node.expression, true, node.arguments, node);
     }
 
-    // Destructure / object-pattern extract of mutation or open capability from a
-    // proven fs namespace fails immediately (do not wait for a later call).
+    // Destructure / object-pattern extract of non-read-only or open capability
+    // from a proven fs namespace fails immediately (do not wait for a later call).
+    // Object rest (`const { ...bag } = fs`) extracts the full capability surface.
     if (
       ts.isVariableDeclaration(node) &&
       node.initializer &&
@@ -1756,14 +1904,18 @@ function scanSourceText(file, text, rel) {
       if (nsKind === "fs" || nsKind === "fs.promises") {
         for (const el of node.name.elements) {
           if (ts.isOmittedExpression(el) || !ts.isBindingElement(el)) continue;
+          if (el.dotDotDotToken) {
+            violations.push(`${rel}: forbidden fs object-rest capability extract`);
+            continue;
+          }
           const original = bindingElementStaticPropertyName(el);
           if (!original) continue;
-          if (FORBIDDEN_FS_METHODS.has(original)) {
-            violations.push(`${rel}: forbidden fs capability extract '${original}'`);
-          } else if (CONDITIONAL_OPEN_METHODS.has(original)) {
+          if (CONDITIONAL_OPEN_METHODS.has(original)) {
             violations.push(
               `${rel}: forbidden unproven fs open capability extract '${original}'`,
             );
+          } else if (isFsCapabilityMethod(original, nsKind)) {
+            violations.push(`${rel}: forbidden fs capability extract '${original}'`);
           }
         }
       }
@@ -1772,13 +1924,26 @@ function scanSourceText(file, text, rel) {
     // Property / element capability references on proven fs namespaces:
     // consume(fs.writeFileSync), Reflect.apply(fs.openSync, …), (0, fs.m)(),
     // fs.openSync.bind(fs), array/object storage, etc. Direct call callees are
-    // owned by checkCallOrNew (mutation always forbidden; open only with
+    // owned by checkCallOrNew (non-read-only always forbidden; open only with
     // proven read-only flags through a proven namespace).
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
       checkFsCapabilityReference(node);
     }
 
-    // Tagged template Function`...` rare — skip; eval identifier alone not enough.
+    // eval / Function / createRequire as value capabilities (alias, pass, sequence).
+    // Conservative: any value-position identifier with these names is forbidden.
+    if (ts.isIdentifier(node)) {
+      const name = node.text;
+      if (FORBIDDEN_CODE_EXEC_GLOBALS.has(name) || FORBIDDEN_LOADER_APIS.has(name)) {
+        if (isForbiddenCapabilityIdentifierUse(node)) {
+          // Direct call / new already reported a specific message; still OK to
+          // mark acquisition forms (const e = eval; (0, eval); foo(eval)).
+          if (!isDirectCallExpressionCallee(node) && !(node.parent && ts.isNewExpression(node.parent) && node.parent.expression === node)) {
+            violations.push(`${rel}: forbidden capability reference '${name}'`);
+          }
+        }
+      }
+    }
 
     ts.forEachChild(node, visit);
   }
@@ -1811,17 +1976,30 @@ export function scanSourceSnippet(text, label = "snippet.ts") {
   return scanSourceText(label, text, label);
 }
 
-function collectProductionFiles() {
+/**
+ * Collect static ESM production graph files reachable from entry points.
+ * Follows relative ImportDeclaration and relative ExportDeclaration re-exports
+ * only (no dynamic import / require edges — those are rejected at scan time).
+ *
+ * @param {string[]} entryFiles
+ * @param {{ root?: string, skipPathSubstrings?: string[] }} [opts]
+ * @returns {string[]}
+ */
+function collectStaticEsmGraph(entryFiles, opts = {}) {
+  const root = opts.root ?? SRC_ROOT;
+  const skipPathSubstrings = opts.skipPathSubstrings ?? [
+    `${path.sep}harness${path.sep}`,
+  ];
   /** @type {Set<string>} */
   const files = new Set();
   /** @type {string[]} */
-  const queue = [...ENTRY_FILES];
+  const queue = [...entryFiles];
 
   while (queue.length) {
     const file = queue.pop();
     if (!file || files.has(file)) continue;
-    if (!file.startsWith(SRC_ROOT)) continue;
-    if (file.includes(`${path.sep}harness${path.sep}`)) continue;
+    if (!file.startsWith(root)) continue;
+    if (skipPathSubstrings.some((s) => file.includes(s))) continue;
     if (file.endsWith(`${path.sep}mcp${path.sep}client.ts`)) continue;
     if (!fs.existsSync(file)) {
       throw new Error(`Missing production entry: ${file}`);
@@ -1842,10 +2020,27 @@ function collectProductionFiles() {
           if (resolved) queue.push(resolved);
         }
       }
+      // Relative re-exports are part of the static ESM graph (hidden mutators
+      // must not escape scan by export-from alone).
+      if (
+        ts.isExportDeclaration(node) &&
+        node.moduleSpecifier &&
+        ts.isStringLiteral(node.moduleSpecifier)
+      ) {
+        const spec = node.moduleSpecifier.text;
+        if (spec.startsWith(".") || spec.startsWith("/")) {
+          const resolved = resolveRelative(file, spec);
+          if (resolved) queue.push(resolved);
+        }
+      }
       ts.forEachChild(node, visit);
     });
   }
   return [...files].sort();
+}
+
+function collectProductionFiles() {
+  return collectStaticEsmGraph(ENTRY_FILES, { root: SRC_ROOT });
 }
 
 function resolveRelative(fromFile, spec) {
@@ -2206,6 +2401,136 @@ fs.closeSync(fd);
       expectViolation: false,
       source: `import { x } from "./local.js";\nexport const y = x;\n`,
     },
+    // --- R13 structural closure: receiver wrappers ---
+    {
+      name: "fs as any writeFileSync receiver",
+      expectViolation: true,
+      source: `import fs from "node:fs";\n(fs as any).writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "fs non-null writeFileSync receiver",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfs!.writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "comma sequence fs receiver writeFileSync",
+      expectViolation: true,
+      source: `import fs from "node:fs";\n(0, fs).writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "fs as any openSync write mode",
+      expectViolation: true,
+      source: `import fs from "node:fs";\n(fs as any).openSync("x", "w");\n`,
+    },
+    {
+      name: "safe direct openSync after as-cast on unrelated value",
+      expectViolation: false,
+      source: `import fs from "node:fs";\nconst fd = fs.openSync("x", "r");\nfs.closeSync(fd);\n`,
+    },
+    // --- R13: alternate / dynamic loaders fail closed ---
+    {
+      name: "createRequire from node:module",
+      expectViolation: true,
+      source: `import { createRequire } from "node:module";\nconst r = createRequire(import.meta.url);\nr("fs").writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "createRequire alias then fs load",
+      expectViolation: true,
+      source: `import { createRequire } from "node:module";\nconst r = createRequire(import.meta.url);\nconst f = r("fs"); f.writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "dynamic import node:fs namespace writeFileSync",
+      expectViolation: true,
+      source: `const mod = await import("node:fs");\nmod.writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "dynamic import named writeFileSync",
+      expectViolation: true,
+      source: `const { writeFileSync } = await import("node:fs");\nwriteFileSync("x", "y");\n`,
+    },
+    {
+      name: "relative dynamic import forbidden",
+      expectViolation: true,
+      source: `await import("./hidden-mutator.js");\n`,
+    },
+    {
+      name: "relative require forbidden",
+      expectViolation: true,
+      source: `require("./hidden-mutator.js");\n`,
+    },
+    {
+      name: "node:module bare import forbidden",
+      expectViolation: true,
+      source: `import module from "node:module";\nvoid module;\n`,
+    },
+    // --- R13: incomplete mutation blacklist → allowlist fail-closed ---
+    {
+      name: "mkdtempSync not on read-only allowlist",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfs.mkdtempSync("/tmp/cg-");\n`,
+    },
+    {
+      name: "lchownSync not on read-only allowlist",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfs.lchownSync("x", 0, 0);\n`,
+    },
+    {
+      name: "lchmodSync not on read-only allowlist",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfs.lchmodSync("x", 0o644);\n`,
+    },
+    {
+      name: "unknown future fs API fail-closed",
+      expectViolation: true,
+      source: `import fs from "node:fs";\n(fs as any).totallyNewMutationApi("x");\n`,
+    },
+    {
+      name: "safe Ticket 01 read-only fs surface",
+      expectViolation: false,
+      source: `import fs from "node:fs";\nfs.lstatSync("x");\nfs.realpathSync("x");\nfs.readFileSync("x");\nconst fd = fs.openSync("x", "r");\nfs.fstatSync(fd);\nfs.closeSync(fd);\n`,
+    },
+    {
+      name: "safe existsSync read-only",
+      expectViolation: false,
+      source: `import fs from "node:fs";\nconst ok = fs.existsSync("x");\nvoid ok;\n`,
+    },
+    // --- R13: object rest extracts full fs capability ---
+    {
+      name: "object rest from fs namespace",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst { ...bag } = fs;\nbag.writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "object rest from fs alias",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst f = fs;\nconst { ...bag } = f;\nvoid bag;\n`,
+    },
+    // --- R13: indirect eval / Function capability ---
+    {
+      name: "comma sequence eval call",
+      expectViolation: true,
+      source: `(0, eval)("1+1");\n`,
+    },
+    {
+      name: "eval alias then call",
+      expectViolation: true,
+      source: `const e = eval;\ne("1+1");\n`,
+    },
+    {
+      name: "comma sequence Function constructor",
+      expectViolation: true,
+      source: `(0, Function)("return 1");\n`,
+    },
+    {
+      name: "Function alias acquisition",
+      expectViolation: true,
+      source: `const F = Function;\nvoid F;\n`,
+    },
+    {
+      name: "safe Function type annotation only",
+      expectViolation: false,
+      source: `const f: Function = (() => 1) as unknown as Function;\nvoid f;\n`,
+    },
   ];
 
   /** @type {string[]} */
@@ -2228,6 +2553,63 @@ fs.closeSync(fd);
   const fileScan = scanFiles([badFile]);
   if (fileScan.ok) {
     failures.push("temp file scan of node:net should fail");
+  }
+
+  // Graph-closure self-test: relative re-export must reach a hidden mutator.
+  const graphRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cg-boundary-graph-"));
+  const entryPath = path.join(graphRoot, "entry.ts");
+  const bridgePath = path.join(graphRoot, "bridge.ts");
+  const hiddenPath = path.join(graphRoot, "hidden-mutator.ts");
+  fs.writeFileSync(
+    entryPath,
+    `export { mutate } from "./bridge.js";\n`,
+    "utf8",
+  );
+  fs.writeFileSync(
+    bridgePath,
+    `export { mutate } from "./hidden-mutator.js";\n`,
+    "utf8",
+  );
+  fs.writeFileSync(
+    hiddenPath,
+    `import fs from "node:fs";\nexport function mutate() {\n  fs.writeFileSync("x", "y");\n}\n`,
+    "utf8",
+  );
+  const graphFiles = collectStaticEsmGraph([entryPath], {
+    root: graphRoot,
+    skipPathSubstrings: [],
+  });
+  const graphRel = graphFiles.map((f) => path.relative(graphRoot, f)).sort();
+  if (!graphRel.includes("hidden-mutator.ts")) {
+    failures.push(
+      `graph re-export did not reach hidden-mutator.ts (got: ${graphRel.join(", ")})`,
+    );
+  } else {
+    const graphScan = scanFiles(graphFiles);
+    if (graphScan.ok) {
+      failures.push("graph re-export hidden mutator should produce violations");
+    }
+  }
+
+  // Opposite control: re-export of read-only-only module is clean.
+  const cleanRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cg-boundary-graph-clean-"));
+  const cleanEntry = path.join(cleanRoot, "entry.ts");
+  const cleanLeaf = path.join(cleanRoot, "readonly.ts");
+  fs.writeFileSync(cleanEntry, `export { read } from "./readonly.js";\n`, "utf8");
+  fs.writeFileSync(
+    cleanLeaf,
+    `import fs from "node:fs";\nexport function read() {\n  return fs.readFileSync("x");\n}\n`,
+    "utf8",
+  );
+  const cleanFiles = collectStaticEsmGraph([cleanEntry], {
+    root: cleanRoot,
+    skipPathSubstrings: [],
+  });
+  const cleanScan = scanFiles(cleanFiles);
+  if (!cleanScan.ok) {
+    failures.push(
+      `graph re-export read-only control should pass: ${cleanScan.violations.join("; ")}`,
+    );
   }
 
   return {
