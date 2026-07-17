@@ -4,6 +4,7 @@ export type {
   DiagnosisState,
   IncidentFingerprint,
   DiagnoseOptions,
+  UserResolutionStatus,
 } from "./types.js";
 export {
   MAX_INCIDENT_BYTES,
@@ -13,3 +14,10 @@ export {
 } from "./limits.js";
 export { redactText, nfkc, assertNoLeakPaths } from "./redact.js";
 export { sha256Buffer, measureProtectedProcessAst } from "./measure.js";
+export {
+  previewRepair,
+  applyRepair,
+  verifyRepair,
+  rollbackRepair,
+} from "./recovery/index.js";
+export type { RepairResult, RepairCapsule } from "./recovery/index.js";

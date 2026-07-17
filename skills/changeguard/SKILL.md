@@ -45,16 +45,36 @@ User-resolution and upstream-contribution receipts are independent.
 
 ### Forbidden in Ticket 01
 
-- claiming `RESOLVED_VERIFIED` or applying a repair
+- claiming `RESOLVED_VERIFIED` or applying a repair from diagnose
 - submitting or drafting an Issue without a later ticket’s preview flow
 - reading ordinary project source trees or unbounded file crawls
 - treating declared incident JSON hashes/AST ids as self-proving evidence
+
+## Ticket 02 — isolated protected-process verified repair
+
+Public seams (same recovery core as CLI):
+
+1. `changeguard repair-preview <isolated-target>` / MCP `changeguard_repair_preview`
+2. `changeguard repair-apply <isolated-target> <authorization_binding>` / MCP `changeguard_repair_apply`
+3. `changeguard verify <isolated-target>` / MCP `changeguard_verify`
+4. `changeguard rollback <isolated-target>` / MCP `changeguard_rollback`
+
+Orchestration:
+
+1. Prefer a disposable/isolated fixture copy — never the live Codex profile.
+2. Preview the Repair Capsule; present target alias, hash, pattern count, risk, backup, verification, rollback, and the one-shot `authorization_binding`.
+3. Apply only with the exact binding from that preview; any target/scope change invalidates it.
+4. `RESOLVED_VERIFIED` only when verification proves the original failure is gone and core health passes.
+5. On verification failure, automatic rollback restores original bytes; never claim resolved.
+6. Explicit rollback is mitigation (`MITIGATED_VERIFIED_BY_ROLLBACK`), not root-cause resolution.
+7. Keep user-resolution and upstream-contribution receipts separate; never claim external submission.
 
 ## Planned commands
 
 - `/changeguard scan`: compare installed and last-seen Codex fingerprints and map official changes to local surfaces
 - `/changeguard diagnose`: build an incident fingerprint via the shared core (Ticket 01 implemented for isolated targets)
 - `/changeguard repro-pack`: show the disclosure manifest and export a redacted evidence package after confirmation
-- `/changeguard recovery-preview`: build a Recovery Capsule without applying it
+- `/changeguard recovery-preview` / repair-preview: build a Repair Capsule (Ticket 02 for protected-process isolated targets)
+- `/changeguard verify` / `/changeguard rollback`: Ticket 02 recovery seams
 
-Repair, rollback, and upstream submission remain later tickets. This Skill freezes the safety contract and routes diagnosis through the shared core only.
+Upstream submission remains a later ticket. This Skill freezes the safety contract and routes diagnosis/repair through the shared core only.

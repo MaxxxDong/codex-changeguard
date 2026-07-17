@@ -1,16 +1,37 @@
 /**
- * Read-only MCP server exposing changeguard_diagnose.
- * Shares the same core as the Rescue CLI. No network. No target mutation.
+ * ChangeGuard MCP server — shared core with Rescue CLI.
+ * Tools: diagnose (read-only) + Ticket 02 recovery tools (authorized mutation
+ * only under an isolated target via registered recovery operations).
  *
  * Wire protocol: newline-delimited JSON-RPC 2.0 over stdio.
  * Request frames are accumulated as bounded bytes (not unbounded readline).
  */
 import { diagnose } from "../core/diagnose.js";
 import { MAX_MCP_REQUEST_BYTES } from "../core/limits.js";
+import {
+  applyRepair,
+  previewRepair,
+  rollbackRepair,
+  verifyRepair,
+} from "../core/recovery/index.js";
 import { assertNoLeakPaths, redactText } from "../core/redact.js";
 import type { DiagnosisResult } from "../core/types.js";
+import type { RepairResult } from "../core/recovery/types.js";
 
-const TOOL_NAME = "changeguard_diagnose";
+const TOOL_DIAGNOSE = "changeguard_diagnose";
+const TOOL_REPAIR_PREVIEW = "changeguard_repair_preview";
+const TOOL_REPAIR_APPLY = "changeguard_repair_apply";
+const TOOL_VERIFY = "changeguard_verify";
+const TOOL_ROLLBACK = "changeguard_rollback";
+
+const KNOWN_TOOLS = new Set([
+  TOOL_DIAGNOSE,
+  TOOL_REPAIR_PREVIEW,
+  TOOL_REPAIR_APPLY,
+  TOOL_VERIFY,
+  TOOL_ROLLBACK,
+]);
+
 /** Extra top-level tools/call params beyond name/arguments are refused. */
 const TOOLS_CALL_TOP_KEYS = new Set(["name", "arguments"]);
 
@@ -48,33 +69,102 @@ function resultResponse(
   send({ jsonrpc: "2.0", id: id ?? null, result });
 }
 
-function toolSchema() {
-  return {
-    name: TOOL_NAME,
-    description:
-      "Read-only ChangeGuard diagnosis of an isolated target directory. Returns DiagnosisResult / IncidentFingerprint. Never mutates the target or uses the network.",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      required: ["target"],
-      properties: {
-        target: {
-          type: "string",
-          description: "Absolute or relative path to an isolated fixture/target directory.",
+function toolSchemas() {
+  const targetProp = {
+    type: "string",
+    description: "Absolute or relative path to an isolated fixture/target directory.",
+  };
+  return [
+    {
+      name: TOOL_DIAGNOSE,
+      description:
+        "Read-only ChangeGuard diagnosis of an isolated target directory. Returns DiagnosisResult / IncidentFingerprint. Never mutates the target or uses the network.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["target"],
+        properties: { target: targetProp },
+      },
+    },
+    {
+      name: TOOL_REPAIR_PREVIEW,
+      description:
+        "Preview a bounded Repair Capsule for an isolated protected-process target. No mutation.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["target"],
+        properties: { target: targetProp },
+      },
+    },
+    {
+      name: TOOL_REPAIR_APPLY,
+      description:
+        "Apply one experimental repair after exact scope-bound authorization. Auto-rolls back on verification failure.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["target", "authorization"],
+        properties: {
+          target: targetProp,
+          authorization: {
+            type: "string",
+            description: "Exact authorization_binding from repair-preview.",
+          },
         },
       },
     },
-  };
+    {
+      name: TOOL_VERIFY,
+      description:
+        "Verify that the original failure no longer reproduces and core health checks pass.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["target"],
+        properties: { target: targetProp },
+      },
+    },
+    {
+      name: TOOL_ROLLBACK,
+      description:
+        "Explicit rollback restoring exact original bytes from the verified backup.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["target"],
+        properties: { target: targetProp },
+      },
+    },
+  ];
 }
 
-function handleToolsCall(params: unknown): DiagnosisResult {
+function requireObjectArgs(args: unknown): Record<string, unknown> {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    throw Object.assign(new Error("Invalid tool arguments."), {
+      code: "INVALID_ARGS",
+    });
+  }
+  return args as Record<string, unknown>;
+}
+
+function requireTarget(a: Record<string, unknown>): string {
+  if (typeof a.target !== "string" || a.target.length === 0) {
+    throw Object.assign(new Error("Invalid target."), { code: "INVALID_TARGET" });
+  }
+  return a.target;
+}
+
+function handleToolsCall(params: unknown): {
+  payload: DiagnosisResult | RepairResult;
+  ok: boolean;
+} {
   if (!params || typeof params !== "object" || Array.isArray(params)) {
     throw Object.assign(new Error("Malformed MCP params."), {
       code: "MALFORMED_MCP",
     });
   }
   const p = params as Record<string, unknown>;
-  // Reject extra top-level keys; only name + arguments allowed.
   for (const k of Object.keys(p)) {
     if (!TOOLS_CALL_TOP_KEYS.has(k)) {
       throw Object.assign(new Error("Unknown or extra tool params."), {
@@ -82,30 +172,77 @@ function handleToolsCall(params: unknown): DiagnosisResult {
       });
     }
   }
-  if (p.name !== TOOL_NAME) {
+  if (typeof p.name !== "string" || !KNOWN_TOOLS.has(p.name)) {
     throw Object.assign(new Error("Unknown tool."), { code: "UNKNOWN_TOOL" });
   }
-  const args = p.arguments;
-  if (!args || typeof args !== "object" || Array.isArray(args)) {
-    throw Object.assign(new Error("Invalid tool arguments."), {
-      code: "INVALID_ARGS",
+  const a = requireObjectArgs(p.arguments);
+
+  if (p.name === TOOL_DIAGNOSE) {
+    const keys = Object.keys(a);
+    if (keys.some((k) => k !== "target")) {
+      throw Object.assign(new Error("Unknown or extra arguments."), {
+        code: "EXTRA_ARGS",
+      });
+    }
+    const payload = diagnose(requireTarget(a));
+    return { payload, ok: payload.ok };
+  }
+
+  if (p.name === TOOL_REPAIR_PREVIEW) {
+    const keys = Object.keys(a);
+    if (keys.some((k) => k !== "target")) {
+      throw Object.assign(new Error("Unknown or extra arguments."), {
+        code: "EXTRA_ARGS",
+      });
+    }
+    const payload = previewRepair(requireTarget(a));
+    return { payload, ok: payload.ok };
+  }
+
+  if (p.name === TOOL_REPAIR_APPLY) {
+    const keys = Object.keys(a);
+    if (keys.some((k) => k !== "target" && k !== "authorization")) {
+      throw Object.assign(new Error("Unknown or extra arguments."), {
+        code: "EXTRA_ARGS",
+      });
+    }
+    if (typeof a.authorization !== "string" || a.authorization.length === 0) {
+      throw Object.assign(new Error("Invalid authorization."), {
+        code: "INVALID_ARGS",
+      });
+    }
+    const payload = applyRepair(requireTarget(a), {
+      authorization: a.authorization,
     });
+    return { payload, ok: payload.ok };
   }
-  const a = args as Record<string, unknown>;
-  const keys = Object.keys(a);
-  if (keys.some((k) => k !== "target")) {
-    throw Object.assign(new Error("Unknown or extra arguments."), {
-      code: "EXTRA_ARGS",
-    });
+
+  if (p.name === TOOL_VERIFY) {
+    const keys = Object.keys(a);
+    if (keys.some((k) => k !== "target")) {
+      throw Object.assign(new Error("Unknown or extra arguments."), {
+        code: "EXTRA_ARGS",
+      });
+    }
+    const payload = verifyRepair(requireTarget(a));
+    return { payload, ok: payload.ok };
   }
-  if (typeof a.target !== "string" || a.target.length === 0) {
-    throw Object.assign(new Error("Invalid target."), { code: "INVALID_TARGET" });
+
+  if (p.name === TOOL_ROLLBACK) {
+    const keys = Object.keys(a);
+    if (keys.some((k) => k !== "target")) {
+      throw Object.assign(new Error("Unknown or extra arguments."), {
+        code: "EXTRA_ARGS",
+      });
+    }
+    const payload = rollbackRepair(requireTarget(a));
+    return { payload, ok: payload.ok };
   }
-  return diagnose(a.target);
+
+  throw Object.assign(new Error("Unknown tool."), { code: "UNKNOWN_TOOL" });
 }
 
 function handleMessage(raw: string): void {
-  // Bound is already enforced by the frame accumulator before parse.
   if (Buffer.byteLength(raw, "utf8") > MAX_MCP_REQUEST_BYTES) {
     errorResponse(null, -32600, "Request exceeds size limit.");
     return;
@@ -133,22 +270,21 @@ function handleMessage(raw: string): void {
         return;
       case "notifications/initialized":
       case "initialized":
-        // notification — no response required
         return;
       case "tools/list":
-        resultResponse(msg.id, { tools: [toolSchema()] });
+        resultResponse(msg.id, { tools: toolSchemas() });
         return;
       case "tools/call": {
-        const diagnosis = handleToolsCall(msg.params);
+        const { payload, ok } = handleToolsCall(msg.params);
         resultResponse(msg.id, {
           content: [
             {
               type: "text",
-              text: safeJson(diagnosis),
+              text: safeJson(payload),
             },
           ],
-          structuredContent: diagnosis,
-          isError: !diagnosis.ok,
+          structuredContent: payload,
+          isError: !ok,
         });
         return;
       }
@@ -163,7 +299,6 @@ function handleMessage(raw: string): void {
       e && typeof e === "object" && "message" in e
         ? String((e as { message: unknown }).message)
         : "Tool call failed.";
-    // Never leak raw exception stacks or absolute paths.
     errorResponse(msg.id ?? null, -32000, message || "Tool call failed.");
   }
 }
@@ -173,7 +308,6 @@ function handleMessage(raw: string): void {
  * Enforces MAX_MCP_REQUEST_BYTES before retaining more than the bound or
  * calling JSON.parse. On overflow: emit one bounded JSON-RPC error, discard
  * until newline, then recover for subsequent valid frames.
- * Preserves correct UTF-8 handling across partial chunks and multiple frames.
  */
 export class NdjsonFrameAccumulator {
   private buf = Buffer.alloc(0);
@@ -193,7 +327,6 @@ export class NdjsonFrameAccumulator {
     this.onOverflow = onOverflow;
   }
 
-  /** Expose current retained byte length (for tests). */
   get retainedBytes(): number {
     return this.buf.length;
   }
@@ -206,10 +339,8 @@ export class NdjsonFrameAccumulator {
       if (this.discarding) {
         const nl = data.indexOf(0x0a);
         if (nl < 0) {
-          // Still no newline — drop this chunk, keep discarding.
           return;
         }
-        // Resume after the newline that ends the oversized frame.
         data = data.subarray(nl + 1);
         this.discarding = false;
         this.overflowEmitted = false;
@@ -217,9 +348,6 @@ export class NdjsonFrameAccumulator {
         continue;
       }
 
-      // Inclusive bound: payload of length <= maxBytes is accepted.
-      // When payload is already exactly maxBytes, only a newline may complete
-      // the frame; any other next byte is overflow. Retained bytes stay bounded.
       if (this.buf.length === this.maxBytes) {
         if (data[0] === 0x0a) {
           const frameBuf = this.buf;
@@ -236,7 +364,6 @@ export class NdjsonFrameAccumulator {
       }
 
       if (this.buf.length > this.maxBytes) {
-        // Defensive: never retain past the inclusive bound.
         this.emitOverflowAndDiscard(data);
         data = Buffer.alloc(0);
         continue;
@@ -248,22 +375,17 @@ export class NdjsonFrameAccumulator {
       const nlInSlice = slice.indexOf(0x0a);
 
       if (nlInSlice >= 0) {
-        // Complete frame within inclusive bound (frame length <= maxBytes).
         const frameBuf = Buffer.concat([this.buf, slice.subarray(0, nlInSlice)]);
         this.buf = Buffer.alloc(0);
         data = data.subarray(nlInSlice + 1);
-        // Skip empty frames (blank lines).
         if (frameBuf.length > 0) {
           this.onFrame(frameBuf.toString("utf8"));
         }
         continue;
       }
 
-      // No newline in the accepted payload slice.
       this.buf = Buffer.concat([this.buf, slice]);
       data = data.subarray(take);
-      // Loop again: if more bytes remain, the exact-bound branch decides
-      // newline-accept vs overflow without unbounded accumulation.
     }
   }
 
@@ -274,12 +396,10 @@ export class NdjsonFrameAccumulator {
     }
     this.buf = Buffer.alloc(0);
     this.discarding = true;
-    // Continue discarding rest from current push if it contains a newline.
     const nl = rest.indexOf(0x0a);
     if (nl >= 0) {
       this.discarding = false;
       this.overflowEmitted = false;
-      // Process remainder after newline via a recursive push.
       const after = rest.subarray(nl + 1);
       if (after.length > 0) {
         this.push(after);
@@ -311,7 +431,6 @@ export function startMcpServer(
   return acc;
 }
 
-/** Only auto-start when executed as the MCP server entry (not when imported by tests). */
 const entryArg = process.argv[1] ?? "";
 if (
   /[/\\]mcp[/\\]server\.(js|ts)$/.test(entryArg) ||

@@ -27,7 +27,7 @@ This document owns the ChangeGuard verification matrix. Passing a model-generate
 - Issue #32925 is a candidate, not an official root-cause assertion
 - local component can reach `SOURCE_COMPONENT_LOCATED`
 - only a successful deterministic reproduction plus negative control can reach `LOCAL_REPRO_CONFIRMED`
-- community workaround remains T1 and preview-only
+- Ticket 02: isolated experimental T1 repair may reach `RESOLVED_VERIFIED` only after scope-bound authorization, verified backup, atomic apply, original-failure absence, and core health
 
 ### Negative control
 
@@ -61,6 +61,19 @@ Stop or downscope the current implementation if any condition remains after the 
 5. The judge path is only a pre-rendered page rather than a working Plugin/fixture flow.
 6. The main demo does not include one model hypothesis being supported or refuted by a live probe.
 7. The product collapses into changelog summary or generic Issue search.
+
+## Ticket 02 Scenario Harness (repair public seams)
+
+Black-box seam: invoke CLI/MCP recovery commands and observe outcomes plus the
+isolated target filesystem (implemented in `tests/ticket02-repair-harness.test.ts`):
+
+- positive fixture reproduces protected-process failure before handshake (diagnose)
+- successful `repair-preview` → `repair-apply` → `RESOLVED_VERIFIED` with artifact hash proof
+- mechanism-different negative control cannot receive/apply the same repair
+- stale/mismatched authorization refused (hash/count/scope/binding change)
+- induced verification failure (harness sentinel) auto-rollbacks to exact original bytes
+- explicit `rollback` restores exact original SHA-256; status is mitigation, not resolve
+- CLI/MCP capsule stable-field equivalence; diagnose remains read-only
 
 ## Ticket 01 Scenario Harness (public seams)
 
@@ -97,8 +110,14 @@ npm run check:boundary
 npm run package
 npm run package:smoke
 node scripts/cli-hash-proof.mjs
+node scripts/check-production-boundary.mjs --self-test
 node bin/changeguard.js diagnose fixtures/protected-process
 node bin/changeguard.js diagnose fixtures/negative-control
+# Ticket 02 (isolated disposable copy only):
+# node bin/changeguard.js repair-preview <isolated-target>
+# node bin/changeguard.js repair-apply <isolated-target> <authorization_binding>
+# node bin/changeguard.js verify <isolated-target>
+# node bin/changeguard.js rollback <isolated-target>
 ```
 
 A clean source checkout is not claimed runnable before `npm ci && npm run build`

@@ -11,11 +11,22 @@ export type DiagnosisState =
   | "SAFE_FIX_AVAILABLE"
   | "CONFLICT";
 
-/** Ticket 01 never reaches repair/resolve outcomes. */
+/**
+ * User-resolution statuses.
+ * Ticket 01 diagnosis uses only the first three.
+ * Ticket 02 recovery may emit repair/resolve/rollback statuses.
+ * Only RESOLVED_VERIFIED claims the original problem is fixed.
+ */
 export type UserResolutionStatus =
   | "INCONCLUSIVE"
   | "DIAGNOSIS_COMPLETE"
-  | "INSUFFICIENT_LOCAL_FACTS";
+  | "INSUFFICIENT_LOCAL_FACTS"
+  | "REPAIR_PREVIEWED"
+  | "REPAIR_APPLIED"
+  | "RESOLVED_VERIFIED"
+  | "MITIGATED_VERIFIED_BY_ROLLBACK"
+  | "REPAIR_REFUSED"
+  | "REPAIR_FAILED_ROLLED_BACK";
 
 export type UpstreamContributionStatus =
   | "NONE"

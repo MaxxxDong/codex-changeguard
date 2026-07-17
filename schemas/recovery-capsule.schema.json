@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.invalid/codex-changeguard/recovery-capsule.schema.json",
-  "title": "RecoveryCapsule",
+  "title": "RepairCapsule",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -9,17 +9,48 @@
     "capsule_id",
     "trust_tier",
     "mode",
+    "authorization_tier",
+    "risk",
+    "target_path_alias",
+    "scope_digest",
+    "original_sha256",
+    "expected_pattern_count",
+    "operation",
     "applicability",
     "backup",
+    "verification",
+    "rollback",
     "dry_run_checks",
-    "rollback_recipe",
-    "human_decision"
+    "expires_at",
+    "invalidation_digest",
+    "authorization_binding",
+    "disclosure",
+    "human_decision",
+    "smoke_result"
   ],
   "properties": {
     "schema_version": {"const": 1},
     "capsule_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
     "trust_tier": {"enum": ["T4_official_release", "T3_official_commit", "T2_maintainer_workaround", "T1_community", "T0_model_generated"]},
     "mode": {"enum": ["preview_only", "dry_run_disposable", "apply_authorized"]},
+    "authorization_tier": {"enum": ["experimental_one_shot", "bundled_reviewed"]},
+    "risk": {"enum": ["low", "moderate", "high"]},
+    "target_path_alias": {"type": "string", "minLength": 1, "maxLength": 128},
+    "scope_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "original_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "expected_pattern_count": {"type": "integer", "minimum": 0, "maximum": 32},
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "target_path_alias", "expected_pattern_count", "operation_digest"],
+      "properties": {
+        "kind": {"enum": ["exact_block_removal"]},
+        "target_path_alias": {"type": "string", "minLength": 1, "maxLength": 128},
+        "expected_pattern_count": {"type": "integer", "minimum": 0, "maximum": 32},
+        "operation_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "expected_result_sha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"}
+      }
+    },
     "applicability": {
       "type": "object",
       "additionalProperties": false,
@@ -34,11 +65,42 @@
     "backup": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["required", "original_sha256"],
+      "required": ["required", "original_sha256", "backup_rel", "verified"],
       "properties": {
         "required": {"const": true},
-        "original_sha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+        "original_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "backup_rel": {"type": "string", "minLength": 1, "maxLength": 256},
+        "verified": {"type": "boolean"},
         "receipt_id": {"type": ["string", "null"], "maxLength": 256}
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checks", "original_failure_must_not_reproduce", "core_health_required"],
+      "properties": {
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {"type": "string", "maxLength": 256}
+        },
+        "original_failure_must_not_reproduce": {"const": true},
+        "core_health_required": {"const": true}
+      }
+    },
+    "rollback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recipe", "restores_original_sha256"],
+      "properties": {
+        "recipe": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {"type": "string", "maxLength": 512}
+        },
+        "restores_original_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
       }
     },
     "dry_run_checks": {
@@ -47,11 +109,22 @@
       "maxItems": 32,
       "items": {"type": "string", "maxLength": 256}
     },
-    "rollback_recipe": {
-      "type": "array",
-      "minItems": 1,
-      "maxItems": 32,
-      "items": {"type": "string", "maxLength": 512}
+    "expires_at": {"type": "string", "minLength": 10, "maxLength": 64},
+    "invalidation_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "authorization_binding": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "disclosure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fields_leaving_device", "includes_source_bytes", "includes_secrets"],
+      "properties": {
+        "fields_leaving_device": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {"type": "string", "maxLength": 128}
+        },
+        "includes_source_bytes": {"const": false},
+        "includes_secrets": {"const": false}
+      }
     },
     "human_decision": {"enum": ["pending", "approved", "rejected"]},
     "smoke_result": {"enum": ["not_run", "pass", "fail", "error"]}

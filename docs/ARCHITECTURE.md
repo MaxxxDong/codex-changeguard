@@ -81,6 +81,36 @@ Core I/O rules:
 - Scenario Harness owns whole-target before/after hashing, not the diagnosis core
 - Packaging: `npm run package` builds `release/codex-changeguard-plugin/` with exact public top-level surface (`.codex-plugin`, `.mcp.json`, `README.md`, `bin`, `dist`, `docs`, `fixtures`, `package.json`, `schemas`, `skills`); public `docs/` is only `ARCHITECTURE.md`, `SECURITY.md`, `TEST_PLAN.md`, and `CASE_STUDIES.md` (no `docs/agents`); packaged `README.md` omits the repository-only `HANDOFF.md` link; no `node_modules`, `AGENTS.md`, `HANDOFF.md`, `src`, or `scripts`. Package smoke launches MCP via packaged `.mcp.json` and fails on broken local Markdown links or forbidden packaged paths. A clean source checkout is not claimed runnable before `npm ci && npm run build` (or package).
 
+### 2.3 Ticket 02 protected-process verified repair (isolated target)
+
+Product specification is canonical: experimental repair is allowed on an **isolated** target after one scope-bound authorization. This is not a second ad-hoc engine — CLI and MCP call the same recovery modules under `src/core/recovery/`.
+
+Public seams (shared core):
+
+1. `changeguard repair-preview <isolated-target>` / MCP `changeguard_repair_preview` `{ target }`
+2. `changeguard repair-apply <isolated-target> <authorization-binding>` / MCP `changeguard_repair_apply` `{ target, authorization }`
+3. `changeguard verify <isolated-target>` / MCP `changeguard_verify` `{ target }`
+4. `changeguard rollback <isolated-target>` / MCP `changeguard_rollback` `{ target }`
+
+Repair Capsule (preview) includes: one target path alias, original SHA-256, exact expected pattern count, operation digest, authorization tier, risk, verified backup plan, verification plan, rollback recipe, expiry/invalidation digests, and disclosure metadata **without** source bytes or secrets. Preview persists the exact capsule under the isolated target (`.changeguard/capsule-preview.json`) so apply uses the same one-shot binding.
+
+Authorization is deterministically bound to the exact capsule material and live scope. Any target hash, pattern count, scope, operation, permission, or capsule change invalidates the binding. There is no reusable global trust token.
+
+Mutation contract (registered recovery only):
+
+1. resolve isolated target; refuse symlink targets and symlink path segments;
+2. re-check opened target identity (TOCTOU);
+3. create verified backup of original bytes under `.changeguard/backup/`;
+4. write sibling temp, fsync where supported, atomic rename;
+5. verify resulting hash/metadata;
+6. run original-failure + core-health verification;
+7. on any verification failure, automatically restore exact original bytes — `RESOLVED_VERIFIED` is impossible;
+8. explicit `rollback` restores original bytes from the verified backup.
+
+`user_resolution.status = RESOLVED_VERIFIED` requires: original protected-process failure no longer reproduces **and** registered core health checks pass. User-resolution and upstream-contribution receipts remain independent; recovery never claims external submission.
+
+Diagnosis modules stay read-only. The production-boundary guard allows only a narrow registered write method set inside `src/core/recovery/`; network, shell, loaders, and host-capability controls remain fail-closed everywhere.
+
 ## 3. Detection and localization ladder
 
 | Level | State | Minimum evidence | Permitted claim | Forbidden claim |
@@ -194,24 +224,24 @@ Network access, arbitrary shell, privilege elevation, and writes to installed fi
 
 ## 8. Recovery trust and transaction contract
 
-| Trust tier | Source | Preview | Dry-run | Apply in competition MVP |
-|---|---|---:|---:|---:|
-| T4 | Official released fix | yes | yes | no; upgrade guidance only |
-| T3 | Official merged commit, not released | yes | fixture/disposable copy | no |
-| T2 | Maintainer-confirmed workaround | yes | fixture/disposable copy | no |
-| T1 | Community workaround | quarantined preview | fixture only | no |
-| T0 | Model-generated fix | hypothesis only | generated test fixture only | no |
+| Trust tier | Source | Preview | Dry-run | Apply (product spec) |
+|---|---|---:|---:|---|
+| T4 | Official released fix | yes | yes | upgrade guidance only (no local binary rewrite) |
+| T3 | Official merged commit, not released | yes | fixture/disposable copy | experimental only after isolated proof |
+| T2 | Maintainer-confirmed workaround | yes | fixture/disposable copy | experimental only after isolated proof |
+| T1 | Community workaround | yes (quarantined) | fixture/disposable copy | **Ticket 02:** one experimental apply on isolated protected-process fixture after scope-bound authorization |
+| T0 | Model-generated fix | hypothesis only | generated test fixture only | not auto-applied |
 
-A future explicitly authorized apply engine must:
+Ticket 02 implements the explicitly authorized apply path for the isolated protected-process fixture only:
 
-1. resolve and classify the exact target path;
+1. resolve and classify the exact target path under an isolated root;
 2. record original bytes, metadata, and SHA-256;
-3. require the expected pattern count and applicable version/hash;
+3. require the expected pattern count and applicable hash;
 4. create a verified backup;
 5. write a sibling temporary file and atomically replace;
-6. run syntax and minimal functional smoke checks;
-7. restore exact original bytes on any failure;
-8. emit a receipt without secrets or full file contents.
+6. run original-failure + core-health verification;
+7. restore exact original bytes on any failure (automatic rollback);
+8. emit receipts without secrets or full file contents; never claim external submission.
 
 ## 9. Update detection
 
@@ -246,9 +276,9 @@ Expected path:
 4. Report Issue #32925 as a candidate; the comment remains community evidence.
 5. Run the property-descriptor and bundled module fixture probes (later tickets for live repro).
 6. Reach `SOURCE_COMPONENT_LOCATED` from measured hash + structural signature + gates; reach `LOCAL_REPRO_CONFIRMED` only if the deterministic fixture reproduces and the negative control does not.
-7. Produce a T1 Recovery Capsule preview for the local shim; never patch real caches in the competition demo.
+7. Produce a T1 Repair Capsule preview for the local shim on an isolated target. Ticket 02 may apply one experimental repair only after exact scope-bound authorization; never patch real Codex/Profile installs or non-isolated caches.
 
-The precise claim is: “The exact affected pattern is present in these local artifacts and the bundled probe reproduces the same protected-process failure mechanism.” It is not: “OpenAI officially confirmed Issue #32925 as the root cause.”
+The precise claim is: “The exact affected pattern is present in these local artifacts and the bundled probe reproduces the same protected-process failure mechanism.” It is not: “OpenAI officially confirmed Issue #32925 as the root cause.” After verified repair on an isolated fixture, `RESOLVED_VERIFIED` means only that the original local failure no longer reproduces and core health checks passed.
 
 ### Fixture B — invalid TOML setup hang
 
@@ -305,7 +335,7 @@ The playbook never reads or exports cookie values, tokens, passwords, one-time c
 
 - Fixture B or C
 - `SessionStart` version-change hint after trust
-- Recovery Capsule preview
+- Recovery Capsule preview (Ticket 02 implements isolated protected-process preview + authorized apply/verify/rollback)
 - lightweight inspector UI
 
 ### Later
@@ -313,7 +343,7 @@ The playbook never reads or exports cookie values, tokens, passwords, one-time c
 - authenticated official GitHub refresh
 - broader version history and more platforms
 - source-map-aware packaged-code mapping
-- explicitly authorized apply/rollback engine
+- broader apply/rollback beyond the Ticket 02 isolated protected-process vertical slice
 
 ### Not Doing
 

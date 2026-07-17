@@ -26,6 +26,7 @@ export class McpTestClient {
   private readonly serverEntry: string;
   /** Accumulates partial stdout chunks until a full NDJSON line is available. */
   private partialStdout = "";
+  private initialized = false;
 
   constructor(opts: McpClientOptions = {}) {
     this.timeoutMs = opts.timeoutMs ?? 10_000;
@@ -122,35 +123,78 @@ export class McpTestClient {
     });
   }
 
-  async diagnose(target: string): Promise<DiagnosisViaMcp> {
+  private async ensureInitialized(): Promise<void> {
+    if (!this.child) this.start();
+    if (this.initialized) return;
     await this.request("initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
       clientInfo: { name: "changeguard-test", version: "0.1.0" },
     });
-    // notification
     this.child!.stdin.write(
       JSON.stringify({
         jsonrpc: "2.0",
         method: "notifications/initialized",
       }) + "\n",
     );
+    this.initialized = true;
+  }
+
+  private async callTool(
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    await this.ensureInitialized();
     const result = (await this.request("tools/call", {
-      name: "changeguard_diagnose",
-      arguments: { target },
+      name,
+      arguments: args,
     })) as {
       structuredContent?: unknown;
       content?: Array<{ type: string; text: string }>;
       isError?: boolean;
     };
-    if (result.structuredContent) {
-      return result.structuredContent as DiagnosisViaMcp;
+    if (result.structuredContent && typeof result.structuredContent === "object") {
+      return result.structuredContent as Record<string, unknown>;
     }
     const text = result.content?.find((c) => c.type === "text")?.text;
     if (!text) {
-      throw new Error("MCP response missing diagnosis.");
+      throw new Error("MCP response missing structured payload.");
     }
-    return JSON.parse(text) as DiagnosisViaMcp;
+    return JSON.parse(text) as Record<string, unknown>;
+  }
+
+  async diagnose(target: string): Promise<DiagnosisViaMcp> {
+    return (await this.callTool("changeguard_diagnose", {
+      target,
+    })) as DiagnosisViaMcp;
+  }
+
+  async repairPreview(target: string): Promise<RepairViaMcp> {
+    return (await this.callTool("changeguard_repair_preview", {
+      target,
+    })) as RepairViaMcp;
+  }
+
+  async repairApply(
+    target: string,
+    authorization: string,
+  ): Promise<RepairViaMcp> {
+    return (await this.callTool("changeguard_repair_apply", {
+      target,
+      authorization,
+    })) as RepairViaMcp;
+  }
+
+  async verify(target: string): Promise<RepairViaMcp> {
+    return (await this.callTool("changeguard_verify", {
+      target,
+    })) as RepairViaMcp;
+  }
+
+  async rollback(target: string): Promise<RepairViaMcp> {
+    return (await this.callTool("changeguard_rollback", {
+      target,
+    })) as RepairViaMcp;
   }
 
   /** Clear timers promptly and close the child. */
@@ -161,6 +205,7 @@ export class McpTestClient {
     }
     this.pending.clear();
     this.partialStdout = "";
+    this.initialized = false;
     if (this.child) {
       this.child.stdin.end();
       this.child.kill("SIGTERM");
@@ -174,12 +219,56 @@ export type DiagnosisViaMcp = {
   ok: boolean;
   diagnosis_state: string;
   incident_fingerprint: unknown;
-  user_resolution: unknown;
-  upstream_contribution: unknown;
-  evidence: unknown[];
+  user_resolution: {
+    status: string;
+    summary: string;
+    receipt_id: string;
+  };
+  upstream_contribution: {
+    status: string;
+    summary: string;
+    issue_candidates: string[];
+    receipt_id: string;
+  };
+  evidence: Array<{ kind: string; detail: string; measured: boolean }>;
   error_code: string | null;
   error_message: string | null;
   network_used: false;
   target_mutated: false;
   repair_applied: false;
+};
+
+export type RepairViaMcp = {
+  schema_version: 1;
+  ok: boolean;
+  operation: string;
+  capsule: {
+    authorization_binding: string;
+    original_sha256: string;
+    expected_pattern_count: number;
+    target_path_alias: string;
+    [key: string]: unknown;
+  } | null;
+  user_resolution: {
+    status: string;
+    summary: string;
+    receipt_id: string;
+  };
+  upstream_contribution: {
+    status: string;
+    summary: string;
+    issue_candidates: string[];
+    receipt_id: string;
+  };
+  evidence: Array<{ kind: string; detail: string; measured: boolean }>;
+  error_code: string | null;
+  error_message: string | null;
+  network_used: false;
+  target_mutated: boolean;
+  repair_applied: boolean;
+  auto_rolled_back: boolean;
+  verification: unknown;
+  backup: unknown;
+  resulting_sha256: string | null;
+  contribution_claim: string;
 };

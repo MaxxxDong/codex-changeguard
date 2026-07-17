@@ -1,7 +1,12 @@
 /**
- * Independent production-boundary guard (Ticket 01).
+ * Independent production-boundary guard (Ticket 01 + Ticket 02 recovery seam).
  * Scans production TypeScript sources with the TypeScript compiler API
  * (devDependency only — never a production runtime dependency).
+ *
+ * Diagnosis modules remain read-only. Ticket 02 registers a narrow recovery
+ * write allowlist only for files under `src/core/recovery/` (exact registered
+ * fs methods + proven write-capable open flags). Network, shell, loaders,
+ * eval, and host-capability rules still apply to recovery modules.
  *
  * Fails if the diagnosis path introduces:
  * - network APIs/modules (fetch, http/https/net/tls/dns/dgram/undici, WebSocket)
@@ -179,6 +184,34 @@ const FS_NAMESPACE_META_PROPERTIES = new Set(["promises", "constants"]);
 
 /** open / openSync / promises.open — allowed only with statically read-only flags. */
 const CONDITIONAL_OPEN_METHODS = new Set(["open", "openSync"]);
+
+/**
+ * Ticket 02 recovery-only fs methods (sync). Allowed exclusively in modules
+ * under `src/core/recovery/`. Unknown methods still fail closed. writeFileSync
+ * and createWriteStream remain forbidden even in recovery (use open+write+rename).
+ */
+const RECOVERY_WRITE_FS_METHODS = new Set([
+  "writeSync",
+  "fsyncSync",
+  "renameSync",
+  "mkdirSync",
+  "unlinkSync",
+  "rmSync",
+  "copyFileSync",
+]);
+
+/** String modes allowed for recovery open (exclusive create / write). */
+const RECOVERY_WRITE_STRING_MODES = new Set([
+  "w",
+  "wx",
+  "xw",
+  "w+",
+  "wx+",
+  "xw+",
+  "a",
+  "ax",
+  "xa",
+]);
 
 /** Global names treated as forbidden code-execution capabilities (any value use). */
 const FORBIDDEN_CODE_EXEC_GLOBALS = new Set(["eval", "Function"]);
@@ -389,6 +422,123 @@ function staticTerminalName(expr) {
 function isReadonlyFsMethod(method, nsKind = "fs") {
   if (nsKind === "fs.promises") return READONLY_FS_PROMISES_METHODS.has(method);
   return READONLY_FS_METHODS.has(method);
+}
+
+/**
+ * True when the scanned relative path is a registered recovery module.
+ * Self-tests may label snippets `self-test:recovery-…`.
+ * @param {string} rel
+ * @returns {boolean}
+ */
+function isRecoveryModulePath(rel) {
+  if (typeof rel !== "string" || rel.length === 0) return false;
+  const n = rel.replace(/\\/g, "/");
+  if (n.includes("self-test:recovery-") || n.startsWith("self-test:recovery-")) {
+    return true;
+  }
+  return (
+    n.includes("/core/recovery/") ||
+    n.startsWith("src/core/recovery/") ||
+    n.startsWith("core/recovery/")
+  );
+}
+
+/**
+ * Recovery-only open flags: proven fs.constants write/create flags or recovery modes.
+ * Still fail closed on numerics / unknown shapes.
+ * @param {ts.Expression | undefined} expr
+ * @param {Map<string, ts.Expression>} bindings
+ * @param {ts.SourceFile} sf
+ * @param {{ fsConstantsLocals: Set<string>, fsNsAliases: Set<string> }} provenance
+ * @param {Set<string>} visitingFns
+ * @returns {boolean}
+ */
+function isStaticallyRecoveryWriteOpenFlags(
+  expr,
+  bindings,
+  sf,
+  provenance,
+  visitingFns = new Set(),
+) {
+  if (!expr) return false;
+  if (ts.isParenthesizedExpression(expr)) {
+    return isStaticallyRecoveryWriteOpenFlags(
+      expr.expression,
+      bindings,
+      sf,
+      provenance,
+      visitingFns,
+    );
+  }
+  if (
+    ts.isAsExpression(expr) ||
+    ts.isNonNullExpression(expr) ||
+    (ts.isTypeAssertionExpression && ts.isTypeAssertionExpression(expr))
+  ) {
+    return isStaticallyRecoveryWriteOpenFlags(
+      expr.expression,
+      bindings,
+      sf,
+      provenance,
+      visitingFns,
+    );
+  }
+  if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
+    return RECOVERY_WRITE_STRING_MODES.has(expr.text);
+  }
+  if (ts.isNumericLiteral(expr)) return false;
+  // OR of recovery write flags with optional read-only companions (e.g. O_CLOEXEC).
+  if (ts.isBinaryExpression(expr) && expr.operatorToken.kind === ts.SyntaxKind.BarToken) {
+    const leftWrite = isStaticallyRecoveryWriteOpenFlags(
+      expr.left,
+      bindings,
+      sf,
+      provenance,
+      visitingFns,
+    );
+    const rightWrite = isStaticallyRecoveryWriteOpenFlags(
+      expr.right,
+      bindings,
+      sf,
+      provenance,
+      visitingFns,
+    );
+    const leftRo = isStaticallyReadonlyOpenFlags(
+      expr.left,
+      bindings,
+      sf,
+      provenance,
+      visitingFns,
+    );
+    const rightRo = isStaticallyReadonlyOpenFlags(
+      expr.right,
+      bindings,
+      sf,
+      provenance,
+      visitingFns,
+    );
+    const leftOk = leftWrite || leftRo;
+    const rightOk = rightWrite || rightRo;
+    return leftOk && rightOk && (leftWrite || rightWrite);
+  }
+  if (ts.isIdentifier(expr)) {
+    if (expr.text === "undefined") return false;
+    const init = bindings.get(expr.text);
+    if (!init) return false;
+    return isStaticallyRecoveryWriteOpenFlags(init, bindings, sf, provenance, visitingFns);
+  }
+  if (ts.isPropertyAccessExpression(expr) || ts.isElementAccessExpression(expr)) {
+    const term = staticTerminalName(expr);
+    if (!term || term === "\0computed") return false;
+    // Write/create flags + O_EXCL companion; pure read-only terminals are not enough.
+    if (WRITE_CAPABLE_FLAG_NAMES.has(term) || term === "O_EXCL") {
+      const base = propertyAccessBase(expr);
+      if (!base) return false;
+      return isProvenFsConstantsRoot(base, bindings, provenance);
+    }
+    return false;
+  }
+  return false;
 }
 
 /**
@@ -1683,9 +1833,18 @@ function isStaticallyReadonlyOpenFlags(
  * @param {ts.Node} callNode
  * @param {ts.SourceFile} sf
  * @param {{ fsConstantsLocals: Set<string>, fsNsAliases: Set<string> }} provenance
+ * @param {boolean} [recoveryModule]
  * @returns {string | null} violation message or null if allowed
  */
-function checkOpenCallFlags(rel, methodLabel, flagsExpr, callNode, sf, provenance) {
+function checkOpenCallFlags(
+  rel,
+  methodLabel,
+  flagsExpr,
+  callNode,
+  sf,
+  provenance,
+  recoveryModule = false,
+) {
   const scope = enclosingCallableOrSourceFile(callNode);
   const bindings = collectSimpleBindings(scope);
   // Merge module-level bindings for nested functions (helpers often close over imports).
@@ -1698,7 +1857,15 @@ function checkOpenCallFlags(rel, methodLabel, flagsExpr, callNode, sf, provenanc
   if (isStaticallyReadonlyOpenFlags(flagsExpr, bindings, sf, provenance)) {
     return null;
   }
-  return `${rel}: fs open without statically provable read-only flags ('${methodLabel}')`;
+  if (
+    recoveryModule &&
+    isStaticallyRecoveryWriteOpenFlags(flagsExpr, bindings, sf, provenance)
+  ) {
+    return null;
+  }
+  return recoveryModule
+    ? `${rel}: recovery fs open without proven read-only or registered write flags ('${methodLabel}')`
+    : `${rel}: fs open without statically provable read-only flags ('${methodLabel}')`;
 }
 
 /**
@@ -1710,6 +1877,7 @@ function checkOpenCallFlags(rel, methodLabel, flagsExpr, callNode, sf, provenanc
 function scanSourceText(file, text, rel) {
   /** @type {string[]} */
   const violations = [];
+  const recoveryModule = isRecoveryModulePath(rel);
   const sf = ts.createSourceFile(file, text, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
   // Import-level provenance for open-flag property roots (fs.constants only).
   const flagProvenance = collectFsFlagProvenance(sf);
@@ -1822,15 +1990,25 @@ function scanSourceText(file, text, rel) {
         callNode,
         sf,
         flagProvenance,
+        recoveryModule,
       );
       if (msg) violations.push(msg);
       return;
     }
-    if (!isReadonlyFsMethod(method, nsKind)) {
-      violations.push(
-        `${rel}: forbidden non-read-only fs method '${displayRoot}.${method}'`,
-      );
+    if (isReadonlyFsMethod(method, nsKind)) {
+      return;
     }
+    // Ticket 02: narrow registered recovery writes only under recovery modules.
+    if (
+      recoveryModule &&
+      nsKind === "fs" &&
+      RECOVERY_WRITE_FS_METHODS.has(method)
+    ) {
+      return;
+    }
+    violations.push(
+      `${rel}: forbidden non-read-only fs method '${displayRoot}.${method}'`,
+    );
   }
 
   /**
@@ -3291,6 +3469,43 @@ fs.closeSync(fd);
       name: "safe process.argv still allowed with mainModule forbidden",
       expectViolation: false,
       source: `const a = process.argv; void a;\n`,
+    },
+    // --- Ticket 02: recovery module narrow write allowlist ---
+    // Labels must start with `recovery-` so scan path is `self-test:recovery-…`.
+    {
+      name: "recovery-allowed open write + writeSync + renameSync",
+      expectViolation: false,
+      source: `import fs, { constants as c } from "node:fs";\nconst fd = fs.openSync("x", c.O_WRONLY | c.O_CREAT | c.O_TRUNC | c.O_EXCL);\nfs.writeSync(fd, "y");\nfs.fsyncSync(fd);\nfs.closeSync(fd);\nfs.renameSync("x", "z");\n`,
+    },
+    {
+      name: "recovery-allowed mkdirSync unlinkSync",
+      expectViolation: false,
+      source: `import fs from "node:fs";\nfs.mkdirSync("d");\nfs.unlinkSync("f");\n`,
+    },
+    {
+      name: "recovery-forbidden writeFileSync still blocked",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfs.writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "recovery-forbidden createWriteStream still blocked",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfs.createWriteStream("x");\n`,
+    },
+    {
+      name: "recovery-forbidden shell still blocked",
+      expectViolation: true,
+      source: `import { spawnSync } from "node:child_process";\nspawnSync("echo", ["x"]);\n`,
+    },
+    {
+      name: "recovery-forbidden network still blocked",
+      expectViolation: true,
+      source: `fetch("https://example.invalid");\n`,
+    },
+    {
+      name: "non-recovery writeSync still blocked",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfs.writeSync(1, "y");\n`,
     },
   ];
 

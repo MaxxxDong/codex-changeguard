@@ -59,14 +59,29 @@ export function runCliDiagnose(target: string): {
   stderr: string;
   result: DiagnosisResult | null;
 } {
-  const res = spawnSync(process.execPath, [cliEntry(), "diagnose", target], {
+  return runCliJson(["diagnose", target]) as {
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+    result: DiagnosisResult | null;
+  };
+}
+
+/** Invoke Rescue CLI and parse JSON stdout (shared by diagnose + recovery). */
+export function runCliJson(args: string[]): {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  result: Record<string, unknown> | null;
+} {
+  const res = spawnSync(process.execPath, [cliEntry(), ...args], {
     encoding: "utf8",
     env: { ...process.env, NO_COLOR: "1" },
     maxBuffer: 4 * 1024 * 1024,
   });
-  let result: DiagnosisResult | null = null;
+  let result: Record<string, unknown> | null = null;
   try {
-    result = JSON.parse(res.stdout) as DiagnosisResult;
+    result = JSON.parse(res.stdout) as Record<string, unknown>;
   } catch {
     result = null;
   }
@@ -76,6 +91,22 @@ export function runCliDiagnose(target: string): {
     stderr: res.stderr ?? "",
     result,
   };
+}
+
+export function runCliRepairPreview(target: string) {
+  return runCliJson(["repair-preview", target]);
+}
+
+export function runCliRepairApply(target: string, authorization: string) {
+  return runCliJson(["repair-apply", target, authorization]);
+}
+
+export function runCliVerify(target: string) {
+  return runCliJson(["verify", target]);
+}
+
+export function runCliRollback(target: string) {
+  return runCliJson(["rollback", target]);
 }
 
 export async function runMcpDiagnose(target: string): Promise<DiagnosisResult> {

@@ -81,15 +81,27 @@ The public CLI and MCP diagnosis seams enforce:
 
 ## Recovery safety
 
-Competition MVP recovery is preview-only. A future apply engine requires explicit per-action user approval and the full atomic transaction contract in [ARCHITECTURE.md](ARCHITECTURE.md).
+Product specification (canonical): experimental repair may run **once** on an isolated target after an exact scope-bound authorization and the atomic transaction contract in [ARCHITECTURE.md](ARCHITECTURE.md). Ticket 01 diagnosis remains fully read-only. Ticket 02 implements the isolated protected-process vertical slice only — not active Codex/Profile mutation.
+
+Recovery rules:
+
+- mutation only beneath an explicitly isolated/allowed target root via registered recovery modules (`src/core/recovery/`)
+- one Repair Capsule; authorization bound deterministically to capsule + live scope; no reusable global trust token
+- refuse symlinks and TOCTOU; re-check opened target; verified backup; sibling temp; fsync where supported; atomic replace; verify resulting hash
+- `RESOLVED_VERIFIED` only when original failure no longer reproduces **and** core health checks pass
+- failed verification auto-rolls back exact original bytes and makes resolved status impossible
+- explicit rollback restores exact original bytes/hash
+- receipts separate user resolution from upstream contribution and never claim external submission
+- production-boundary guard keeps diagnosis read-only; recovery modules may use only a narrow registered write method set (still no shell/network/loaders)
 
 Never:
 
-- silently modify Plugin, App, browser, cache, config, or system files
+- silently modify Plugin, App, browser, cache, config, or system files outside a registered Capsule
 - weaken sandbox, security, or permission policy to make a repair pass
-- auto-run community or model-generated patches
-- call a repair safe without backup, dry-run, smoke, and rollback evidence
-- persist secrets in receipts, logs, fixtures, or screenshots
+- auto-run community or model-generated patches without isolated proof + explicit authorization
+- call a repair safe without backup, verification, and rollback evidence
+- persist secrets or full source bytes in receipts, logs, fixtures, or screenshots
+- arbitrary shell/PowerShell/scripts, network, recursive delete, binary replacement of signed app binaries, privilege elevation
 
 ## Threat-model tests
 
