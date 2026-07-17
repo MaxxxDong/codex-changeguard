@@ -7,7 +7,15 @@
  * - network APIs/modules (fetch, http/https/net/tls/dns/dgram/undici, WebSocket)
  * - child processes / arbitrary shell
  * - filesystem mutation APIs (write/append/rm/mkdir/rename/copy/chmod/…)
+ * - forbidden fs mutation / open capability references (pass, bind, sequence,
+ *   Reflect.apply, store in array/object, destructure/extract) without requiring
+ *   a later direct call
  * - eval / Function / process.dlopen / process.binding bypass surfaces
+ *
+ * open/openSync are allowed only as a direct call through a proven `node:fs`
+ * namespace (or simple namespace alias) with statically proven read-only flags.
+ * Mere references, extracts, binds, callbacks, or reflective invokes of open
+ * are unproven and fail closed.
  *
  * network_used:false in diagnosis output is NOT treated as proof.
  *
@@ -76,9 +84,17 @@ const FORBIDDEN_MODULES = new Set([
   "async_hooks",
 ]);
 
+/**
+ * Unconditionally forbidden filesystem mutation / write-surface APIs.
+ * open/openSync are handled separately (conditional on statically provable flags).
+ */
 const FORBIDDEN_FS_METHODS = new Set([
+  "write",
+  "writeSync",
   "writeFile",
   "writeFileSync",
+  "writev",
+  "writevSync",
   "appendFile",
   "appendFileSync",
   "rm",
@@ -119,6 +135,38 @@ const FORBIDDEN_FS_METHODS = new Set([
   "lutimesSync",
   "utimes",
   "utimesSync",
+]);
+
+/** open / openSync / promises.open — allowed only with statically read-only flags. */
+const CONDITIONAL_OPEN_METHODS = new Set(["open", "openSync"]);
+
+/** String modes that open a path for reading only (Node.js). */
+const READ_ONLY_STRING_MODES = new Set(["r", "rs", "sr"]);
+
+/**
+ * Flag property names that do not grant write/create/truncate capability on their own.
+ * Combined only via bitwise OR of other allowlisted flags (or alone).
+ */
+const READ_ONLY_FLAG_NAMES = new Set([
+  "O_RDONLY",
+  "O_NOFOLLOW",
+  "O_CLOEXEC",
+  "O_NONBLOCK",
+  "O_DIRECTORY",
+  "O_NOATIME",
+  "O_SYNC",
+  "O_DSYNC",
+  "O_RSYNC",
+]);
+
+/** Flag property names that enable write, create, truncate, or read-write. */
+const WRITE_CAPABLE_FLAG_NAMES = new Set([
+  "O_WRONLY",
+  "O_RDWR",
+  "O_APPEND",
+  "O_CREAT",
+  "O_TRUNC",
+  "O_TMPFILE",
 ]);
 
 const FORBIDDEN_GLOBALS = new Set(["fetch", "WebSocket", "XMLHttpRequest"]);
@@ -168,6 +216,13 @@ function isForbiddenModule(spec) {
  * Resolve a property access / element access chain into string segments.
  * Returns null when a segment is non-literal / non-ident (fail-closed check
  * happens at call sites for computed non-literal keys).
+ *
+ * Also recognizes direct `require("fs")` / `require("node:fs")` (and
+ * `fs/promises`) call expressions as synthetic roots so
+ * `require("fs").writeFileSync(...)` is visible to the shared scanner.
+ * Non-literal require roots are marked so callers can fail closed without
+ * weakening the existing nonliteral-require rejection.
+ *
  * @param {ts.Expression} expr
  * @returns {string[] | null}
  */
@@ -193,7 +248,1025 @@ function resolveMemberChain(expr) {
   if (ts.isParenthesizedExpression(expr)) {
     return resolveMemberChain(expr.expression);
   }
+  // require("fs").method / require("node:fs").promises.method
+  if (ts.isCallExpression(expr) && ts.isIdentifier(expr.expression) && expr.expression.text === "require") {
+    const arg0 = expr.arguments[0];
+    if (!arg0 || !ts.isStringLiteral(arg0)) {
+      return ["\0nonliteral_require"];
+    }
+    const bare = normalizeModuleSpec(arg0.text);
+    if (bare === "fs") return ["\0require_fs"];
+    if (bare === "fs/promises") return ["\0require_fs_promises"];
+    // Other literal requires are not fs namespace roots for method checks.
+    return null;
+  }
   return null;
+}
+
+/**
+ * Terminal property/element name of an expression, if statically known.
+ * @param {ts.Expression} expr
+ * @returns {string | null}
+ */
+function staticTerminalName(expr) {
+  if (ts.isIdentifier(expr)) return expr.text;
+  if (ts.isPropertyAccessExpression(expr)) return expr.name.text;
+  if (ts.isElementAccessExpression(expr)) {
+    const arg = expr.argumentExpression;
+    if (arg && ts.isStringLiteral(arg)) return arg.text;
+    return null;
+  }
+  if (ts.isParenthesizedExpression(expr)) return staticTerminalName(expr.expression);
+  return null;
+}
+
+/**
+ * Unwrap parentheses, type assertions, and non-null assertions for static checks.
+ * @param {ts.Expression} expr
+ * @returns {ts.Expression}
+ */
+function unwrapStaticExpr(expr) {
+  let cur = expr;
+  for (;;) {
+    if (ts.isParenthesizedExpression(cur)) {
+      cur = cur.expression;
+      continue;
+    }
+    if (
+      ts.isAsExpression(cur) ||
+      ts.isNonNullExpression(cur) ||
+      (ts.isTypeAssertionExpression && ts.isTypeAssertionExpression(cur))
+    ) {
+      cur = cur.expression;
+      continue;
+    }
+    if (cur.kind === ts.SyntaxKind.TypeAssertionExpression && "expression" in cur) {
+      cur = /** @type {ts.TypeAssertion} */ (cur).expression;
+      continue;
+    }
+    return cur;
+  }
+}
+
+/**
+ * Collect import-level provenance for Node `fs` namespaces and `fs.constants`.
+ * Only named/default/namespace imports from `fs` / `node:fs` are recorded.
+ * Names alone are not proof at a use site — see `isUnshadowedImportLocal`.
+ * @param {ts.SourceFile} sf
+ * @returns {{ fsConstantsLocals: Set<string>, fsNsAliases: Set<string> }}
+ */
+function collectFsFlagProvenance(sf) {
+  /** @type {Set<string>} */
+  const fsConstantsLocals = new Set();
+  /** @type {Set<string>} */
+  const fsNsAliases = new Set();
+  for (const stmt of sf.statements) {
+    if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) {
+      continue;
+    }
+    const bare = normalizeModuleSpec(stmt.moduleSpecifier.text);
+    // constants live on the `fs` module (not `fs/promises`).
+    if (bare !== "fs") continue;
+    const clause = stmt.importClause;
+    if (!clause) continue;
+    if (clause.name) {
+      fsNsAliases.add(clause.name.text);
+    }
+    if (!clause.namedBindings) continue;
+    if (ts.isNamespaceImport(clause.namedBindings)) {
+      fsNsAliases.add(clause.namedBindings.name.text);
+    } else if (ts.isNamedImports(clause.namedBindings)) {
+      for (const el of clause.namedBindings.elements) {
+        const original = el.propertyName?.text ?? el.name.text;
+        const local = el.name.text;
+        if (original === "constants") {
+          fsConstantsLocals.add(local);
+        }
+      }
+    }
+  }
+  return { fsConstantsLocals, fsNsAliases };
+}
+
+/**
+ * True when a BindingName (identifier or destructuring pattern) binds `name`.
+ * @param {ts.BindingName} bindingName
+ * @param {string} name
+ * @returns {boolean}
+ */
+function bindingNameBinds(bindingName, name) {
+  if (ts.isIdentifier(bindingName)) return bindingName.text === name;
+  if (ts.isObjectBindingPattern(bindingName) || ts.isArrayBindingPattern(bindingName)) {
+    for (const el of bindingName.elements) {
+      if (ts.isOmittedExpression(el)) continue;
+      if (ts.isBindingElement(el) && bindingNameBinds(el.name, name)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * True when a variable declaration list binds `name`.
+ * @param {ts.VariableDeclarationList} list
+ * @param {string} name
+ * @returns {boolean}
+ */
+function variableDeclarationListBinds(list, name) {
+  for (const decl of list.declarations) {
+    if (bindingNameBinds(decl.name, name)) return true;
+  }
+  return false;
+}
+
+/**
+ * True when a statement introduces a lexical binding for `name` (not an import).
+ * @param {ts.Statement} stmt
+ * @param {string} name
+ * @returns {boolean}
+ */
+function statementIntroducesLocalBinding(stmt, name) {
+  if (ts.isVariableStatement(stmt)) {
+    return variableDeclarationListBinds(stmt.declarationList, name);
+  }
+  if (ts.isFunctionDeclaration(stmt) && stmt.name && stmt.name.text === name) {
+    return true;
+  }
+  if (ts.isClassDeclaration(stmt) && stmt.name && stmt.name.text === name) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * True when an ImportDeclaration binds local name `name`.
+ * @param {ts.Statement} stmt
+ * @param {string} name
+ * @returns {boolean}
+ */
+function importDeclarationBinds(stmt, name) {
+  if (!ts.isImportDeclaration(stmt) || !stmt.importClause) return false;
+  const clause = stmt.importClause;
+  if (clause.name && clause.name.text === name) return true;
+  if (!clause.namedBindings) return false;
+  if (ts.isNamespaceImport(clause.namedBindings)) {
+    return clause.namedBindings.name.text === name;
+  }
+  if (ts.isNamedImports(clause.namedBindings)) {
+    for (const el of clause.namedBindings.elements) {
+      if (el.name.text === name) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * True when a `var` declaration of `name` appears in this function body (not in
+ * a nested function). `var` is function-scoped, so it shadows imports for the
+ * whole function even when declared in a nested block after the use site.
+ * @param {ts.Node} fnNode
+ * @param {string} name
+ * @returns {boolean}
+ */
+function functionBodyHasVarBinding(fnNode, name) {
+  const body = "body" in fnNode ? fnNode.body : undefined;
+  if (!body) return false;
+  let found = false;
+  function walk(n) {
+    if (found) return;
+    if (
+      n !== fnNode &&
+      (ts.isFunctionDeclaration(n) ||
+        ts.isFunctionExpression(n) ||
+        ts.isArrowFunction(n) ||
+        ts.isMethodDeclaration(n) ||
+        ts.isConstructorDeclaration(n))
+    ) {
+      return;
+    }
+    if (ts.isVariableDeclarationList(n) && (n.flags & ts.NodeFlags.Let) === 0 && (n.flags & ts.NodeFlags.Const) === 0) {
+      // Not let/const → var (or legacy).
+      if (variableDeclarationListBinds(n, name)) {
+        found = true;
+        return;
+      }
+    }
+    ts.forEachChild(n, walk);
+  }
+  walk(body);
+  return found;
+}
+
+/**
+ * True when a function-like node introduces a binding for `name` that is in
+ * scope for uses in its body (parameters, function name, and function-scoped var).
+ * @param {ts.Node} node
+ * @param {string} name
+ * @param {ts.Node} childFromUse — child on the path from the use site
+ * @returns {boolean}
+ */
+function functionLikeShadowsName(node, name, childFromUse) {
+  const isFn =
+    ts.isFunctionDeclaration(node) ||
+    ts.isFunctionExpression(node) ||
+    ts.isArrowFunction(node) ||
+    ts.isMethodDeclaration(node) ||
+    ts.isConstructorDeclaration(node) ||
+    ts.isGetAccessorDeclaration(node) ||
+    ts.isSetAccessorDeclaration(node);
+  if (!isFn) return false;
+
+  // Function name is in scope inside the body (not on the name node itself).
+  if (
+    (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node)) &&
+    node.name &&
+    node.name.text === name &&
+    childFromUse !== node.name
+  ) {
+    return true;
+  }
+
+  const params = "parameters" in node ? node.parameters : undefined;
+  if (params) {
+    for (const p of params) {
+      if (bindingNameBinds(p.name, name)) return true;
+    }
+  }
+
+  if (functionBodyHasVarBinding(node, name)) return true;
+  return false;
+}
+
+/**
+ * True when an enclosing AST node introduces a nearer lexical binding for `name`
+ * than the module import — parameters, catch bindings, function/class names,
+ * block-local declarations, and for-loop variables.
+ * @param {ts.Node} node
+ * @param {string} name
+ * @param {ts.Node} childFromUse
+ * @returns {boolean}
+ */
+function enclosingNodeShadowsImport(node, name, childFromUse) {
+  if (functionLikeShadowsName(node, name, childFromUse)) return true;
+
+  if (ts.isCatchClause(node) && node.variableDeclaration) {
+    if (bindingNameBinds(node.variableDeclaration.name, name)) return true;
+  }
+
+  if (
+    (ts.isClassDeclaration(node) || ts.isClassExpression(node)) &&
+    node.name &&
+    node.name.text === name &&
+    childFromUse !== node.name
+  ) {
+    return true;
+  }
+
+  // for (const name of/in …) / for (let name = …; …)
+  if (ts.isForStatement(node) && node.initializer && ts.isVariableDeclarationList(node.initializer)) {
+    if (variableDeclarationListBinds(node.initializer, name)) return true;
+  }
+  if (
+    (ts.isForInStatement(node) || ts.isForOfStatement(node)) &&
+    ts.isVariableDeclarationList(node.initializer)
+  ) {
+    if (variableDeclarationListBinds(node.initializer, name)) return true;
+  }
+
+  // Block / module body / case clause statement lists (lexical const/let/function/class).
+  if (ts.isBlock(node) || ts.isModuleBlock(node)) {
+    for (const stmt of node.statements) {
+      if (statementIntroducesLocalBinding(stmt, name)) return true;
+    }
+  }
+  if (ts.isCaseClause(node) || ts.isDefaultClause(node)) {
+    for (const stmt of node.statements) {
+      if (statementIntroducesLocalBinding(stmt, name)) return true;
+    }
+  }
+
+  // Module scope: only non-import bindings shadow the import (rare / illegal collisions
+  // still fail closed). Import bindings of the same name are the proven binding.
+  if (ts.isSourceFile(node)) {
+    for (const stmt of node.statements) {
+      if (importDeclarationBinds(stmt, name)) continue;
+      if (statementIntroducesLocalBinding(stmt, name)) return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Prove that an identifier at a use site is not lexically shadowed by any nearer
+ * binding than the module scope. Used together with import-name sets: a name being
+ * imported as `fs` / `constants` is necessary but not sufficient.
+ * Fail closed for parameters, locals, catch bindings, function/class names, and
+ * for-loop bindings that rebind the same identifier text.
+ * @param {ts.Identifier} ident
+ * @returns {boolean}
+ */
+function isUnshadowedImportLocal(ident) {
+  const name = ident.text;
+  let child = ident;
+  let node = ident.parent;
+  while (node) {
+    if (enclosingNodeShadowsImport(node, name, child)) {
+      return false;
+    }
+    if (ts.isSourceFile(node)) {
+      return true;
+    }
+    child = node;
+    node = node.parent;
+  }
+  return false;
+}
+
+/**
+ * True when expr is statically Node's `fs` module namespace (import or require).
+ * Import local names are accepted only when the identifier at the use site is
+ * lexically unshadowed (shared provenance path).
+ * @param {ts.Expression} expr
+ * @param {Map<string, ts.Expression>} bindings
+ * @param {{ fsConstantsLocals: Set<string>, fsNsAliases: Set<string> }} provenance
+ * @param {Set<string>} visiting
+ * @returns {boolean}
+ */
+function isProvenFsNamespace(expr, bindings, provenance, visiting = new Set()) {
+  const cur = unwrapStaticExpr(expr);
+  if (ts.isIdentifier(cur)) {
+    // Import provenance requires lexical unshadowing at this exact use site.
+    if (provenance.fsNsAliases.has(cur.text) && isUnshadowedImportLocal(cur)) {
+      return true;
+    }
+    if (visiting.has(cur.text)) return false;
+    const init = bindings.get(cur.text);
+    if (!init) return false;
+    visiting.add(cur.text);
+    const ok = isProvenFsNamespace(init, bindings, provenance, visiting);
+    visiting.delete(cur.text);
+    return ok;
+  }
+  // require("fs") / require("node:fs")
+  if (
+    ts.isCallExpression(cur) &&
+    ts.isIdentifier(cur.expression) &&
+    cur.expression.text === "require"
+  ) {
+    const arg0 = cur.arguments[0];
+    if (arg0 && ts.isStringLiteral(arg0) && normalizeModuleSpec(arg0.text) === "fs") {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Resolve expression to a trusted `fs` / `fs.promises` namespace kind, or null.
+ * Tracks unshadowed import/namespace bindings, require("fs"), simple local
+ * aliases (`const f = fs; const g = f`), and `ns.promises` / `ns["promises"]`.
+ * Parameters and other non-proven roots return null (no trusted provenance).
+ *
+ * @param {ts.Expression} expr
+ * @param {Map<string, ts.Expression>} bindings
+ * @param {{ fsConstantsLocals: Set<string>, fsNsAliases: Set<string> }} provenance
+ * @param {Map<string, "fs" | "fs.promises" | "child_process">} nsAliases
+ * @param {Set<string>} visiting
+ * @returns {"fs" | "fs.promises" | null}
+ */
+function resolveTrustedFsNsKind(
+  expr,
+  bindings,
+  provenance,
+  nsAliases,
+  visiting = new Set(),
+) {
+  const cur = unwrapStaticExpr(expr);
+  if (ts.isIdentifier(cur)) {
+    const importKind = nsAliases.get(cur.text);
+    if (
+      (importKind === "fs" || importKind === "fs.promises") &&
+      isUnshadowedImportLocal(cur)
+    ) {
+      return importKind;
+    }
+    // Also accept default/namespace fs imports recorded only in flag provenance
+    // when nsAliases missed an edge (should be rare); still require unshadowed.
+    if (
+      importKind !== "fs" &&
+      importKind !== "fs.promises" &&
+      provenance.fsNsAliases.has(cur.text) &&
+      isUnshadowedImportLocal(cur)
+    ) {
+      return "fs";
+    }
+    if (visiting.has(cur.text)) return null;
+    const init = bindings.get(cur.text);
+    if (!init) return null;
+    visiting.add(cur.text);
+    const kind = resolveTrustedFsNsKind(init, bindings, provenance, nsAliases, visiting);
+    visiting.delete(cur.text);
+    return kind;
+  }
+  if (
+    ts.isCallExpression(cur) &&
+    ts.isIdentifier(cur.expression) &&
+    cur.expression.text === "require"
+  ) {
+    const arg0 = cur.arguments[0];
+    if (arg0 && ts.isStringLiteral(arg0)) {
+      const bare = normalizeModuleSpec(arg0.text);
+      if (bare === "fs") return "fs";
+      if (bare === "fs/promises") return "fs.promises";
+    }
+    return null;
+  }
+  if (ts.isPropertyAccessExpression(cur) && cur.name.text === "promises") {
+    const base = resolveTrustedFsNsKind(
+      cur.expression,
+      bindings,
+      provenance,
+      nsAliases,
+      visiting,
+    );
+    return base === "fs" ? "fs.promises" : null;
+  }
+  if (ts.isElementAccessExpression(cur)) {
+    const arg = cur.argumentExpression;
+    if (arg && ts.isStringLiteral(arg) && arg.text === "promises") {
+      const base = resolveTrustedFsNsKind(
+        cur.expression,
+        bindings,
+        provenance,
+        nsAliases,
+        visiting,
+      );
+      return base === "fs" ? "fs.promises" : null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Leftmost root of a property/element access chain (after unwrap).
+ * @param {ts.Expression} expr
+ * @returns {ts.Expression}
+ */
+function leftmostMemberRoot(expr) {
+  let cur = unwrapStaticExpr(expr);
+  for (;;) {
+    if (ts.isPropertyAccessExpression(cur)) {
+      cur = unwrapStaticExpr(cur.expression);
+      continue;
+    }
+    if (ts.isElementAccessExpression(cur)) {
+      cur = unwrapStaticExpr(cur.expression);
+      continue;
+    }
+    return cur;
+  }
+}
+
+/**
+ * Collect simple const/let/var bindings visible at `node`, merging module scope
+ * into nested callables when the local scope does not rebind a name.
+ * @param {ts.Node} node
+ * @param {ts.SourceFile} sf
+ * @returns {Map<string, ts.Expression>}
+ */
+function bindingsForNode(node, sf) {
+  const scope = enclosingCallableOrSourceFile(node);
+  const bindings = collectSimpleBindings(scope);
+  if (!ts.isSourceFile(scope)) {
+    const moduleBindings = collectSimpleBindings(sf);
+    for (const [k, v] of moduleBindings) {
+      if (!bindings.has(k)) bindings.set(k, v);
+    }
+  }
+  return bindings;
+}
+
+/**
+ * Original property name for an object binding element, if statically known.
+ * @param {ts.BindingElement} el
+ * @returns {string | null}
+ */
+function bindingElementStaticPropertyName(el) {
+  if (el.dotDotDotToken) return null;
+  if (el.propertyName) {
+    if (ts.isIdentifier(el.propertyName)) return el.propertyName.text;
+    if (ts.isStringLiteral(el.propertyName) || ts.isNoSubstitutionTemplateLiteral(el.propertyName)) {
+      return el.propertyName.text;
+    }
+    return null;
+  }
+  if (ts.isIdentifier(el.name)) return el.name.text;
+  return null;
+}
+
+/**
+ * Collect destructured fs method aliases under a scope root
+ * (`const { writeFileSync } = fs`, `const { writeFileSync: write } = f`).
+ * @param {ts.Node} scopeRoot
+ * @param {Map<string, ts.Expression>} bindings
+ * @param {{ fsConstantsLocals: Set<string>, fsNsAliases: Set<string> }} provenance
+ * @param {Map<string, "fs" | "fs.promises" | "child_process">} nsAliases
+ * @returns {Map<string, { original: string, nsKind: "fs" | "fs.promises" }>}
+ */
+function collectDestructuredFsMethodAliases(scopeRoot, bindings, provenance, nsAliases) {
+  /** @type {Map<string, { original: string, nsKind: "fs" | "fs.promises" }>} */
+  const map = new Map();
+  function visit(node) {
+    if (
+      node !== scopeRoot &&
+      (ts.isFunctionDeclaration(node) ||
+        ts.isFunctionExpression(node) ||
+        ts.isArrowFunction(node) ||
+        ts.isMethodDeclaration(node) ||
+        ts.isConstructorDeclaration(node))
+    ) {
+      return;
+    }
+    if (
+      ts.isVariableDeclaration(node) &&
+      node.initializer &&
+      ts.isObjectBindingPattern(node.name)
+    ) {
+      const nsKind = resolveTrustedFsNsKind(
+        node.initializer,
+        bindings,
+        provenance,
+        nsAliases,
+      );
+      if (nsKind === "fs" || nsKind === "fs.promises") {
+        for (const el of node.name.elements) {
+          if (ts.isOmittedExpression(el) || !ts.isBindingElement(el)) continue;
+          if (!ts.isIdentifier(el.name)) continue;
+          const original = bindingElementStaticPropertyName(el);
+          if (!original) continue;
+          if (
+            FORBIDDEN_FS_METHODS.has(original) ||
+            CONDITIONAL_OPEN_METHODS.has(original)
+          ) {
+            map.set(el.name.text, { original, nsKind });
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(scopeRoot);
+  return map;
+}
+
+/**
+ * True when some binding of `name` is nearer than module scope (parameter,
+ * catch, block-local, for-loop, nested function name, etc.). Module-level
+ * const/let/function bindings are the target binding for local aliases and
+ * are not treated as shadows here (unlike import-local checks).
+ * @param {ts.Identifier} ident
+ * @returns {boolean}
+ */
+function isShadowedRelativeToModuleBinding(ident) {
+  const name = ident.text;
+  let child = ident;
+  let node = ident.parent;
+  while (node) {
+    if (ts.isSourceFile(node)) {
+      return false;
+    }
+    if (functionLikeShadowsName(node, name, child)) {
+      return true;
+    }
+    if (ts.isCatchClause(node) && node.variableDeclaration) {
+      if (bindingNameBinds(node.variableDeclaration.name, name)) return true;
+    }
+    if (
+      (ts.isClassDeclaration(node) || ts.isClassExpression(node)) &&
+      node.name &&
+      node.name.text === name &&
+      child !== node.name
+    ) {
+      return true;
+    }
+    if (ts.isForStatement(node) && node.initializer && ts.isVariableDeclarationList(node.initializer)) {
+      if (variableDeclarationListBinds(node.initializer, name)) return true;
+    }
+    if (
+      (ts.isForInStatement(node) || ts.isForOfStatement(node)) &&
+      ts.isVariableDeclarationList(node.initializer)
+    ) {
+      if (variableDeclarationListBinds(node.initializer, name)) return true;
+    }
+    if (ts.isBlock(node) || ts.isModuleBlock(node)) {
+      for (const stmt of node.statements) {
+        if (statementIntroducesLocalBinding(stmt, name)) return true;
+      }
+    }
+    if (ts.isCaseClause(node) || ts.isDefaultClause(node)) {
+      for (const stmt of node.statements) {
+        if (statementIntroducesLocalBinding(stmt, name)) return true;
+      }
+    }
+    child = node;
+    node = node.parent;
+  }
+  return false;
+}
+
+/**
+ * Resolve a bare identifier callee to a destructured (or simple property-copy)
+ * fs method alias visible at the use site. Returns null when the name is a
+ * simple local rebinding, a parameter/catch shadow, or otherwise unproven.
+ * @param {ts.Identifier} ident
+ * @param {ts.Node} callNode
+ * @param {ts.SourceFile} sf
+ * @param {Map<string, ts.Expression>} bindings
+ * @param {{ fsConstantsLocals: Set<string>, fsNsAliases: Set<string> }} provenance
+ * @param {Map<string, "fs" | "fs.promises" | "child_process">} nsAliases
+ * @returns {{ original: string, nsKind: "fs" | "fs.promises" } | null}
+ */
+function resolveLocalFsMethodAlias(
+  ident,
+  callNode,
+  sf,
+  bindings,
+  provenance,
+  nsAliases,
+) {
+  const name = ident.text;
+
+  // Simple `const write = fs.writeFileSync` / `const write = f.writeFileSync`.
+  // A nearer simple binding always wins over outer destructuring.
+  if (bindings.has(name)) {
+    const init = unwrapStaticExpr(bindings.get(name));
+    if (ts.isPropertyAccessExpression(init) || ts.isElementAccessExpression(init)) {
+      const method = staticTerminalName(init);
+      const base = propertyAccessBase(init);
+      if (
+        method &&
+        base &&
+        method !== "\0computed" &&
+        (FORBIDDEN_FS_METHODS.has(method) || CONDITIONAL_OPEN_METHODS.has(method))
+      ) {
+        const nsKind = resolveTrustedFsNsKind(base, bindings, provenance, nsAliases);
+        if (nsKind === "fs" || nsKind === "fs.promises") {
+          return { original: method, nsKind };
+        }
+      }
+    }
+    // Identifier rebound to a non-method expression — not a method alias.
+    return null;
+  }
+
+  // Nearest-scope destructuring: function body first, then module.
+  const scope = enclosingCallableOrSourceFile(callNode);
+  if (!ts.isSourceFile(scope)) {
+    const localMap = collectDestructuredFsMethodAliases(
+      scope,
+      bindings,
+      provenance,
+      nsAliases,
+    );
+    if (localMap.has(name)) return localMap.get(name) ?? null;
+  }
+
+  // Parameter / catch / block / for shadows must not inherit module destructuring.
+  if (isShadowedRelativeToModuleBinding(ident)) {
+    return null;
+  }
+
+  const moduleBindings = collectSimpleBindings(sf);
+  const moduleMap = collectDestructuredFsMethodAliases(
+    sf,
+    moduleBindings,
+    provenance,
+    nsAliases,
+  );
+  return moduleMap.get(name) ?? null;
+}
+
+/**
+ * True when expr is statically Node's `fs.constants` object.
+ * Accepts unshadowed `import { constants as c } from "node:fs"`, unshadowed
+ * `fs.constants`, and simple aliases of those forms. Rejects object literals,
+ * parameters, shadowed import locals, and unknown namespaces even when a later
+ * property is named O_RDONLY.
+ * @param {ts.Expression} expr
+ * @param {Map<string, ts.Expression>} bindings
+ * @param {{ fsConstantsLocals: Set<string>, fsNsAliases: Set<string> }} provenance
+ * @param {Set<string>} visiting
+ * @returns {boolean}
+ */
+function isProvenFsConstantsRoot(expr, bindings, provenance, visiting = new Set()) {
+  const cur = unwrapStaticExpr(expr);
+  if (ts.isIdentifier(cur)) {
+    // Import provenance requires lexical unshadowing at this exact use site.
+    if (provenance.fsConstantsLocals.has(cur.text) && isUnshadowedImportLocal(cur)) {
+      return true;
+    }
+    if (visiting.has(cur.text)) return false;
+    const init = bindings.get(cur.text);
+    if (!init) return false;
+    visiting.add(cur.text);
+    const ok = isProvenFsConstantsRoot(init, bindings, provenance, visiting);
+    visiting.delete(cur.text);
+    return ok;
+  }
+  // fs.constants / require("fs").constants / ns["constants"]
+  if (ts.isPropertyAccessExpression(cur) && cur.name.text === "constants") {
+    return isProvenFsNamespace(cur.expression, bindings, provenance, visiting);
+  }
+  if (ts.isElementAccessExpression(cur)) {
+    const arg = cur.argumentExpression;
+    if (arg && ts.isStringLiteral(arg) && arg.text === "constants") {
+      return isProvenFsNamespace(cur.expression, bindings, provenance, visiting);
+    }
+  }
+  return false;
+}
+
+/**
+ * Base expression of a property/element access, if any.
+ * @param {ts.Expression} expr
+ * @returns {ts.Expression | null}
+ */
+function propertyAccessBase(expr) {
+  const cur = unwrapStaticExpr(expr);
+  if (ts.isPropertyAccessExpression(cur)) return cur.expression;
+  if (ts.isElementAccessExpression(cur)) return cur.expression;
+  return null;
+}
+
+/**
+ * True when `expr` is the immediate callee expression of a CallExpression
+ * (direct call). Parenthesized / sequenced / bound / Reflect.apply forms are
+ * not direct callees of the capability itself.
+ * @param {ts.Expression} expr
+ * @returns {boolean}
+ */
+function isDirectCallExpressionCallee(expr) {
+  const parent = expr.parent;
+  return Boolean(parent && ts.isCallExpression(parent) && parent.expression === expr);
+}
+
+/**
+ * True when method is an unconditionally forbidden fs mutation or a
+ * conditional open surface that requires direct proven-namespace call policy.
+ * @param {string} method
+ * @returns {boolean}
+ */
+function isFsCapabilityMethod(method) {
+  return FORBIDDEN_FS_METHODS.has(method) || CONDITIONAL_OPEN_METHODS.has(method);
+}
+
+/**
+ * Collect simple const/let/var bindings (name → initializer) under a scope root.
+ * @param {ts.Node} scopeRoot
+ * @returns {Map<string, ts.Expression>}
+ */
+function collectSimpleBindings(scopeRoot) {
+  /** @type {Map<string, ts.Expression>} */
+  const map = new Map();
+  function visit(node) {
+    // Do not descend into nested function bodies (their bindings are separate).
+    if (
+      node !== scopeRoot &&
+      (ts.isFunctionDeclaration(node) ||
+        ts.isFunctionExpression(node) ||
+        ts.isArrowFunction(node) ||
+        ts.isMethodDeclaration(node) ||
+        ts.isConstructorDeclaration(node))
+    ) {
+      return;
+    }
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      map.set(node.name.text, node.initializer);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(scopeRoot);
+  return map;
+}
+
+/**
+ * @param {ts.Node} node
+ * @returns {ts.Node}
+ */
+function enclosingCallableOrSourceFile(node) {
+  let cur = node.parent;
+  while (cur) {
+    if (
+      ts.isFunctionDeclaration(cur) ||
+      ts.isFunctionExpression(cur) ||
+      ts.isArrowFunction(cur) ||
+      ts.isMethodDeclaration(cur)
+    ) {
+      return cur;
+    }
+    if (ts.isSourceFile(cur)) return cur;
+    cur = cur.parent;
+  }
+  return node.getSourceFile();
+}
+
+/**
+ * True when every return of a same-file named function is a read-only open-flags expression.
+ * @param {string} name
+ * @param {ts.SourceFile} sf
+ * @param {{ fsConstantsLocals: Set<string>, fsNsAliases: Set<string> }} provenance
+ * @param {Set<string>} visiting
+ * @returns {boolean}
+ */
+function namedFunctionReturnsOnlyReadonlyFlags(name, sf, provenance, visiting) {
+  if (visiting.has(name)) return false;
+  visiting.add(name);
+  /** @type {ts.FunctionDeclaration[]} */
+  const decls = [];
+  function find(node) {
+    if (ts.isFunctionDeclaration(node) && node.name && node.name.text === name && node.body) {
+      decls.push(node);
+    }
+    ts.forEachChild(node, find);
+  }
+  find(sf);
+  if (decls.length === 0) {
+    visiting.delete(name);
+    return false;
+  }
+  for (const decl of decls) {
+    const bindings = collectSimpleBindings(decl);
+    // Merge module-level bindings so helpers can close over imports / consts.
+    const moduleBindings = collectSimpleBindings(sf);
+    for (const [k, v] of moduleBindings) {
+      if (!bindings.has(k)) bindings.set(k, v);
+    }
+    /** @type {ts.Expression[]} */
+    const returns = [];
+    function walkReturns(node) {
+      if (
+        node !== decl &&
+        (ts.isFunctionDeclaration(node) ||
+          ts.isFunctionExpression(node) ||
+          ts.isArrowFunction(node) ||
+          ts.isMethodDeclaration(node))
+      ) {
+        return;
+      }
+      if (ts.isReturnStatement(node) && node.expression) {
+        returns.push(node.expression);
+      }
+      ts.forEachChild(node, walkReturns);
+    }
+    walkReturns(decl);
+    if (returns.length === 0) {
+      visiting.delete(name);
+      return false;
+    }
+    for (const ret of returns) {
+      if (!isStaticallyReadonlyOpenFlags(ret, bindings, sf, provenance, visiting)) {
+        visiting.delete(name);
+        return false;
+      }
+    }
+  }
+  visiting.delete(name);
+  return true;
+}
+
+/**
+ * Statically prove that an open flags expression cannot grant write capability.
+ * Fail closed on unknown shapes (identifiers without binding, numerics, objects, …).
+ * Read-only flag properties are accepted only when their object root is proven
+ * to be Node `fs.constants` (shared flag-provenance evaluator).
+ * @param {ts.Expression | undefined} expr
+ * @param {Map<string, ts.Expression>} bindings
+ * @param {ts.SourceFile} sf
+ * @param {{ fsConstantsLocals: Set<string>, fsNsAliases: Set<string> }} provenance
+ * @param {Set<string>} visitingFns
+ * @returns {boolean}
+ */
+function isStaticallyReadonlyOpenFlags(
+  expr,
+  bindings,
+  sf,
+  provenance,
+  visitingFns = new Set(),
+) {
+  if (!expr) {
+    // open(path) defaults to read-only "r".
+    return true;
+  }
+  if (ts.isParenthesizedExpression(expr)) {
+    return isStaticallyReadonlyOpenFlags(
+      expr.expression,
+      bindings,
+      sf,
+      provenance,
+      visitingFns,
+    );
+  }
+  // `expr as T` and legacy `<T>expr` both expose `.expression`.
+  if (
+    ts.isAsExpression(expr) ||
+    ts.isNonNullExpression(expr) ||
+    (ts.isTypeAssertionExpression && ts.isTypeAssertionExpression(expr))
+  ) {
+    return isStaticallyReadonlyOpenFlags(
+      expr.expression,
+      bindings,
+      sf,
+      provenance,
+      visitingFns,
+    );
+  }
+  if (expr.kind === ts.SyntaxKind.TypeAssertionExpression && "expression" in expr) {
+    return isStaticallyReadonlyOpenFlags(
+      /** @type {ts.TypeAssertion} */ (expr).expression,
+      bindings,
+      sf,
+      provenance,
+      visitingFns,
+    );
+  }
+  if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
+    return READ_ONLY_STRING_MODES.has(expr.text);
+  }
+  if (ts.isNumericLiteral(expr)) {
+    // Numeric flags are not proven read-only (O_RDONLY is 0 on some platforms,
+    // but any other value may enable write); fail closed.
+    return false;
+  }
+  if (ts.isPrefixUnaryExpression(expr)) {
+    return false;
+  }
+  if (ts.isBinaryExpression(expr) && expr.operatorToken.kind === ts.SyntaxKind.BarToken) {
+    return (
+      isStaticallyReadonlyOpenFlags(expr.left, bindings, sf, provenance, visitingFns) &&
+      isStaticallyReadonlyOpenFlags(expr.right, bindings, sf, provenance, visitingFns)
+    );
+  }
+  if (ts.isConditionalExpression(expr)) {
+    return (
+      isStaticallyReadonlyOpenFlags(expr.whenTrue, bindings, sf, provenance, visitingFns) &&
+      isStaticallyReadonlyOpenFlags(expr.whenFalse, bindings, sf, provenance, visitingFns)
+    );
+  }
+  if (ts.isIdentifier(expr)) {
+    if (expr.text === "undefined") return true;
+    const init = bindings.get(expr.text);
+    if (!init) return false;
+    return isStaticallyReadonlyOpenFlags(init, bindings, sf, provenance, visitingFns);
+  }
+  if (ts.isPropertyAccessExpression(expr) || ts.isElementAccessExpression(expr)) {
+    const term = staticTerminalName(expr);
+    if (!term || term === "\0computed") return false;
+    if (WRITE_CAPABLE_FLAG_NAMES.has(term)) return false;
+    if (READ_ONLY_FLAG_NAMES.has(term)) {
+      // Shared flag-provenance evaluator: terminal name alone is never enough.
+      const base = propertyAccessBase(expr);
+      if (!base) return false;
+      return isProvenFsConstantsRoot(base, bindings, provenance);
+    }
+    return false;
+  }
+  if (ts.isCallExpression(expr) && ts.isIdentifier(expr.expression)) {
+    // Same-file helper that only returns allowlisted read-only flag expressions
+    // (production path-safety openReadNoFollowFlags pattern).
+    return namedFunctionReturnsOnlyReadonlyFlags(
+      expr.expression.text,
+      sf,
+      provenance,
+      visitingFns,
+    );
+  }
+  // Object-form options, spreads, await, etc. — fail closed.
+  return false;
+}
+
+/**
+ * @param {string} rel
+ * @param {string} methodLabel
+ * @param {ts.Expression | undefined} flagsExpr
+ * @param {ts.Node} callNode
+ * @param {ts.SourceFile} sf
+ * @param {{ fsConstantsLocals: Set<string>, fsNsAliases: Set<string> }} provenance
+ * @returns {string | null} violation message or null if allowed
+ */
+function checkOpenCallFlags(rel, methodLabel, flagsExpr, callNode, sf, provenance) {
+  const scope = enclosingCallableOrSourceFile(callNode);
+  const bindings = collectSimpleBindings(scope);
+  // Merge module-level bindings for nested functions (helpers often close over imports).
+  if (!ts.isSourceFile(scope)) {
+    const moduleBindings = collectSimpleBindings(sf);
+    for (const [k, v] of moduleBindings) {
+      if (!bindings.has(k)) bindings.set(k, v);
+    }
+  }
+  if (isStaticallyReadonlyOpenFlags(flagsExpr, bindings, sf, provenance)) {
+    return null;
+  }
+  return `${rel}: fs open without statically provable read-only flags ('${methodLabel}')`;
 }
 
 /**
@@ -206,6 +1279,8 @@ function scanSourceText(file, text, rel) {
   /** @type {string[]} */
   const violations = [];
   const sf = ts.createSourceFile(file, text, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
+  // Import-level provenance for open-flag property roots (fs.constants only).
+  const flagProvenance = collectFsFlagProvenance(sf);
 
   /** Names bound to fs / fs.promises namespaces or default imports. */
   /** @type {Map<string, "fs" | "fs.promises" | "child_process">} */
@@ -245,6 +1320,12 @@ function scanSourceText(file, text, rel) {
             } else if (FORBIDDEN_FS_METHODS.has(original)) {
               namedFsMethods.set(local, original);
               violations.push(`${rel}: forbidden fs import '${original}' as '${local}'`);
+            } else if (CONDITIONAL_OPEN_METHODS.has(original)) {
+              // Named open/openSync import is an unproven open capability extract.
+              namedFsMethods.set(local, original);
+              violations.push(
+                `${rel}: forbidden unproven fs open import '${original}' as '${local}'`,
+              );
             } else {
               namedFsMethods.set(local, original);
             }
@@ -282,11 +1363,160 @@ function scanSourceText(file, text, rel) {
   }
 
   /**
-   * @param {ts.Expression} callee
-   * @param {readonly ts.NodeArray<ts.Expression>} _args
+   * Apply fs method policy for a resolved namespace kind and method name.
+   * @param {"fs" | "fs.promises"} nsKind
+   * @param {string} method
+   * @param {string} displayRoot
+   * @param {readonly ts.Expression[] | undefined} args
+   * @param {ts.Node} callNode
    */
-  function checkCallOrNew(callee, isNew) {
-    // Direct identifier callees (eval, Function, fetch, named imports).
+  function checkFsMethod(nsKind, method, displayRoot, args, callNode) {
+    if (method === "\0computed") {
+      violations.push(`${rel}: computed fs method call (fail-closed)`);
+      return;
+    }
+    if (FORBIDDEN_FS_METHODS.has(method)) {
+      violations.push(`${rel}: forbidden fs mutation '${displayRoot}.${method}'`);
+      return;
+    }
+    if (CONDITIONAL_OPEN_METHODS.has(method)) {
+      // open(path, flags?) / openSync(path, flags?) — second arg is flags/mode string.
+      const flagsExpr = args && args.length >= 2 ? args[1] : undefined;
+      const msg = checkOpenCallFlags(
+        rel,
+        `${displayRoot}.${method}`,
+        flagsExpr,
+        callNode,
+        sf,
+        flagProvenance,
+      );
+      if (msg) violations.push(msg);
+    }
+  }
+
+  /**
+   * Report a property/element access that resolves to a forbidden mutation or
+   * open capability on a proven fs namespace, when it is not the direct callee
+   * of a CallExpression (call policy is owned by checkCallOrNew / checkFsMethod).
+   * @param {ts.PropertyAccessExpression | ts.ElementAccessExpression} access
+   */
+  function checkFsCapabilityReference(access) {
+    if (isDirectCallExpressionCallee(access)) {
+      return;
+    }
+    const refBindings = bindingsForNode(access, sf);
+    const base = propertyAccessBase(access);
+    if (!base) return;
+
+    let method = staticTerminalName(access);
+    if (method === null && ts.isElementAccessExpression(access)) {
+      // Non-literal computed key on a proven fs namespace: fail closed.
+      const nsKindComputed = resolveTrustedFsNsKind(
+        base,
+        refBindings,
+        flagProvenance,
+        nsAliases,
+      );
+      if (nsKindComputed === "fs" || nsKindComputed === "fs.promises") {
+        violations.push(`${rel}: computed fs capability reference (fail-closed)`);
+        return;
+      }
+      // require("fs")[dyn] via member chain root
+      const chain = resolveMemberChain(access);
+      if (
+        chain &&
+        chain.length >= 2 &&
+        (chain[0] === "\0require_fs" || chain[0] === "\0require_fs_promises") &&
+        chain[chain.length - 1] === "\0computed"
+      ) {
+        violations.push(`${rel}: computed fs capability reference (fail-closed)`);
+      }
+      return;
+    }
+    if (!method || method === "\0computed") {
+      if (method === "\0computed") {
+        const nsKindComputed = resolveTrustedFsNsKind(
+          base,
+          refBindings,
+          flagProvenance,
+          nsAliases,
+        );
+        if (nsKindComputed === "fs" || nsKindComputed === "fs.promises") {
+          violations.push(`${rel}: computed fs capability reference (fail-closed)`);
+        }
+      }
+      return;
+    }
+    if (!isFsCapabilityMethod(method)) {
+      return;
+    }
+
+    let nsKind = resolveTrustedFsNsKind(base, refBindings, flagProvenance, nsAliases);
+    if (nsKind !== "fs" && nsKind !== "fs.promises") {
+      // require("fs").writeFileSync / require("node:fs").promises.writeFile
+      const chain = resolveMemberChain(access);
+      if (chain && chain.length >= 2) {
+        if (chain[0] === "\0require_fs") {
+          if (chain.length >= 3 && chain[1] === "promises") {
+            nsKind = "fs.promises";
+            method = chain[2];
+          } else {
+            nsKind = "fs";
+            method = chain[1];
+          }
+        } else if (chain[0] === "\0require_fs_promises") {
+          nsKind = "fs.promises";
+          method = chain[1];
+        } else if (chain[0] === "\0nonliteral_require") {
+          violations.push(`${rel}: non-literal require capability reference (fail-closed)`);
+          return;
+        }
+      }
+    }
+    if (nsKind !== "fs" && nsKind !== "fs.promises") {
+      // Import-map fallback for unshadowed namespace roots only when expression
+      // root maps to fs (mirrors call-site fail-closed mutation policy).
+      const chain = resolveMemberChain(access);
+      if (chain && chain.length >= 2) {
+        const mapped = nsAliases.get(chain[0]);
+        if (mapped === "fs" || mapped === "fs.promises") {
+          nsKind = mapped;
+          if (nsKind === "fs" && chain.length >= 3 && chain[1] === "promises") {
+            nsKind = "fs.promises";
+            method = chain[2];
+          } else if (!(nsKind === "fs" && chain[1] === "promises")) {
+            method = chain[1];
+          } else {
+            return;
+          }
+        }
+      }
+    }
+    if (nsKind !== "fs" && nsKind !== "fs.promises") {
+      return;
+    }
+    if (!isFsCapabilityMethod(method)) {
+      return;
+    }
+    if (FORBIDDEN_FS_METHODS.has(method)) {
+      violations.push(`${rel}: forbidden fs capability reference '${method}'`);
+    } else {
+      violations.push(
+        `${rel}: forbidden unproven fs open capability reference '${method}'`,
+      );
+    }
+  }
+
+  /**
+   * @param {ts.Expression} callee
+   * @param {boolean} isNew
+   * @param {readonly ts.Expression[] | undefined} args
+   * @param {ts.Node} callNode
+   */
+  function checkCallOrNew(callee, isNew, args, callNode) {
+    const callBindings = bindingsForNode(callNode, sf);
+
+    // Direct identifier callees (eval, Function, fetch, named imports, local aliases).
     if (ts.isIdentifier(callee)) {
       const name = callee.text;
       if (FORBIDDEN_GLOBALS.has(name)) {
@@ -298,8 +1528,35 @@ function scanSourceText(file, text, rel) {
       if (name === "Function") {
         violations.push(`${rel}: forbidden Function constructor`);
       }
-      if (namedFsMethods.has(name) && FORBIDDEN_FS_METHODS.has(namedFsMethods.get(name))) {
-        violations.push(`${rel}: forbidden fs call '${name}'`);
+      if (namedFsMethods.has(name)) {
+        const original = namedFsMethods.get(name);
+        if (FORBIDDEN_FS_METHODS.has(original)) {
+          violations.push(`${rel}: forbidden fs call '${name}'`);
+        } else if (CONDITIONAL_OPEN_METHODS.has(original)) {
+          // open/openSync may only be a direct call through a proven namespace;
+          // a named import / local name is unproven even with read-only flags.
+          violations.push(`${rel}: forbidden unproven fs open call '${name}'`);
+        }
+      } else {
+        // Destructuring / property-copy aliases: const { writeFileSync } = fs;
+        // const { writeFileSync: write } = fs; const write = fs.writeFileSync;
+        const localAlias = resolveLocalFsMethodAlias(
+          callee,
+          callNode,
+          sf,
+          callBindings,
+          flagProvenance,
+          nsAliases,
+        );
+        if (localAlias) {
+          const { original } = localAlias;
+          if (FORBIDDEN_FS_METHODS.has(original)) {
+            violations.push(`${rel}: forbidden fs call '${name}'`);
+          } else if (CONDITIONAL_OPEN_METHODS.has(original)) {
+            // Extracted / property-copied open is unproven; do not accept flags.
+            violations.push(`${rel}: forbidden unproven fs open call '${name}'`);
+          }
+        }
       }
       if (
         namedChildMethods.has(name) &&
@@ -340,27 +1597,69 @@ function scanSourceText(file, text, rel) {
       }
     }
 
-    // Namespace fs / fs.promises / child_process
-    const root = chain[0];
-    const ns = nsAliases.get(root);
-    if (ns === "fs" || ns === "fs.promises") {
-      // fs.writeFile / fs.promises.writeFile / fsp.writeFile
-      if (ns === "fs" && chain.length >= 3 && chain[1] === "promises") {
-        const method = chain[2];
-        if (method === "\0computed" || FORBIDDEN_FS_METHODS.has(method)) {
-          violations.push(
-            `${rel}: forbidden fs.promises mutation '${method === "\0computed" ? "[computed]" : method}'`,
-          );
-        }
+    // Direct require("fs") / require("node:fs") member chains
+    if (chain[0] === "\0nonliteral_require") {
+      // Already reported at require() call; still fail closed on method chain.
+      if (chain.length >= 2) {
+        violations.push(`${rel}: non-literal require member call (fail-closed)`);
+      }
+      return;
+    }
+    if (chain[0] === "\0require_fs") {
+      if (chain.length >= 3 && chain[1] === "promises") {
+        checkFsMethod("fs.promises", chain[2], "require(...).promises", args, callNode);
       } else if (chain.length >= 2) {
-        const method = chain[1];
-        if (method === "\0computed") {
-          violations.push(`${rel}: computed fs method call (fail-closed)`);
-        } else if (FORBIDDEN_FS_METHODS.has(method)) {
-          violations.push(`${rel}: forbidden fs mutation '${root}.${method}'`);
+        checkFsMethod("fs", chain[1], "require(...)", args, callNode);
+      }
+      return;
+    }
+    if (chain[0] === "\0require_fs_promises") {
+      if (chain.length >= 2) {
+        checkFsMethod("fs.promises", chain[1], "require(...)", args, callNode);
+      }
+      return;
+    }
+
+    // Namespace fs / fs.promises — import locals, simple aliases, chained aliases.
+    // Prefer expression-level proven aliases (`const f = fs; f.writeFileSync`).
+    // Fall back to import-map names without requiring unshadowed use: a parameter
+    // that rebinds `fs` must not gain trusted *flag* provenance, but mutation /
+    // conditional-open policy still applies fail-closed (open flags then reject).
+    if (chain.length >= 2) {
+      const rootExpr = leftmostMemberRoot(callee);
+      let nsKind = resolveTrustedFsNsKind(
+        rootExpr,
+        callBindings,
+        flagProvenance,
+        nsAliases,
+      );
+      if (nsKind !== "fs" && nsKind !== "fs.promises") {
+        const mapped = nsAliases.get(chain[0]);
+        if (mapped === "fs" || mapped === "fs.promises") {
+          nsKind = mapped;
+        }
+      }
+      if (nsKind === "fs" || nsKind === "fs.promises") {
+        const rootLabel = chain[0];
+        if (nsKind === "fs" && chain.length >= 3 && chain[1] === "promises") {
+          checkFsMethod(
+            "fs.promises",
+            chain[2],
+            `${rootLabel}.promises`,
+            args,
+            callNode,
+          );
+        } else if (chain[1] === "promises" && chain.length === 2) {
+          // e.g. fs.promises as a value callee — not a method call.
+        } else if (!(nsKind === "fs" && chain[1] === "promises")) {
+          checkFsMethod(nsKind, chain[1], rootLabel, args, callNode);
         }
       }
     }
+
+    // child_process stays import-map based (no alias expansion in this ticket).
+    const root = chain[0];
+    const ns = nsAliases.get(root);
     if (ns === "child_process" && chain.length >= 2) {
       const method = chain[1];
       if (method === "\0computed" || FORBIDDEN_CHILD_METHODS.has(method)) {
@@ -424,7 +1723,7 @@ function scanSourceText(file, text, rel) {
         }
       }
 
-      checkCallOrNew(expr, false);
+      checkCallOrNew(expr, false, node.arguments, node);
     }
 
     // new WebSocket(...), new Function(...)
@@ -437,7 +1736,46 @@ function scanSourceText(file, text, rel) {
           violations.push(`${rel}: forbidden new ${node.expression.text}(...)`);
         }
       }
-      checkCallOrNew(node.expression, true);
+      checkCallOrNew(node.expression, true, node.arguments, node);
+    }
+
+    // Destructure / object-pattern extract of mutation or open capability from a
+    // proven fs namespace fails immediately (do not wait for a later call).
+    if (
+      ts.isVariableDeclaration(node) &&
+      node.initializer &&
+      ts.isObjectBindingPattern(node.name)
+    ) {
+      const bindBindings = bindingsForNode(node, sf);
+      const nsKind = resolveTrustedFsNsKind(
+        node.initializer,
+        bindBindings,
+        flagProvenance,
+        nsAliases,
+      );
+      if (nsKind === "fs" || nsKind === "fs.promises") {
+        for (const el of node.name.elements) {
+          if (ts.isOmittedExpression(el) || !ts.isBindingElement(el)) continue;
+          const original = bindingElementStaticPropertyName(el);
+          if (!original) continue;
+          if (FORBIDDEN_FS_METHODS.has(original)) {
+            violations.push(`${rel}: forbidden fs capability extract '${original}'`);
+          } else if (CONDITIONAL_OPEN_METHODS.has(original)) {
+            violations.push(
+              `${rel}: forbidden unproven fs open capability extract '${original}'`,
+            );
+          }
+        }
+      }
+    }
+
+    // Property / element capability references on proven fs namespaces:
+    // consume(fs.writeFileSync), Reflect.apply(fs.openSync, …), (0, fs.m)(),
+    // fs.openSync.bind(fs), array/object storage, etc. Direct call callees are
+    // owned by checkCallOrNew (mutation always forbidden; open only with
+    // proven read-only flags through a proven namespace).
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      checkFsCapabilityReference(node);
     }
 
     // Tagged template Function`...` rare — skip; eval identifier alone not enough.
@@ -548,6 +1886,201 @@ function runSelfTests() {
       source: `import { promises as fsp } from "node:fs";\nawait fsp.writeFile("x", "y");\n`,
     },
     {
+      name: "openSync write mode + writeSync",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst fd = fs.openSync("x", "w");\nfs.writeSync(fd, "y");\n`,
+    },
+    {
+      name: "require(fs).writeFileSync member chain",
+      expectViolation: true,
+      source: `require("fs").writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "require(node:fs).promises.writeFile member chain",
+      expectViolation: true,
+      source: `require("node:fs").promises.writeFile("x", "y");\n`,
+    },
+    {
+      name: "createWriteStream",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfs.createWriteStream("x");\n`,
+    },
+    {
+      name: "truncateSync",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfs.truncateSync("x", 0);\n`,
+    },
+    {
+      name: "ftruncateSync",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfs.ftruncateSync(1, 0);\n`,
+    },
+    {
+      name: "openSync unknown/nonliteral flags",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst mode = "w";\nfs.openSync("x", mode);\n`,
+    },
+    {
+      name: "openSync numeric flags fail-closed",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfs.openSync("x", 1);\n`,
+    },
+    {
+      name: "openSync O_WRONLY flag",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nimport { constants as c } from "node:fs";\nfs.openSync("x", c.O_WRONLY);\n`,
+    },
+    {
+      name: "openSync fake object O_RDONLY bypass",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst fake = { O_RDONLY: 1 };\nfs.openSync("x", fake.O_RDONLY);\n`,
+    },
+    {
+      name: "openSync unknown parameter O_RDONLY bypass",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfunction unsafe(fake: unknown) {\n  fs.openSync("x", (fake as any).O_RDONLY);\n}\n`,
+    },
+    {
+      name: "openSync object-literal O_RDONLY mapped to write-capable value",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst alias = { O_RDONLY: 1 };\nfs.openSync("x", alias.O_RDONLY);\n`,
+    },
+    {
+      name: "openSync parameter shadows imported constants alias",
+      expectViolation: true,
+      source: `import fs, { constants as c } from "node:fs";\nfunction unsafe(c: any) {\n  fs.openSync("x", c.O_RDONLY);\n}\n`,
+    },
+    {
+      name: "openSync parameter shadows imported fs namespace for constants",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfunction unsafe(fs: any) {\n  fs.openSync("x", fs.constants.O_RDONLY);\n}\n`,
+    },
+    {
+      name: "openSync local nested shadow of imported constants alias",
+      expectViolation: true,
+      source: `import fs, { constants as c } from "node:fs";\nfunction outer() {\n  const c = { O_RDONLY: 1 };\n  fs.openSync("x", c.O_RDONLY);\n}\n`,
+    },
+    {
+      name: "fs namespace simple alias writeFileSync",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst f = fs;\nf.writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "fs destructured writeFileSync call",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst { writeFileSync } = fs;\nwriteFileSync("x", "y");\n`,
+    },
+    {
+      name: "fs namespace simple alias openSync write mode",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst f = fs;\nf.openSync("x", "w");\n`,
+    },
+    {
+      name: "fs namespace chained alias writeFileSync",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst f = fs;\nconst g = f;\ng.writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "fs destructured renamed writeFileSync",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst { writeFileSync: write } = fs;\nwrite("x", "y");\n`,
+    },
+    {
+      name: "fs destructured openSync write mode",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst { openSync } = fs;\nopenSync("x", "w");\n`,
+    },
+    {
+      name: "fs alias from alias then destructure writeFileSync",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst f = fs;\nconst { writeFileSync } = f;\nwriteFileSync("x", "y");\n`,
+    },
+    {
+      name: "fs namespace alias re-shadowed does not grant mutation provenance",
+      expectViolation: false,
+      source: `import fs from "node:fs";\nconst f = fs;\nfunction outer() {\n  const f = { writeFileSync(_a: string, _b: string) {} };\n  f.writeFileSync("x", "y");\n}\n`,
+    },
+    {
+      name: "fs destructured alias re-shadowed by parameter still extracts capability",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst { writeFileSync } = fs;\nfunction outer(writeFileSync: (a: string, b: string) => void) {\n  writeFileSync("x", "y");\n}\n`,
+    },
+    {
+      name: "parameter-only writeFileSync name without fs extract is not a capability",
+      expectViolation: false,
+      source: `function outer(writeFileSync: (a: string, b: string) => void) {\n  writeFileSync("x", "y");\n}\n`,
+    },
+    {
+      name: "safe openSync via fs namespace alias O_RDONLY",
+      expectViolation: false,
+      source: `import fs from "node:fs";\nconst f = fs;\nconst fd = f.openSync("x", f.constants.O_RDONLY);\nf.closeSync(fd);\n`,
+    },
+    {
+      name: "destructured openSync even with string mode r is unproven",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst { openSync, closeSync } = fs;\nconst fd = openSync("x", "r");\ncloseSync(fd);\n`,
+    },
+    {
+      name: "capability reference writeFileSync passed as value",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfunction consume(_fn: unknown) {}\nconsume(fs.writeFileSync);\n`,
+    },
+    {
+      name: "Reflect.apply writeFileSync",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nReflect.apply(fs.writeFileSync, fs, ["x", "y"]);\n`,
+    },
+    {
+      name: "comma sequence writeFileSync call",
+      expectViolation: true,
+      source: `import fs from "node:fs";\n(0, fs.writeFileSync)("x", "y");\n`,
+    },
+    {
+      name: "openSync.bind then call write mode",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst o = fs.openSync.bind(fs);\no("x", "w");\n`,
+    },
+    {
+      name: "Reflect.apply openSync write mode",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nReflect.apply(fs.openSync, fs, ["x", "w"]);\n`,
+    },
+    {
+      name: "destructured writeFileSync passed as callback",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst { writeFileSync } = fs;\nsetTimeout(writeFileSync as any, 0);\n`,
+    },
+    {
+      name: "writeFileSync stored in array",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst bag = [fs.writeFileSync];\nvoid bag;\n`,
+    },
+    {
+      name: "writeFileSync stored in object",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst bag = { w: fs.writeFileSync };\nvoid bag;\n`,
+    },
+    {
+      name: "openSync capability reference only",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst o = fs.openSync;\nvoid o;\n`,
+    },
+    {
+      name: "named openSync import is unproven",
+      expectViolation: true,
+      source: `import { openSync } from "node:fs";\nvoid openSync;\n`,
+    },
+    {
+      name: "safe closeSync and readFileSync references",
+      expectViolation: false,
+      source: `import fs from "node:fs";\nconst r = fs.readFileSync;\nconst c = fs.closeSync;\nvoid r; void c;\n`,
+    },
+    {
+      name: "safe openSync via fs namespace alias string mode r",
+      expectViolation: false,
+      source: `import fs from "node:fs";\nconst f = fs;\nconst fd = f.openSync("x", "r");\nf.closeSync(fd);\n`,
+    },
+    {
       name: "literal dynamic import node:net",
       expectViolation: true,
       source: `const m = await import("node:net");\n`,
@@ -621,6 +2154,47 @@ function runSelfTests() {
       name: "safe fs read-only",
       expectViolation: false,
       source: `import fs from "node:fs";\nconst s = fs.readFileSync("x");\nconst st = fs.lstatSync("x");\nvoid s; void st;\n`,
+    },
+    {
+      name: "safe openSync string mode r",
+      expectViolation: false,
+      source: `import fs from "node:fs";\nconst fd = fs.openSync("x", "r");\nfs.closeSync(fd);\n`,
+    },
+    {
+      name: "safe openSync O_RDONLY only",
+      expectViolation: false,
+      source: `import fs from "node:fs";\nimport { constants as fsConstants } from "node:fs";\nconst fd = fs.openSync("x", fsConstants.O_RDONLY);\nfs.closeSync(fd);\n`,
+    },
+    {
+      name: "safe openSync fs.constants.O_RDONLY direct",
+      expectViolation: false,
+      source: `import fs from "node:fs";\nconst fd = fs.openSync("x", fs.constants.O_RDONLY);\nfs.closeSync(fd);\n`,
+    },
+    {
+      name: "safe openSync fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW",
+      expectViolation: false,
+      source: `import fs from "node:fs";\nimport { constants as fsConstants } from "node:fs";\nconst fd = fs.openSync("x", fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);\nfs.closeSync(fd);\n`,
+    },
+    {
+      name: "safe openSync O_RDONLY | O_NOFOLLOW production helper form",
+      expectViolation: false,
+      source: `import fs from "node:fs";
+import { constants as fsConstants } from "node:fs";
+function openReadNoFollowFlags(): number {
+  const base = fsConstants.O_RDONLY;
+  const nofollow =
+    "O_NOFOLLOW" in fsConstants
+      ? (fsConstants as NodeJS.Dict<number>).O_NOFOLLOW
+      : undefined;
+  if (typeof nofollow === "number") {
+    return base | nofollow;
+  }
+  return base;
+}
+const flags = openReadNoFollowFlags();
+const fd = fs.openSync("x", flags);
+fs.closeSync(fd);
+`,
     },
     {
       name: "safe path + url",
