@@ -1189,5 +1189,3 @@ function mapError(operation: LifecycleOperation, e: unknown): LifecycleResult {
   }
   return fail(operation, "INTERNAL", "Lifecycle operation failed.");
 }
-
-
