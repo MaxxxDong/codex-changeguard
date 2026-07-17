@@ -23,6 +23,11 @@ import {
   shouldClassifyCrashFamily,
 } from "./crash-family.js";
 import { probeConfigControlFiles } from "./config/index.js";
+import {
+  classifyPluginCacheMechanism,
+  observePluginCache,
+  PluginCacheError,
+} from "./plugin-cache/index.js";
 import type {
   DiagnosisResult,
   DiagnoseOptions,
@@ -177,6 +182,123 @@ export function diagnose(
       measured: true,
     },
   ];
+
+  // Ticket 08: plugin-cache inventory comparison (named candidates only).
+  try {
+    const obs = observePluginCache(targetReal);
+    if (obs) {
+      const cls = classifyPluginCacheMechanism(obs);
+      evidence.push({
+        kind: "plugin_cache_inventory",
+        detail: `instance_id=${obs.instance_id} cache_path_hash=${obs.cache_path_hash.slice(0, 16)}… generation=${obs.inventory.cache_identity.generation}`,
+        measured: true,
+      });
+      evidence.push({
+        kind: "plugin_cache_component_hash",
+        detail: `PLUGIN_CACHE_ENTRY sha256=${obs.cache_entry.measured_sha256}`,
+        measured: true,
+      });
+      evidence.push({
+        kind: "plugin_cache_manifest_relation",
+        detail: `required_version=${obs.manifest.required_version} required_generation=${obs.manifest.required_generation} trusted_verified=true`,
+        measured: true,
+      });
+      evidence.push({
+        kind: "plugin_cache_provenance",
+        detail: `rebuild_source=${obs.manifest.rebuild_source.alias} sha256=${obs.trusted_entry.measured_sha256.slice(0, 16)}…`,
+        measured: true,
+      });
+
+      if (cls.refused_dependency_install_conflation && cls.mechanism === null) {
+        evidence.push({
+          kind: "plugin_cache_not_dependency_install",
+          detail: cls.reason,
+          measured: true,
+        });
+      }
+
+      if (cls.mechanism) {
+        evidence.push({
+          kind: "plugin_cache_mechanism",
+          detail: `mechanism=${cls.mechanism}; ${cls.reason}`,
+          measured: true,
+        });
+        const outFp: IncidentFingerprint = {
+          ...declared,
+          artifact_hashes: [
+            {
+              path_alias: "PLUGIN_CACHE_ENTRY",
+              sha256: obs.cache_entry.measured_sha256,
+            },
+          ],
+          ast_signature_ids: [],
+          local_facts_digest: recomputeLocalFactsDigest(
+            declared,
+            obs.cache_entry.measured_sha256,
+            [],
+          ),
+        };
+        return baseResult({
+          ok: true,
+          diagnosis_state: "SOURCE_COMPONENT_LOCATED",
+          incident_fingerprint: outFp,
+          user_resolution: userReceipt(
+            "DIAGNOSIS_COMPLETE",
+            `Plugin-cache mechanism classified as ${cls.mechanism}. Not a generic dependency-install failure. No repair applied.`,
+          ),
+          upstream_contribution: upstreamReceipt(
+            "CANDIDATE_ONLY",
+            "Local plugin-cache mechanism evidence only; not an official root-cause assertion.",
+            [],
+          ),
+          evidence,
+          error_code: null,
+          error_message: null,
+        });
+      }
+
+      // Inventory present but no exclusive mechanism → INCONCLUSIVE (negative control path).
+      const outFpNc: IncidentFingerprint = {
+        ...declared,
+        artifact_hashes: [
+          {
+            path_alias: "PLUGIN_CACHE_ENTRY",
+            sha256: obs.cache_entry.measured_sha256,
+          },
+        ],
+        ast_signature_ids: [],
+        local_facts_digest: recomputeLocalFactsDigest(
+          declared,
+          obs.cache_entry.measured_sha256,
+          [],
+        ),
+      };
+      return baseResult({
+        ok: true,
+        diagnosis_state: "INCONCLUSIVE",
+        incident_fingerprint: outFpNc,
+        user_resolution: userReceipt(
+          "INCONCLUSIVE",
+          cls.refused_dependency_install_conflation
+            ? "Similar symptoms present but refused plugin-cache mechanism attribution (e.g. dependency-install failure)."
+            : "Plugin-cache inventory observed without exclusive mechanism evidence.",
+        ),
+        upstream_contribution: upstreamReceipt(
+          "NONE",
+          "No upstream contribution; evidence insufficient for candidate promotion.",
+          [],
+        ),
+        evidence,
+        error_code: null,
+        error_message: null,
+      });
+    }
+  } catch (e) {
+    if (e instanceof PluginCacheError) {
+      return fail(e.code, e.message);
+    }
+    // Fall through to protected-process path for unrelated targets.
+  }
 
   // Optional protected-process artifact — named candidate only.
   let measuredArtifactSha: string | null = null;

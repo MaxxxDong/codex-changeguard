@@ -21,6 +21,9 @@ export type RecoveryUserStatus =
 
 export type RepairOperationKind =
   | "exact_block_removal"
+  | "exact_replacement"
+  | "verified_resource_copy"
+  | "rename_to_quarantine"
   | "config_set"
   | "config_remove";
 
@@ -76,7 +79,8 @@ export interface CapsuleOperation {
    */
   expected_result_sha256: string;
   /**
-   * Config repair fields (Ticket 07). Always present; null for exact_block_removal.
+   * Config repair fields (Ticket 07). Always present; null for exact_block_removal
+   * and Ticket 08 plugin-cache operation kinds.
    * Secret values never appear — only redacted summaries / registered non-secret literals.
    */
   config_key: string | null;

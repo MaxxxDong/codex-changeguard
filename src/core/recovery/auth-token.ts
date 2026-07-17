@@ -3,6 +3,7 @@
  * Encodes capsule material + nonce/expiry; apply revalidates every live precondition.
  * No secret/signature — integrity is the deterministic authorization_binding digest.
  */
+import { PLUGIN_CACHE_CAPSULE_ID } from "../plugin-cache/limits.js";
 import { canonicalJson } from "./canonical.js";
 import type { RepairCapsule, RepairOperationKind } from "./types.js";
 import {
@@ -28,6 +29,10 @@ import {
   CONFIG_OVERRIDE_ALIAS,
   CONFIG_PRIMARY_ALIAS,
 } from "../config/limits.js";
+import {
+  pluginCacheOperationDigest,
+  PLUGIN_CACHE_OP,
+} from "./plugin-cache.js";
 
 export const AUTH_TOKEN_PREFIX = "cg1.";
 /** Hard bound on decoded token payload bytes (preview capsule is small). */
@@ -120,7 +125,8 @@ function requireBool(v: unknown): boolean | null {
 /**
  * Strict capsule validation: reject unknown/extra/mismatched fields.
  * Mutation-relevant paths and digests must match registered constants.
- * Supports protected-process (Ticket 02) and config set/remove (Ticket 07).
+ * Supports protected-process (Ticket 02), config set/remove (Ticket 07),
+ * and plugin-cache verified resource copy (Ticket 08).
  */
 export function strictValidateCapsule(raw: unknown): RepairCapsule {
   if (!isPlainObject(raw)) {
@@ -139,7 +145,8 @@ export function strictValidateCapsule(raw: unknown): RepairCapsule {
   }
   const isConfig = isConfigCapsuleId(capsule_id);
   const isPP = capsule_id === PP_CAPSULE_ID;
-  if (!isConfig && !isPP) {
+  const isPluginCache = capsule_id === PLUGIN_CACHE_CAPSULE_ID;
+  if (!isConfig && !isPP && !isPluginCache) {
     throw new AuthTokenError("AUTH_MALFORMED", "Capsule id refused.");
   }
   if (raw.trust_tier !== "T1_community") {
@@ -162,6 +169,9 @@ export function strictValidateCapsule(raw: unknown): RepairCapsule {
   if (isPP && target_path_alias !== PROTECTED_PROCESS_OP.target_path_alias) {
     throw new AuthTokenError("AUTH_MALFORMED", "Target path alias refused.");
   }
+  if (isPluginCache && target_path_alias !== PLUGIN_CACHE_OP.target_path_alias) {
+    throw new AuthTokenError("AUTH_MALFORMED", "Target path alias refused.");
+  }
   if (isConfig && !registeredConfigAliases().includes(target_path_alias)) {
     throw new AuthTokenError("AUTH_MALFORMED", "Target path alias refused.");
   }
@@ -173,7 +183,9 @@ export function strictValidateCapsule(raw: unknown): RepairCapsule {
   }
   const expected_pattern_count = isPP
     ? PROTECTED_PROCESS_OP.expected_pattern_count
-    : 1;
+    : isPluginCache
+      ? PLUGIN_CACHE_OP.expected_pattern_count
+      : 1;
   if (raw.expected_pattern_count !== expected_pattern_count) {
     throw new AuthTokenError("AUTH_MALFORMED", "Pattern count refused.");
   }
@@ -188,6 +200,10 @@ export function strictValidateCapsule(raw: unknown): RepairCapsule {
   const kind = op.kind as RepairOperationKind;
   if (isPP) {
     if (kind !== "exact_block_removal") {
+      throw new AuthTokenError("AUTH_MALFORMED", "Operation kind refused.");
+    }
+  } else if (isPluginCache) {
+    if (kind !== "verified_resource_copy") {
       throw new AuthTokenError("AUTH_MALFORMED", "Operation kind refused.");
     }
   } else {
@@ -217,13 +233,13 @@ export function strictValidateCapsule(raw: unknown): RepairCapsule {
     throw new AuthTokenError("AUTH_MALFORMED", "Operation digests refused.");
   }
 
-  // Config operation fields (null for protected-process).
+  // Config operation fields (null for protected-process and plugin-cache).
   let config_key: string | null = null;
   let old_value_type: string | null = null;
   let old_value_summary: string | null = null;
   let new_value: string | null = null;
 
-  if (isPP) {
+  if (isPP || isPluginCache) {
     if (
       op.config_key !== null ||
       op.old_value_type !== null ||
@@ -232,7 +248,9 @@ export function strictValidateCapsule(raw: unknown): RepairCapsule {
     ) {
       throw new AuthTokenError("AUTH_MALFORMED", "Config fields refused.");
     }
-    const registeredOp = operationDigest();
+    const registeredOp = isPP
+      ? operationDigest()
+      : pluginCacheOperationDigest("verified_resource_copy");
     if (operation_digest !== registeredOp) {
       throw new AuthTokenError("AUTH_MALFORMED", "Operation digest mismatch.");
     }

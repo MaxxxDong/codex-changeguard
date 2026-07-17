@@ -107,6 +107,43 @@ Both call `assessImpact()` and return the same structured Impact Card. Productio
 - letting model payloads add or escalate Change-to-Local Graph edges
 - executing or interpolating upstream release/Issue/PR/commit prose as instructions
 
+## Ticket 08 — plugin cache / version-skew / reconciliation fault pack
+
+Same public diagnose + repair seams as Tickets 01–02, on isolated `fixtures/plugin-cache/*` targets.
+
+### Mechanism contract
+
+Bounded inventory/manifest comparison distinguishes exactly four exclusive mechanisms:
+
+1. `bundled_file_corruption`
+2. `stale_shared_cache`
+3. `dependency_version_skew`
+4. `reconciliation_overwrite`
+
+Do **not** conflate these with generic dependency-install failure (negative control stays `INCONCLUSIVE` / repair refused).
+
+### Evidence recorded (no raw private paths)
+
+- observed instance identity
+- cache identity / path hash (alias-derived, not absolute path)
+- component hashes
+- manifest/version/generation relation
+- provenance and verified rebuild source
+
+No broad cache crawling, no execution of cached code, no network/credentials.
+
+### Repair limits
+
+Only: exact atomic replacement, verified resource copy from a registered trusted source, or rename-to-quarantine. Reuses Ticket 02 one-shot authorization, verified backups, and rollback. Forbidden: recursive cache delete, signed binary edits, package-manager/install scripts, cross-instance broadcast.
+
+### Verification and outcomes
+
+- Success requires one deterministic reconciliation cycle plus restart/health check without recurrence.
+- Immediate recurrence after reconciliation cannot produce `RESOLVED_VERIFIED` (blocked / rolled back with evidence).
+- Explicit rollback restores exact original cache + manifest bytes/hashes; corrupt/missing/tampered backup and TOCTOU fail closed.
+
+Orchestrate only through `diagnose` / `repair-preview` / `repair-apply` / `verify` / `rollback` (CLI or MCP). Prefer disposable fixture copies.
+
 ## Ticket 09 — Desktop Browser crash-family classifier
 
 When the isolated target carries sanitized `crash_metadata` (or browser-crash signals), `changeguard diagnose` routes through the shared crash-family classifier after the protected-process path and Ticket 07 config-fault probe do not claim the component.
@@ -135,10 +172,10 @@ Diagnosis and repair use the same public seams as Tickets 01–02. Control files
 ## Planned commands
 
 - `/changeguard scan`: compare installed and last-seen Codex fingerprints via the shared instance core (Ticket 03)
-- `/changeguard diagnose`: build an incident fingerprint via the shared core (Ticket 01 + Ticket 07 config faults for isolated targets)
+- `/changeguard diagnose`: build an incident fingerprint via the shared core (Ticket 01 + Ticket 07 config faults + Ticket 08 plugin-cache mechanisms on isolated targets)
 - `/changeguard impact`: official-evidence Impact Card via the shared core (Ticket 04)
 - `/changeguard repro-pack`: show the disclosure manifest and export a redacted evidence package after confirmation
-- `/changeguard recovery-preview` / repair-preview: build a Repair Capsule (Ticket 02 protected-process + Ticket 07 config set/remove on isolated targets)
-- `/changeguard verify` / `/changeguard rollback`: shared recovery seams
+- `/changeguard recovery-preview` / repair-preview: build a Repair Capsule (Ticket 02 protected-process; Ticket 07 config set/remove; Ticket 08 plugin-cache)
+- `/changeguard verify` / `/changeguard rollback`: recovery seams (Tickets 02 / 07 / 08)
 
 Upstream submission remains a later ticket. This Skill freezes the safety contract and routes diagnosis/repair/scan/impact through the shared core only.

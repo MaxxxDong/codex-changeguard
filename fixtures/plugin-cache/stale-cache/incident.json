@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "codex_version": "0.1.0-fixture",
+  "build_sha": null,
+  "surface": "plugin",
+  "platform": {
+    "os": "macos",
+    "arch": "arm64",
+    "sandbox_class": "plugin_runtime"
+  },
+  "failure_phase": "hook_load",
+  "error": {
+    "class": "PluginLoadError",
+    "normalized_message": "shared plugin cache appears stale after update",
+    "message_digest": "416ae31c782a3cc9778cf7191d8a2460e7c7960d78c4a86b02f05d2df9fee1a6"
+  },
+  "stack_frames": [
+    {
+      "module": "plugin-loader",
+      "file": "entry.js",
+      "symbol": "load_plugin",
+      "line_bucket": 10
+    }
+  ],
+  "config_keys": [],
+  "feature_ids": [
+    "bundled_plugin"
+  ],
+  "artifact_hashes": [],
+  "ast_signature_ids": [],
+  "local_facts_digest": "62a2fed3d6e08c44835fce71f02210b1ddabfb066e39edf1e6c261988f824dd3"
+}

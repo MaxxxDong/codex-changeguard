@@ -61,6 +61,21 @@ Black-box coverage in `tests/ticket07-config-startup.test.ts`:
 - prior Ticket 02 protected-process path still works
 - oversized config and malformed incident fail closed
 
+## Ticket 08 Scenario Harness (plugin cache / skew / reconciliation)
+
+Black-box seam coverage in `tests/ticket08-plugin-cache-harness.test.ts`:
+
+- four exclusive mechanisms via inventory/manifest comparison (`bundled_file_corruption`, `stale_shared_cache`, `dependency_version_skew`, `reconciliation_overwrite`)
+- dependency-install-like negative control stays `INCONCLUSIVE` and refuses repair (no conflation)
+- successful `repair-preview` → `repair-apply` → `RESOLVED_VERIFIED` after recon cycle + restart/health
+- recurrence after reconciliation auto-rollbacks; cannot claim `RESOLVED_VERIFIED`
+- induced verification failure restores exact original cache + manifest hashes
+- explicit rollback restores exact original cache + manifest hashes (mitigation only)
+- path/symlink/oversize refuse; tampered backup and stale auth fail closed; token replay refused
+- CLI/MCP diagnose and repair-preview stable-field equivalence
+- Ticket 01–02 protected-process / negative-control regressions still pass
+- no package-manager install scripts, recursive cache delete, or signed-binary mutation
+
 ## Ticket 09 Scenario Harness (Desktop Browser crash-family classifier)
 
 Black-box + classifier coverage in `tests/ticket09-crash-family.test.ts`

@@ -283,6 +283,74 @@ export function readSessionState(
   }
 }
 
+/**
+ * Rename-to-quarantine for a registered relative path under the isolated target.
+ * Moves the current file to quarantineRel, then restores a same-bytes regular
+ * file at the original path so a subsequent atomicReplace can proceed.
+ * No recursive delete; uses rename + exclusive temp write only.
+ */
+export function renameToQuarantine(
+  targetReal: string,
+  relativeName: string,
+  quarantineRel: string,
+  expected: FileIdentity,
+  maxBytes: number,
+): void {
+  const abs = resolveUnderRoot(targetReal, relativeName);
+  const qAbs = resolveUnderRoot(targetReal, quarantineRel);
+  assertNoSymlinkSegments(targetReal, abs);
+  // Quarantine parent may not exist yet — create within target only.
+  ensureParentDir(targetReal, qAbs);
+
+  try {
+    const st = fs.lstatSync(qAbs);
+    if (st.isSymbolicLink()) {
+      throw new PathSafetyError("SYMLINK_ESCAPE", "Symlink quarantine refused.");
+    }
+    // Single-file unlink of prior quarantine only (never recursive rm).
+    fs.unlinkSync(qAbs);
+  } catch (e) {
+    if (e instanceof PathSafetyError) throw e;
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw new PathSafetyError("QUARANTINE_ERROR", "Quarantine path refused.");
+    }
+  }
+
+  // TOCTOU re-check of live source identity.
+  const live = openTargetFile(targetReal, relativeName, maxBytes);
+  if (
+    live.sha256 !== expected.sha256 ||
+    live.ino !== expected.ino ||
+    live.dev !== expected.dev
+  ) {
+    throw new PathSafetyError("TOCTOU", "Path refused.");
+  }
+
+  fs.renameSync(abs, qAbs);
+
+  // Recreate regular file at original path with prior bytes (temp + rename).
+  const dir = path.dirname(abs);
+  const base = path.basename(abs);
+  const tempName = `.${base}.cg-qtmp-${process.pid}-${Date.now()}`;
+  const tempAbs = path.join(dir, tempName);
+  const tempRelCheck = path.relative(targetReal, tempAbs);
+  if (tempRelCheck.startsWith("..") || path.isAbsolute(tempRelCheck)) {
+    throw new PathSafetyError("PATH_ESCAPE", "Temp path refused.");
+  }
+  try {
+    writeAtomicFile(tempAbs, expected.bytes, expected.mode || 0o644);
+    fs.renameSync(tempAbs, abs);
+  } catch (e) {
+    try {
+      if (fs.existsSync(tempAbs)) fs.unlinkSync(tempAbs);
+    } catch {
+      /* best-effort */
+    }
+    if (e instanceof PathSafetyError) throw e;
+    throw new PathSafetyError("QUARANTINE_ERROR", "Quarantine rewrite failed.");
+  }
+}
+
 export function scopeDigestForTarget(targetReal: string): string {
   // Digest of canonical root identity without embedding the path string in outputs
   // that leave the device. Binding uses this digest only.

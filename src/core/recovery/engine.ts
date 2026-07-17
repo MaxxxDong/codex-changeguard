@@ -1,6 +1,8 @@
 /**
- * Ticket 02 recovery engine — preview, authorize-bound apply, verify, rollback.
- * Single registered repair path for the isolated protected-process fixture.
+ * Recovery engine — preview, authorize-bound apply, verify, rollback.
+ * Ticket 02: isolated protected-process fixture.
+ * Ticket 07: isolated config set/remove pack.
+ * Ticket 08: isolated plugin-cache / version-skew / reconciliation pack.
  * Diagnosis modules remain read-only; only this recovery surface mutates.
  *
  * Preview is completely read-only over the entire target tree (no .changeguard).
@@ -9,6 +11,8 @@
  */
 import { MAX_ARTIFACT_BYTES } from "../limits.js";
 import { measureProtectedProcessAst, sha256Buffer } from "../measure.js";
+import { isPluginCacheTarget } from "../plugin-cache/index.js";
+import { PLUGIN_CACHE_CAPSULE_ID } from "../plugin-cache/limits.js";
 import {
   PathSafetyError,
   resolveTargetDirectory,
@@ -52,6 +56,19 @@ import {
   relForConfigAlias,
   type ConfigRepairPlan,
 } from "./config-repair.js";
+import {
+  applyPluginCacheRepair,
+  backupPluginCachePair,
+  buildPluginCacheCapsule,
+  isPluginCacheCapsuleId,
+  planPluginCacheRepair,
+  pluginCacheArtifactRel,
+  pluginCacheBackupRel,
+  pluginCacheManifestBackupRel,
+  pluginCacheManifestRel,
+  recomputePluginCacheLiveBinding,
+  runPluginCacheVerification,
+} from "./plugin-cache.js";
 import type {
   AdminHandoff,
   ApplyOptions,
@@ -267,7 +284,8 @@ function buildCapsule(input: {
 
 /**
  * Preview a Repair Capsule for the isolated target.
- * Tries protected-process first, then Ticket 07 config set/remove.
+ * Tries Ticket 08 plugin-cache when inventory is present, then protected-process,
+ * then Ticket 07 config set/remove.
  * Completely read-only over the entire target tree — no .changeguard writes.
  * Returns a self-contained authorization token for cross-process apply.
  */
@@ -278,6 +296,11 @@ export function previewRepair(targetPath: string): RepairResult {
   } catch (e) {
     if (e instanceof PathSafetyError) return fail("preview", e.code, e.message);
     return fail("preview", "TARGET_ERROR", "Target refused.");
+  }
+
+  // Ticket 08 plugin-cache pack takes precedence when inventory is present.
+  if (isPluginCacheTarget(targetReal)) {
+    return previewPluginCacheRepair(targetReal);
   }
 
   const evidence: MeasuredEvidence[] = [];
@@ -360,6 +383,102 @@ export function previewRepair(targetPath: string): RepairResult {
   // --- Ticket 07 config path ---
   try {
     return previewConfigRepair(targetReal, scope_digest, evidence);
+  } catch (e) {
+    if (e instanceof PathSafetyError) {
+      return fail("preview", e.code, e.message, { evidence });
+    }
+    return fail("preview", "PREVIEW_ERROR", "Preview failed.", { evidence });
+  }
+}
+
+/** Ticket 08: preview plugin-cache verified resource copy capsule. */
+function previewPluginCacheRepair(targetReal: string): RepairResult {
+  const evidence: MeasuredEvidence[] = [];
+  try {
+    const planned = planPluginCacheRepair(targetReal);
+    if (!planned.ok) {
+      return fail("preview", planned.code, planned.message, {
+        evidence: planned.classification
+          ? [
+              {
+                kind: "plugin_cache_classification",
+                detail: planned.classification.reason,
+                measured: true,
+              },
+            ]
+          : evidence,
+        user_resolution: userReceipt(
+          "REPAIR_REFUSED",
+          planned.code === "NOT_APPLICABLE"
+            ? "No matching plugin-cache mechanism; repair refused."
+            : "Plugin-cache repair refused.",
+        ),
+      });
+    }
+    const plan = planned.plan;
+    const scope_digest = scopeDigestForTarget(targetReal);
+    evidence.push({
+      kind: "plugin_cache_mechanism",
+      detail: `mechanism=${plan.mechanism}`,
+      measured: true,
+    });
+    evidence.push({
+      kind: "artifact_hash",
+      detail: `Measured ${plan.cache_file.sha256.slice(0, 16)}…`,
+      measured: true,
+    });
+    evidence.push({
+      kind: "instance_identity",
+      detail: `instance_id=${plan.observation.instance_id} cache_path_hash=${plan.observation.cache_path_hash.slice(0, 16)}…`,
+      measured: true,
+    });
+    evidence.push({
+      kind: "trusted_rebuild_source",
+      detail: `verified rebuild source sha256=${plan.trusted_file.sha256.slice(0, 16)}…`,
+      measured: true,
+    });
+
+    const capsule = buildPluginCacheCapsule({
+      scope_digest,
+      original_sha256: plan.cache_file.sha256,
+      expected_result_sha256: plan.expected_result_sha256,
+      mechanism: plan.mechanism,
+    });
+
+    let authorization: string;
+    try {
+      authorization = encodeAuthorizationToken(capsule);
+    } catch (e) {
+      if (e instanceof AuthTokenError) {
+        return fail("preview", e.code, e.message, { evidence });
+      }
+      return fail("preview", "PREVIEW_ERROR", "Preview failed.", { evidence });
+    }
+
+    evidence.push({
+      kind: "capsule_preview",
+      detail: `Capsule ${capsule.capsule_id} binding=${capsule.authorization_binding.slice(0, 16)}…`,
+      measured: true,
+    });
+
+    return baseResult({
+      ok: true,
+      operation: "preview",
+      capsule,
+      authorization,
+      user_resolution: userReceipt(
+        "REPAIR_PREVIEWED",
+        `Plugin-cache Repair Capsule preview ready (${plan.mechanism}). One scope-bound authorization required to apply.`,
+      ),
+      upstream_contribution: upstreamReceipt(
+        "CANDIDATE_ONLY",
+        "Local experimental plugin-cache repair only; no external submission.",
+        [],
+      ),
+      evidence,
+      target_mutated: false,
+      repair_applied: false,
+    });
   } catch (e) {
     if (e instanceof PathSafetyError) {
       return fail("preview", e.code, e.message, { evidence });
@@ -1107,6 +1226,11 @@ export function applyRepair(targetPath: string, options: ApplyOptions): RepairRe
     return fail("apply", replay.code, replay.message, { capsule });
   }
 
+  // Ticket 08 plugin-cache apply path.
+  if (isPluginCacheCapsuleId(capsule.capsule_id)) {
+    return applyPluginCacheAuthorized(targetReal, capsule);
+  }
+
   // Mechanism must still be present and match capsule preconditions.
   const liveResult = recomputeLiveBinding(targetReal, capsule);
   if (!liveResult.ok) {
@@ -1343,6 +1467,268 @@ export function applyRepair(targetPath: string, options: ApplyOptions): RepairRe
   }
 }
 
+/** Ticket 08 authorized apply for plugin-cache pack. */
+function applyPluginCacheAuthorized(
+  targetReal: string,
+  capsule: RepairCapsule,
+): RepairResult {
+  const live = recomputePluginCacheLiveBinding(targetReal, capsule);
+  if (!live.ok) {
+    return fail("apply", live.code, live.message, { capsule });
+  }
+  // Scope must still match preview binding.
+  const scope_digest = scopeDigestForTarget(targetReal);
+  if (scope_digest !== capsule.scope_digest) {
+    return fail("apply", "AUTH_INVALID", "Scope changed; authorization invalid.", {
+      capsule,
+    });
+  }
+
+  const plan = live.plan;
+  const evidence: MeasuredEvidence[] = [
+    {
+      kind: "authorization",
+      detail: "Authorization token verified against live plugin-cache preconditions.",
+      measured: true,
+    },
+    {
+      kind: "plugin_cache_mechanism",
+      detail: `mechanism=${plan.mechanism}`,
+      measured: true,
+    },
+  ];
+  let backupReceipt: BackupReceipt | null = null;
+  const backup_rel = pluginCacheBackupRel();
+
+  try {
+    const backups = backupPluginCachePair(
+      targetReal,
+      plan.cache_file,
+      plan.manifest_file,
+    );
+    backupReceipt = {
+      backup_rel,
+      original_sha256: backups.cache.original_sha256,
+      verified: backups.cache.verified && backups.manifest.verified,
+      receipt_id: backups.cache.receipt_id,
+    };
+    evidence.push({
+      kind: "backup_verified",
+      detail: `Cache+manifest backups verified sha256=${backups.cache.original_sha256.slice(0, 16)}…`,
+      measured: true,
+    });
+
+    const replaced = applyPluginCacheRepair(targetReal, plan);
+    evidence.push({
+      kind: "verified_resource_copy",
+      detail: `Atomic trusted copy resulting_sha256=${replaced.resulting_sha256}`,
+      measured: true,
+    });
+
+    writeSessionState(targetReal, RECOVERY_SESSION_REL, {
+      schema_version: 1,
+      capsule_id: capsule.capsule_id,
+      pack: "plugin_cache",
+      repair_family: "plugin_cache",
+      original_sha256: capsule.original_sha256,
+      original_manifest_sha256: plan.manifest_file.sha256,
+      result_sha256: replaced.resulting_sha256,
+      backup_rel,
+      manifest_backup_rel: pluginCacheManifestBackupRel(),
+      target_path_alias: capsule.target_path_alias,
+      target_rel: pluginCacheArtifactRel(),
+      authorization_binding: capsule.authorization_binding,
+      nonce: capsule.nonce,
+      applied_at: new Date().toISOString(),
+      status: "applied_pending_verify",
+      consumed: false,
+    });
+
+    const verification = runPluginCacheVerification(
+      targetReal,
+      capsule.original_sha256,
+      capsule.operation.expected_result_sha256,
+      { runReconCycle: true },
+    );
+    evidence.push({
+      kind: "verification",
+      detail: `passed=${verification.passed} original_failure_reproduces=${verification.original_failure_reproduces}`,
+      measured: true,
+    });
+
+    if (!verification.passed) {
+      restoreFromBackup(
+        targetReal,
+        pluginCacheArtifactRel(),
+        backup_rel,
+        capsule.original_sha256,
+        MAX_ARTIFACT_BYTES,
+      );
+      restoreFromBackup(
+        targetReal,
+        pluginCacheManifestRel(),
+        pluginCacheManifestBackupRel(),
+        plan.manifest_file.sha256,
+        MAX_ARTIFACT_BYTES,
+      );
+      const restored = openTargetFile(
+        targetReal,
+        pluginCacheArtifactRel(),
+        MAX_ARTIFACT_BYTES,
+      );
+      writeSessionState(targetReal, RECOVERY_SESSION_REL, {
+        schema_version: 1,
+        capsule_id: capsule.capsule_id,
+        pack: "plugin_cache",
+        repair_family: "plugin_cache",
+        original_sha256: capsule.original_sha256,
+        original_manifest_sha256: plan.manifest_file.sha256,
+        status: "auto_rolled_back",
+        backup_rel,
+        manifest_backup_rel: pluginCacheManifestBackupRel(),
+        target_path_alias: capsule.target_path_alias,
+        target_rel: pluginCacheArtifactRel(),
+        authorization_binding: capsule.authorization_binding,
+        nonce: capsule.nonce,
+        consumed: false,
+      });
+      evidence.push({
+        kind: "auto_rollback",
+        detail: `Restored original cache+manifest sha256=${restored.sha256.slice(0, 16)}…`,
+        measured: true,
+      });
+      const blocked =
+        verification.original_failure_reproduces === true
+          ? "Recurrence or verification failure after reconciliation cycle; RESOLVED_VERIFIED blocked."
+          : "Verification failed; automatic rollback restored original cache+manifest bytes.";
+      return baseResult({
+        ok: false,
+        operation: "apply",
+        capsule: {
+          ...capsule,
+          human_decision: "approved",
+          smoke_result: "fail",
+          backup: {
+            ...capsule.backup,
+            verified: true,
+            receipt_id: backupReceipt.receipt_id,
+          },
+        },
+        user_resolution: userReceipt("REPAIR_FAILED_ROLLED_BACK", blocked),
+        upstream_contribution: upstreamReceipt(
+          "NONE",
+          "No upstream contribution; local recovery only.",
+        ),
+        evidence,
+        error_code: verification.original_failure_reproduces
+          ? "RECURRENCE_BLOCKED"
+          : "VERIFY_FAILED",
+        error_message: blocked,
+        target_mutated: true,
+        repair_applied: false,
+        auto_rolled_back: true,
+        verification,
+        backup: backupReceipt,
+        resulting_sha256: restored.sha256,
+      });
+    }
+
+    writeSessionState(targetReal, RECOVERY_SESSION_REL, {
+      schema_version: 1,
+      capsule_id: capsule.capsule_id,
+      pack: "plugin_cache",
+      repair_family: "plugin_cache",
+      original_sha256: capsule.original_sha256,
+      original_manifest_sha256: plan.manifest_file.sha256,
+      result_sha256: replaced.resulting_sha256,
+      backup_rel,
+      manifest_backup_rel: pluginCacheManifestBackupRel(),
+      target_path_alias: capsule.target_path_alias,
+      target_rel: pluginCacheArtifactRel(),
+      authorization_binding: capsule.authorization_binding,
+      nonce: capsule.nonce,
+      applied_at: new Date().toISOString(),
+      status: "resolved_verified",
+      consumed: true,
+    });
+
+    return baseResult({
+      ok: true,
+      operation: "apply",
+      capsule: {
+        ...capsule,
+        human_decision: "approved",
+        smoke_result: "pass",
+        backup: {
+          ...capsule.backup,
+          verified: true,
+          receipt_id: backupReceipt.receipt_id,
+        },
+      },
+      user_resolution: userReceipt(
+        "RESOLVED_VERIFIED",
+        "Plugin-cache fault cleared across reconciliation cycle and restart health check. Local repair only.",
+      ),
+      upstream_contribution: upstreamReceipt(
+        "CANDIDATE_ONLY",
+        "Local recovery receipt only; upstream contribution is separate and not submitted.",
+        [],
+      ),
+      evidence,
+      target_mutated: true,
+      repair_applied: true,
+      auto_rolled_back: false,
+      verification,
+      backup: backupReceipt,
+      resulting_sha256: replaced.resulting_sha256,
+    });
+  } catch (e) {
+    if (backupReceipt) {
+      try {
+        restoreFromBackup(
+          targetReal,
+          pluginCacheArtifactRel(),
+          backup_rel,
+          capsule.original_sha256,
+          MAX_ARTIFACT_BYTES,
+        );
+        return baseResult({
+          ok: false,
+          operation: "apply",
+          capsule,
+          user_resolution: userReceipt(
+            "REPAIR_FAILED_ROLLED_BACK",
+            "Apply failed; automatic rollback restored original cache bytes.",
+          ),
+          upstream_contribution: upstreamReceipt("NONE", "No upstream contribution."),
+          evidence,
+          error_code: e instanceof PathSafetyError ? e.code : "APPLY_ERROR",
+          error_message: e instanceof PathSafetyError ? e.message : "Apply failed.",
+          target_mutated: true,
+          repair_applied: false,
+          auto_rolled_back: true,
+          backup: backupReceipt,
+          resulting_sha256: capsule.original_sha256,
+        });
+      } catch {
+        /* fall through */
+      }
+    }
+    if (e instanceof PathSafetyError) {
+      return fail("apply", e.code, e.message, {
+        capsule,
+        evidence,
+        backup: backupReceipt,
+      });
+    }
+    return fail("apply", "APPLY_ERROR", "Apply failed.", {
+      capsule,
+      evidence,
+      backup: backupReceipt,
+    });
+  }
+}
+
 /** Verify current target against original failure + core health. */
 export function verifyRepair(targetPath: string): RepairResult {
   let targetReal: string;
@@ -1365,6 +1751,67 @@ export function verifyRepair(targetPath: string): RepairResult {
       "NO_SESSION",
       "No recovery session; apply a repair before verify.",
     );
+  }
+
+  const isPluginPack =
+    session?.pack === "plugin_cache" ||
+    session?.repair_family === "plugin_cache" ||
+    session?.capsule_id === PLUGIN_CACHE_CAPSULE_ID;
+
+  if (isPluginPack) {
+    const verification = runPluginCacheVerification(
+      targetReal,
+      originalSha,
+      expectedResult,
+      { runReconCycle: true },
+    );
+    const evidence: MeasuredEvidence[] = [
+      {
+        kind: "verification",
+        detail: `passed=${verification.passed}`,
+        measured: true,
+      },
+    ];
+    if (!verification.passed) {
+      return baseResult({
+        ok: false,
+        operation: "verify",
+        user_resolution: userReceipt(
+          "INCONCLUSIVE",
+          verification.original_failure_reproduces
+            ? "Recurrence or verification failure; RESOLVED_VERIFIED is impossible."
+            : "Verification did not pass; RESOLVED_VERIFIED is impossible.",
+        ),
+        upstream_contribution: upstreamReceipt("NONE", "No upstream contribution."),
+        evidence,
+        error_code: verification.original_failure_reproduces
+          ? "RECURRENCE_BLOCKED"
+          : "VERIFY_FAILED",
+        error_message: "Verification failed.",
+        verification,
+        resulting_sha256: verification.measured_sha256,
+        repair_applied: session?.status === "resolved_verified",
+        target_mutated: false,
+      });
+    }
+    return baseResult({
+      ok: true,
+      operation: "verify",
+      user_resolution: userReceipt(
+        "RESOLVED_VERIFIED",
+        "Verification passed: original failure absent and core health OK.",
+      ),
+      upstream_contribution: upstreamReceipt(
+        "CANDIDATE_ONLY",
+        "Local verification only; no external submission.",
+        [],
+      ),
+      evidence,
+      verification,
+      resulting_sha256: verification.measured_sha256,
+      repair_applied: true,
+      target_mutated: false,
+    });
   }
 
   const family =
@@ -1441,6 +1888,124 @@ export function rollbackRepair(targetPath: string): RepairResult {
   }
   const originalSha =
     typeof session.original_sha256 === "string" ? session.original_sha256 : null;
+  if (!originalSha) {
+    return fail("rollback", "NO_SESSION", "Session missing original hash.");
+  }
+
+  const isPluginPack =
+    session.pack === "plugin_cache" ||
+    session.repair_family === "plugin_cache" ||
+    session.capsule_id === PLUGIN_CACHE_CAPSULE_ID;
+
+  if (isPluginPack) {
+    const backup_rel = pluginCacheBackupRel();
+    const artifact = pluginCacheArtifactRel();
+    const evidence: MeasuredEvidence[] = [];
+    try {
+      const restored = restoreFromBackup(
+        targetReal,
+        artifact,
+        backup_rel,
+        originalSha,
+        MAX_ARTIFACT_BYTES,
+      );
+      evidence.push({
+        kind: "explicit_rollback",
+        detail: `Restored sha256=${restored.resulting_sha256}`,
+        measured: true,
+      });
+
+      const originalManifest =
+        typeof session.original_manifest_sha256 === "string"
+          ? session.original_manifest_sha256
+          : null;
+      if (originalManifest) {
+        const mRestored = restoreFromBackup(
+          targetReal,
+          pluginCacheManifestRel(),
+          pluginCacheManifestBackupRel(),
+          originalManifest,
+          MAX_ARTIFACT_BYTES,
+        );
+        evidence.push({
+          kind: "manifest_rollback",
+          detail: `Manifest restored sha256=${mRestored.resulting_sha256.slice(0, 16)}…`,
+          measured: true,
+        });
+        const mLive = openTargetFile(
+          targetReal,
+          pluginCacheManifestRel(),
+          MAX_ARTIFACT_BYTES,
+        );
+        if (mLive.sha256 !== originalManifest) {
+          return fail("rollback", "ROLLBACK_MISMATCH", "Manifest rollback hash mismatch.", {
+            evidence,
+            resulting_sha256: mLive.sha256,
+            target_mutated: true,
+          });
+        }
+      }
+
+      writeSessionState(targetReal, RECOVERY_SESSION_REL, {
+        schema_version: 1,
+        capsule_id: session.capsule_id ?? PLUGIN_CACHE_CAPSULE_ID,
+        pack: "plugin_cache",
+        repair_family: "plugin_cache",
+        original_sha256: originalSha,
+        original_manifest_sha256: session.original_manifest_sha256 ?? null,
+        backup_rel,
+        target_path_alias:
+          typeof session.target_path_alias === "string" &&
+          session.target_path_alias.length > 0
+            ? session.target_path_alias
+            : "PLUGIN_CACHE_ENTRY",
+        target_rel: artifact,
+        authorization_binding: session.authorization_binding ?? null,
+        nonce: session.nonce ?? null,
+        status: "explicit_rollback",
+        consumed: true,
+        rolled_back_at: new Date().toISOString(),
+      });
+
+      const live = openTargetFile(targetReal, artifact, MAX_ARTIFACT_BYTES);
+      if (live.sha256 !== originalSha) {
+        return fail("rollback", "ROLLBACK_MISMATCH", "Rollback hash mismatch.", {
+          evidence,
+          resulting_sha256: live.sha256,
+          target_mutated: true,
+        });
+      }
+
+      return baseResult({
+        ok: true,
+        operation: "rollback",
+        user_resolution: userReceipt(
+          "MITIGATED_VERIFIED_BY_ROLLBACK",
+          "Explicit rollback restored exact original cache+manifest bytes. Mitigation only; not root-cause resolution.",
+        ),
+        upstream_contribution: upstreamReceipt(
+          "NONE",
+          "No upstream contribution; local rollback only.",
+        ),
+        evidence,
+        target_mutated: true,
+        repair_applied: false,
+        resulting_sha256: live.sha256,
+        backup: {
+          backup_rel,
+          original_sha256: originalSha,
+          verified: true,
+          receipt_id: receiptId("backup"),
+        },
+      });
+    } catch (e) {
+      if (e instanceof PathSafetyError) {
+        return fail("rollback", e.code, e.message, { evidence });
+      }
+      return fail("rollback", "ROLLBACK_ERROR", "Rollback failed.", { evidence });
+    }
+  }
+
   const alias =
     typeof session.target_path_alias === "string" &&
     session.target_path_alias.length > 0
@@ -1452,9 +2017,6 @@ export function rollbackRepair(targetPath: string): RepairResult {
       : artifactRel();
   // Always restore from registered backup path — never trust session.backup_rel.
   const backup_rel = registeredBackupRel(alias);
-  if (!originalSha) {
-    return fail("rollback", "NO_SESSION", "Session missing original hash.");
-  }
 
   const evidence: MeasuredEvidence[] = [];
   try {

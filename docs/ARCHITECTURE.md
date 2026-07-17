@@ -52,7 +52,8 @@ Evidence-locked verdict + Recovery Capsule preview
 - `bin/changeguard.js` / `dist/cli/main.js`: Rescue CLI (`diagnose|impact|repair-*|verify|rollback|scan|scan-system|session-start`)
 - `src/core/diagnose.ts`: single shared diagnosis core used by CLI and MCP
 - `src/core/crash-family.ts`: Ticket 09 Desktop Browser crash-family classifier (deterministic gates; Fixture E)
-- `src/core/recovery/`: Ticket 02 isolated protected-process repair + Ticket 07 config set/remove (preview/apply/verify/rollback; one engine)
+- `src/core/recovery/`: Ticket 02 isolated protected-process repair + Ticket 07 config set/remove + Ticket 08 plugin-cache recovery (preview/apply/verify/rollback; one engine)
+- `src/core/plugin-cache/`: Ticket 08 bounded plugin-cache inventory/manifest observation and mechanism classification (read-only)
 - `src/core/config/`: Ticket 07 bounded Codex control TOML parser/validator and fault probe (read-only)
 - `src/evidence/*` + `src/impact/*`: official evidence refresh/snapshot, Change-to-Local Graph, Impact Card (Ticket 04)
 - `src/instances/`: multi-instance enumeration, version-fingerprint state, affected-instance resolution, repair-target binding contract
@@ -78,7 +79,7 @@ Both call `diagnose()` and return the same `DiagnosisResult` shape:
 
 Core I/O rules:
 
-- read only named candidates (`incident.json`, optional `artifacts/browser-client.mjs`, and Ticket 07 registered control paths `config/config.toml`, `config/config.override.toml`, `config/managed.policy.json`)
+- read only named candidates (`incident.json`, optional `artifacts/browser-client.mjs`, Ticket 07 registered control paths `config/config.toml`, `config/config.override.toml`, `config/managed.policy.json`, and Ticket 08 named plugin-cache inventory/manifest/entry paths under `plugin-cache/`)
 - fail-closed no-follow: refuse a target that is itself a symlink; refuse any symlink in any intermediate segment or leaf of named candidates (even if it currently resolves inside the target)
 - open with `O_NOFOLLOW` when available, `fstat` the fd, require a regular file, enforce the byte limit from the fd, and compare stable pre-open metadata where meaningful
 - explicit byte limits; never recursively crawl a project tree
@@ -400,7 +401,24 @@ A sanitized Windows fixture models a full desktop exit after the in-app Browser 
 
 The classifier (`src/core/crash-family.ts`, invoked from `diagnose`) uses optional sanitized `crash_metadata` on the incident fingerprint (exception code, normalized module/symbol/offset bucket, GPU child exit/relaunch codes, interaction phase, page capability, concurrency context, isolation flags). Dump bodies are never parsed or exported. Hard gates reject incompatible platform/surface/mechanism; defining-mechanism gates additionally require GPU families to present their required GPU signals (and reject foreign concrete exception conflict), require concrete page-capability families to observe a compatible capability, and require Top-3 survivors to carry at least one defining-mechanism structural hit (exception/module/symbol/offset/GPU/concrete page/concurrency multi/non-shared phase) so shared `neutral_dom_ready` / `in_app_browser` soft signals alone cannot promote an incompatible catalog family. Title similarity cannot alone produce high confidence or root-cause attribution. Ranking keeps `local_mechanism`, `upstream_match`, and `fix_applicability` separate; optional model ranking cannot override gates or invent provenance. Without a disposable isolated profile, active crash probes are refused — prefer natural-failure metadata. Open Issues without verified fix linkage yield `ISSUE_CANDIDATE` / `HIGH_CONFIDENCE_MATCH` with user-resolution `UPSTREAM_BLOCKED` and `repair_authorization_eligible: false` (wrong symptom-level patches never enter authorization). `LOCAL_REPRO_CONFIRMED` remains reserved for a later safe neutral-page probe plus no-Browser control. Disabling the in-app Browser or using external Chrome is a mitigation, not proof of the native root cause.
 
-### Fixture F — underspecified session-expired boundary
+### Fixture F — bundled Plugin cache / version skew / reconciliation (Ticket 08)
+
+Isolated named candidates under `plugin-cache/` (inventory, manifest, cache entry, bundled baseline, trusted rebuild source, optional recon-state and local-intent). No recursive cache crawl and no execution of cached code.
+
+Deterministic inventory/manifest comparison classifies exactly one of:
+
+| Mechanism | Signal |
+| --- | --- |
+| `bundled_file_corruption` | Current generation/version; measured cache hash ≠ expected/trusted |
+| `stale_shared_cache` | Shared-cache provenance with generation lag |
+| `dependency_version_skew` | Inventory component version ≠ required manifest version with hash mismatch |
+| `reconciliation_overwrite` | Recon markers show local intent overwritten by bundled baseline |
+
+A visually similar dependency-install-failure negative control must remain `INCONCLUSIVE` and must not receive the plugin-cache repair. Diagnosis records instance id, cache path hash (not raw path), component hashes, manifest/version relation, provenance, and verified rebuild source.
+
+Repair (same Ticket 02 authorization/backup/rollback seams) allows only exact atomic replacement, verified resource copy from the registered trusted source, or rename-to-quarantine. Verification requires one reconciliation cycle plus restart/health check; immediate recurrence blocks `RESOLVED_VERIFIED` and auto-rollbacks. Explicit rollback restores exact original cache and manifest bytes/hashes.
+
+### Fixture G — underspecified session-expired boundary
 
 A ChatGPT report containing only “session expired” plus an unverified claim about changing IP addresses must not be mapped to a Codex source component. ChangeGuard may run an adjacent authentication/network playbook using status, surface, version, sign-in method, redacted response status, and controlled network comparisons. It must return `INCONCLUSIVE` until one of these branches is supported:
 
@@ -424,7 +442,7 @@ The playbook never reads or exports cookie values, tokens, passwords, one-time c
 - Impact Contract schema
 - allowlisted probe registry
 - Fixtures A and D, including negative control
-- Fixture E crash-family classifier and Fixture F evidence-boundary case
+- Fixture E crash-family classifier, Fixture F plugin-cache mechanisms, and Fixture G evidence-boundary case
 - disclosure manifest and repro-pack export
 - English README, install/platform/judge instructions, live fixture path, tests
 

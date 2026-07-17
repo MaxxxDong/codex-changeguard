@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "codex_version": "0.1.0-fixture",
+  "build_sha": null,
+  "surface": "plugin",
+  "platform": {
+    "os": "macos",
+    "arch": "arm64",
+    "sandbox_class": "plugin_runtime"
+  },
+  "failure_phase": "hook_load",
+  "error": {
+    "class": "PluginLoadError",
+    "normalized_message": "plugin local change rewritten by reconciliation",
+    "message_digest": "26d3e500aa8b76a7ad9f2540dfc5889acd0c130c54b07ad3ed8ed9bc60ffd8e3"
+  },
+  "stack_frames": [
+    {
+      "module": "plugin-loader",
+      "file": "entry.js",
+      "symbol": "load_plugin",
+      "line_bucket": 10
+    }
+  ],
+  "config_keys": [],
+  "feature_ids": [
+    "bundled_plugin"
+  ],
+  "artifact_hashes": [],
+  "ast_signature_ids": [],
+  "local_facts_digest": "62a2fed3d6e08c44835fce71f02210b1ddabfb066e39edf1e6c261988f824dd3"
+}

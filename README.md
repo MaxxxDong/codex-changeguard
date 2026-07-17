@@ -73,6 +73,16 @@ one-shot authorization token. `RESOLVED_VERIFIED` requires original-failure abse
 plus core health; verification failure auto-rollbacks; live Codex/Profile installs
 are out of scope.
 
+### Plugin cache / skew / reconciliation (Ticket 08)
+
+Isolated `fixtures/plugin-cache/*` targets distinguish bundled corruption, stale
+shared cache, dependency/version skew, and reconciliation overwrite (never generic
+dependency-install failure). Repair reuses Ticket 02 authorization with verified
+resource copy / atomic replace / rename-to-quarantine only; verification crosses one
+reconciliation cycle and a restart/health check. Immediate recurrence cannot claim
+`RESOLVED_VERIFIED`. Ticket 08 is implemented on this branch but is **not** product
+closeout — broader Tickets 05–17 remain incomplete.
+
 ### Instance scan and SessionStart (Ticket 03)
 
 Multi-instance enumeration keeps independent identities (path hashes/aliases only).

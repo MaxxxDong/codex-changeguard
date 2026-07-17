@@ -45,7 +45,7 @@
       "additionalProperties": false,
       "required": ["kind", "target_path_alias", "expected_pattern_count", "operation_digest", "expected_result_sha256"],
       "properties": {
-        "kind": {"enum": ["exact_block_removal"]},
+        "kind": {"enum": ["exact_block_removal", "exact_replacement", "verified_resource_copy", "rename_to_quarantine", "config_set", "config_remove"]},
         "target_path_alias": {"type": "string", "minLength": 1, "maxLength": 128},
         "expected_pattern_count": {"type": "integer", "minimum": 0, "maximum": 32},
         "operation_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "instance_id": "inst_plugin_cache_a",
+  "cache_identity": {
+    "alias": "SHARED_PLUGIN_CACHE_A",
+    "identity_hash": "de008b5e0c44373e9905f07af210283087730c2bfb8faac8d58ac20f8b3f7503",
+    "generation": 5
+  },
+  "components": [
+    {
+      "alias": "PLUGIN_CACHE_ENTRY",
+      "version": "0.9.0",
+      "provenance": "shared_cache",
+      "declared_sha256": "3ee40590afe5338637f85ebb39c00ae00885710bee0886bb1d061d9930b377fa"
+    }
+  ],
+  "dependency_install_failure": false
+}
