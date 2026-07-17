@@ -93,7 +93,7 @@
         "evidence_delta_material": { "type": "boolean" },
         "evidence_delta_hash": {
           "type": ["string", "null"],
-          "pattern": "^([a-f0-9]{64})?$"
+          "pattern": "^[a-f0-9]{64}$"
         },
         "recommendation": {
           "enum": [
@@ -168,7 +168,30 @@
         "freshness": { "enum": ["fresh", "stale"] },
         "stale_reason": { "type": ["string", "null"] },
         "age_ms": { "type": "integer", "minimum": 0 },
-        "forms": { "type": "array" },
+        "forms": {
+          "type": "array",
+          "minItems": 4,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["filename", "blob_sha", "form", "notes"],
+            "properties": {
+              "filename": {
+                "type": "string",
+                "pattern": "^[0-9]+-[a-z0-9][a-z0-9.-]*\\.ya?ml$"
+              },
+              "blob_sha": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{40}$"
+              },
+              "form": {
+                "type": ["string", "null"],
+                "enum": ["APP", "CLI", "EXTENSION", "OTHER", "FEATURE", "DOCS", null]
+              },
+              "notes": { "type": "string", "maxLength": 512 }
+            }
+          }
+        },
         "source": {
           "enum": ["bundled_immutable", "transport_refresh"]
         }

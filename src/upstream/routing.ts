@@ -1,9 +1,11 @@
 import type {
   CaseKind,
+  FormBlobRecord,
   GitHubIssueForm,
   ProductSurfaceHint,
   UpstreamRoute,
 } from "./types.js";
+import { filenameForFormRole } from "./form-snapshot.js";
 
 export interface RouteDecision {
   route: UpstreamRoute;
@@ -73,37 +75,61 @@ export function routeUpstream(case_kind: CaseKind): RouteDecision {
   }
 }
 
+/** Default filenames matching the bundled 2026-07-18 official snapshot facts. */
+const DEFAULT_FORM_FILENAMES: Record<GitHubIssueForm, string> = {
+  APP: "1-codex-app.yml",
+  CLI: "3-cli.yml",
+  EXTENSION: "2-extension.yml",
+  OTHER: "4-bug-report.yml",
+};
+
 /**
- * Map product surface to current official Issue form:
- * APP (1-codex-app), CLI (3-cli), EXTENSION (2-extension), OTHER (4-bug-report).
+ * Map product surface to current official Issue form role.
+ * Filename prefers the validated current snapshot role when provided;
+ * falls back to bundled snapshot defaults (not ad-hoc hardcodes elsewhere).
  */
-export function mapGitHubIssueForm(surface: ProductSurfaceHint): {
+export function mapGitHubIssueForm(
+  surface: ProductSurfaceHint,
+  forms?: readonly FormBlobRecord[] | null,
+): {
   form: GitHubIssueForm;
   filename: string;
 } {
+  let form: GitHubIssueForm;
   switch (surface) {
     case "app":
     case "desktop":
-      return { form: "APP", filename: "1-codex-app.yml" };
+      form = "APP";
+      break;
     case "cli":
-      return { form: "CLI", filename: "3-cli.yml" };
+      form = "CLI";
+      break;
     case "extension":
     case "ide":
     case "browser_control":
-      return { form: "EXTENSION", filename: "2-extension.yml" };
+      form = "EXTENSION";
+      break;
     case "other":
     case "unknown":
     default:
-      return { form: "OTHER", filename: "4-bug-report.yml" };
+      form = "OTHER";
+      break;
   }
+  const fromSnapshot =
+    forms && forms.length > 0 ? filenameForFormRole([...forms], form) : null;
+  return {
+    form,
+    filename: fromSnapshot ?? DEFAULT_FORM_FILENAMES[form],
+  };
 }
 
 export function applyFormMap(
   decision: RouteDecision,
   surface: ProductSurfaceHint,
+  forms?: readonly FormBlobRecord[] | null,
 ): RouteDecision {
   if (decision.route !== "GITHUB_ISSUE") return decision;
-  const mapped = mapGitHubIssueForm(surface);
+  const mapped = mapGitHubIssueForm(surface, forms);
   return {
     ...decision,
     github_issue_form: mapped.form,

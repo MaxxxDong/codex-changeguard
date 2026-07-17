@@ -1,5 +1,5 @@
 import { sha256Canonical } from "../evidence/canonical.js";
-import { MAX_BODY, MAX_COMMENT, MAX_TITLE } from "./limits.js";
+import { MAX_BODY, MAX_COMMENT, MAX_STRING, MAX_TITLE } from "./limits.js";
 import type {
   DuplicateAssessment,
   DuplicateRecommendation,
@@ -20,22 +20,31 @@ function evidenceDeltaHash(delta: EvidenceDelta): string | null {
   return sha256Canonical(delta.items);
 }
 
+/** Exact duplicate requires both exact similarity AND mechanism_match. */
 function pickBestExact(search: DuplicateSearch) {
   return (
     search.candidates.find(
-      (c) => c.similarity === "exact" && c.mechanism_match,
-    ) ?? search.candidates.find((c) => c.similarity === "exact") ?? null
+      (c) => c.similarity === "exact" && c.mechanism_match === true,
+    ) ?? null
   );
 }
 
+/** Related includes related similarity OR exact symptom without mechanism match. */
 function pickRelated(search: DuplicateSearch) {
   return search.candidates.filter(
-    (c) => c.similarity === "related" || (c.similarity === "exact" && !c.mechanism_match),
+    (c) =>
+      c.similarity === "related" ||
+      (c.similarity === "exact" && c.mechanism_match === false),
   );
 }
 
-function sanitizeLine(s: string): string {
-  return assertNoLeakPaths(redactText(s)).slice(0, MAX_TITLE);
+function sanitizeLine(s: string, max = MAX_TITLE): string {
+  return assertNoLeakPaths(redactText(s)).slice(0, max);
+}
+
+/** Exact technical strings: preserve up to MAX_STRING after mandatory redaction. */
+function sanitizeTechnical(s: string): string {
+  return sanitizeLine(s, MAX_STRING);
 }
 
 function buildNewIssueBody(req: UpstreamPreviewRequest): string {
@@ -72,13 +81,13 @@ function buildNewIssueBody(req: UpstreamPreviewRequest): string {
   if (req.error_strings.length > 0) {
     lines.push("", "## Exact errors");
     for (const e of req.error_strings) {
-      lines.push("```", sanitizeLine(e).slice(0, 512), "```");
+      lines.push("```", sanitizeTechnical(e), "```");
     }
   }
   if (req.command_strings.length > 0) {
     lines.push("", "## Exact commands");
     for (const c of req.command_strings) {
-      lines.push("```", sanitizeLine(c).slice(0, 512), "```");
+      lines.push("```", sanitizeTechnical(c), "```");
     }
   }
   if (req.user_reports.length > 0) {
@@ -123,7 +132,9 @@ function buildDeltaComment(
     `- surface: ${req.surface}`,
   );
   if (req.error_strings[0]) {
-    lines.push(`- error: \`${sanitizeLine(req.error_strings[0]).slice(0, 200)}\``);
+    lines.push(
+      `- error: \`${sanitizeTechnical(req.error_strings[0]).slice(0, MAX_STRING)}\``,
+    );
   }
   lines.push(
     "",

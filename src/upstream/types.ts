@@ -296,7 +296,11 @@ export interface UpstreamPreviewResult {
   disclosure_manifest: UpstreamDisclosureManifest;
   transport_calls: number;
   local_incident: IncidentFingerprint | null;
-  network_used: false;
+  /**
+   * True only when an injected form transport actually ran (tests/orchestration).
+   * Production CLI/MCP always inject null transport → false.
+   */
+  network_used: boolean;
   target_mutated: false;
   repair_applied: false;
   repair_authorized: false;

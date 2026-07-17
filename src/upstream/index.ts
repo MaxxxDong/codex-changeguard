@@ -36,6 +36,8 @@ export type {
 export {
   MAX_UPSTREAM_REQUEST_BYTES,
   MAX_DOCTOR_JSON_BYTES,
+  MAX_STRING,
+  MAX_TITLE,
   OFFICIAL_FORM_SNAPSHOT_ID,
   OFFICIAL_FORM_SNAPSHOT_FETCHED_AT,
   OFFICIAL_MAIN_COMMIT,
@@ -45,6 +47,9 @@ export {
   FORBIDDEN_UPSTREAM_KEYS,
   ALLOWED_REQUEST_KEYS,
   FORM_SNAPSHOT_FRESH_MS,
+  FORM_SNAPSHOT_MAX_FUTURE_SKEW_MS,
+  FORM_FILENAME_SAFE_RE,
+  REQUIRED_BUG_FORM_ROLES,
 } from "./limits.js";
 
 export { routeUpstream, mapGitHubIssueForm, applyFormMap } from "./routing.js";
@@ -57,6 +62,7 @@ export {
   viewFormSnapshot,
   computeFormSnapshotIntegrity,
   createInMemoryBundledSnapshot,
+  filenameForFormRole,
   FormSnapshotError,
 } from "./form-snapshot.js";
 export {

@@ -49,6 +49,45 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
+function isSensitiveKey(key: string): boolean {
+  if (FORBIDDEN_UPSTREAM_KEYS.some((f) => f.toLowerCase() === key.toLowerCase())) {
+    return true;
+  }
+  // auth_mode / network_mode are allowlisted diagnostics, not secrets.
+  if ((ALLOWED_DOCTOR_SUMMARY_KEYS as readonly string[]).includes(key)) {
+    return false;
+  }
+  return SENSITIVE_KEY_RE.test(key);
+}
+
+/**
+ * Recursively reject sensitive keys fail-closed (do not silently drop).
+ * Unknown non-sensitive keys may be skipped at top-level via allowlist.
+ */
+function rejectSensitiveKeysDeep(
+  value: unknown,
+  path: string,
+  depth: number,
+): void {
+  if (depth > 6) return;
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      rejectSensitiveKeysDeep(value[i], `${path}[${i}]`, depth + 1);
+    }
+    return;
+  }
+  if (!isPlainObject(value)) return;
+  for (const [k, v] of Object.entries(value)) {
+    if (isSensitiveKey(k)) {
+      throw new DoctorError(
+        "DOCTOR_FORBIDDEN_KEY",
+        `doctor_json rejects privacy-sensitive field: ${path}${k}`,
+      );
+    }
+    rejectSensitiveKeysDeep(v, `${path}${k}.`, depth + 1);
+  }
+}
+
 function sanitizeValue(value: unknown, depth: number): unknown {
   if (depth > 4) return "<truncated>";
   if (typeof value === "string") {
@@ -61,16 +100,12 @@ function sanitizeValue(value: unknown, depth: number): unknown {
     return value.slice(0, 32).map((v) => sanitizeValue(v, depth + 1));
   }
   if (isPlainObject(value)) {
+    // Nested sensitive keys already rejected; still fail closed if any slipped.
+    rejectSensitiveKeysDeep(value, "", depth);
     const out: Record<string, unknown> = {};
     let n = 0;
     for (const [k, v] of Object.entries(value)) {
       if (n >= MAX_DOCTOR_KEYS) break;
-      if (SENSITIVE_KEY_RE.test(k)) continue;
-      if (
-        FORBIDDEN_UPSTREAM_KEYS.some((f) => f.toLowerCase() === k.toLowerCase())
-      ) {
-        continue;
-      }
       out[k] = sanitizeValue(v, depth + 1);
       n++;
     }
@@ -82,6 +117,7 @@ function sanitizeValue(value: unknown, depth: number): unknown {
 /**
  * Sanitize an orchestrator-supplied bounded `codex doctor --json` envelope.
  * Never executes codex or arbitrary shell; only processes provided JSON.
+ * Sensitive keys are rejected recursively (fail closed), never silently dropped.
  */
 export function sanitizeDoctorJson(
   raw: unknown | null | undefined,
@@ -111,22 +147,8 @@ export function sanitizeDoctorJson(
     throw new DoctorError("DOCTOR_SHAPE", "doctor_json must be a JSON object.");
   }
 
-  // Reject forbidden top-level privacy keys fail-closed (exact key match).
-  for (const key of Object.keys(raw)) {
-    const lower = key.toLowerCase();
-    if (FORBIDDEN_UPSTREAM_KEYS.some((f) => f.toLowerCase() === lower)) {
-      throw new DoctorError(
-        "DOCTOR_FORBIDDEN_KEY",
-        `doctor_json rejects privacy-sensitive field: ${key}`,
-      );
-    }
-    if (SENSITIVE_KEY_RE.test(key) && !ALLOWED_DOCTOR_SUMMARY_KEYS.includes(key)) {
-      throw new DoctorError(
-        "DOCTOR_FORBIDDEN_KEY",
-        `doctor_json rejects sensitive field: ${key}`,
-      );
-    }
-  }
+  // Reject sensitive keys at every depth fail-closed.
+  rejectSensitiveKeysDeep(raw, "", 0);
 
   const keys = Object.keys(raw);
   if (keys.length > MAX_DOCTOR_KEYS) {
@@ -137,7 +159,8 @@ export function sanitizeDoctorJson(
   const rawText = serialized;
   const secrets_redacted =
     /Bearer\s+|api[_-]?key|sk-[A-Za-z0-9]|password\s*[:=]/i.test(rawText) ||
-    /token\s*[:=]/i.test(rawText);
+    /token\s*[:=]/i.test(rawText) ||
+    /Cookie\s*[:=]|Set-Cookie\s*[:=]/i.test(rawText);
   const paths_redacted =
     /\/Users\/|\/home\/|[A-Za-z]:\\/i.test(rawText) ||
     /\\\\[^\s]+/.test(rawText);
@@ -147,7 +170,7 @@ export function sanitizeDoctorJson(
 
   for (const key of keys) {
     if (!(ALLOWED_DOCTOR_SUMMARY_KEYS as readonly string[]).includes(key)) {
-      // Drop unknown keys silently from inclusion (bounded allowlist).
+      // Drop unknown non-sensitive keys from inclusion (bounded allowlist).
       continue;
     }
     if (inclusion_manifest.length >= MAX_INCLUSION_MANIFEST) break;

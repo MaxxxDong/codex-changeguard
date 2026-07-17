@@ -43,6 +43,23 @@ export const OFFICIAL_FORM_BLOB_SHAS = Object.freeze({
 /** Freshness window for form snapshot age labels (7 days). */
 export const FORM_SNAPSHOT_FRESH_MS = 7 * 24 * 60 * 60 * 1000;
 
+/**
+ * Reject form snapshots whose fetched_at is more than this far in the future.
+ * 24h covers clock skew / day-boundary while still refusing far-future claims (e.g. 2099).
+ */
+export const FORM_SNAPSHOT_MAX_FUTURE_SKEW_MS = 24 * 60 * 60 * 1000;
+
+/** Safe official issue-form filename shape (e.g. 1-codex-app.yml). */
+export const FORM_FILENAME_SAFE_RE = /^[0-9]+-[a-z0-9][a-z0-9.-]*\.ya?ml$/i;
+
+/** Required bug-form roles that must appear in a validated snapshot. */
+export const REQUIRED_BUG_FORM_ROLES = Object.freeze([
+  "APP",
+  "CLI",
+  "EXTENSION",
+  "OTHER",
+] as const);
+
 /** Forbidden privacy keys on request / doctor envelopes. */
 export const FORBIDDEN_UPSTREAM_KEYS = Object.freeze([
   "cookie",

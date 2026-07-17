@@ -3,16 +3,20 @@ import path from "node:path";
 import { sha256Canonical } from "../evidence/canonical.js";
 import { findRepoRoot } from "../paths.js";
 import {
+  FORM_FILENAME_SAFE_RE,
   FORM_SNAPSHOT_FRESH_MS,
+  FORM_SNAPSHOT_MAX_FUTURE_SKEW_MS,
   OFFICIAL_FORM_BLOB_SHAS,
   OFFICIAL_FORM_SNAPSHOT_FETCHED_AT,
   OFFICIAL_FORM_SNAPSHOT_ID,
   OFFICIAL_MAIN_COMMIT,
   OFFICIAL_REPOSITORY,
+  REQUIRED_BUG_FORM_ROLES,
 } from "./limits.js";
 import type {
   FormBlobRecord,
   FormSnapshotView,
+  GitHubIssueForm,
   OfficialFormSnapshot,
 } from "./types.js";
 
@@ -24,6 +28,26 @@ export class FormSnapshotError extends Error {
     this.code = code;
   }
 }
+
+const SNAPSHOT_TOP_KEYS = Object.freeze([
+  "schema_version",
+  "snapshot_id",
+  "fetched_at",
+  "main_commit",
+  "repository",
+  "forms",
+  "duplicate_guidance",
+  "cli_form_includes_doctor_json",
+  "integrity_sha256",
+  "immutable_snapshot_disclaimer",
+]);
+
+const FORM_RECORD_KEYS = Object.freeze([
+  "filename",
+  "blob_sha",
+  "form",
+  "notes",
+]);
 
 const FORM_RECORDS: FormBlobRecord[] = [
   {
@@ -116,13 +140,26 @@ export function bundledOfficialFormSnapshot(): OfficialFormSnapshot {
   return cachedBundled;
 }
 
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
 export function validateOfficialFormSnapshot(
   raw: unknown,
+  nowMs: number = Date.now(),
 ): OfficialFormSnapshot {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new FormSnapshotError("SNAPSHOT_SHAPE", "Invalid form snapshot.");
   }
   const o = raw as Record<string, unknown>;
+  for (const k of Object.keys(o)) {
+    if (!(SNAPSHOT_TOP_KEYS as readonly string[]).includes(k)) {
+      throw new FormSnapshotError(
+        "SNAPSHOT_EXTRA_FIELD",
+        `Unknown form snapshot field: ${k}`,
+      );
+    }
+  }
   if (o.schema_version !== 1) {
     throw new FormSnapshotError("SNAPSHOT_SCHEMA", "Unsupported snapshot schema.");
   }
@@ -131,6 +168,13 @@ export function validateOfficialFormSnapshot(
   }
   if (typeof o.fetched_at !== "string" || Number.isNaN(Date.parse(o.fetched_at))) {
     throw new FormSnapshotError("SNAPSHOT_DATE", "Invalid fetched_at.");
+  }
+  const fetchedMs = Date.parse(o.fetched_at);
+  if (fetchedMs > nowMs + FORM_SNAPSHOT_MAX_FUTURE_SKEW_MS) {
+    throw new FormSnapshotError(
+      "SNAPSHOT_FUTURE",
+      "fetched_at is too far in the future.",
+    );
   }
   if (typeof o.main_commit !== "string" || !/^[a-f0-9]{40}$/.test(o.main_commit)) {
     throw new FormSnapshotError("SNAPSHOT_COMMIT", "Invalid main_commit.");
@@ -142,31 +186,77 @@ export function validateOfficialFormSnapshot(
     throw new FormSnapshotError("SNAPSHOT_FORMS", "forms must be a non-empty array.");
   }
   const forms: FormBlobRecord[] = [];
+  const seenFilenames = new Set<string>();
+  const seenRoles = new Set<string>();
   for (const f of o.forms) {
-    if (!f || typeof f !== "object") {
+    if (!isPlainObject(f)) {
       throw new FormSnapshotError("FORM_SHAPE", "Invalid form record.");
     }
-    const fr = f as Record<string, unknown>;
-    if (typeof fr.filename !== "string" || typeof fr.blob_sha !== "string") {
+    for (const k of Object.keys(f)) {
+      if (!(FORM_RECORD_KEYS as readonly string[]).includes(k)) {
+        throw new FormSnapshotError(
+          "FORM_EXTRA_FIELD",
+          `Unknown form record field: ${k}`,
+        );
+      }
+    }
+    if (typeof f.filename !== "string" || typeof f.blob_sha !== "string") {
       throw new FormSnapshotError("FORM_FIELDS", "Form record missing fields.");
     }
-    if (!/^[a-f0-9]{40}$/.test(fr.blob_sha)) {
+    if (!FORM_FILENAME_SAFE_RE.test(f.filename)) {
+      throw new FormSnapshotError(
+        "FORM_FILENAME",
+        `Unsafe form filename: ${f.filename}`,
+      );
+    }
+    if (seenFilenames.has(f.filename)) {
+      throw new FormSnapshotError(
+        "FORM_DUPLICATE_FILENAME",
+        `Duplicate form filename: ${f.filename}`,
+      );
+    }
+    seenFilenames.add(f.filename);
+    if (!/^[a-f0-9]{40}$/.test(f.blob_sha)) {
       throw new FormSnapshotError("FORM_BLOB", "Invalid form blob_sha.");
     }
+    const formRole: FormBlobRecord["form"] =
+      f.form === "APP" ||
+      f.form === "CLI" ||
+      f.form === "EXTENSION" ||
+      f.form === "OTHER" ||
+      f.form === "FEATURE" ||
+      f.form === "DOCS"
+        ? f.form
+        : null;
+    if (
+      formRole === "APP" ||
+      formRole === "CLI" ||
+      formRole === "EXTENSION" ||
+      formRole === "OTHER"
+    ) {
+      if (seenRoles.has(formRole)) {
+        throw new FormSnapshotError(
+          "FORM_DUPLICATE_ROLE",
+          `Duplicate form role: ${formRole}`,
+        );
+      }
+      seenRoles.add(formRole);
+    }
     forms.push({
-      filename: fr.filename,
-      blob_sha: fr.blob_sha,
-      form:
-        fr.form === "APP" ||
-        fr.form === "CLI" ||
-        fr.form === "EXTENSION" ||
-        fr.form === "OTHER" ||
-        fr.form === "FEATURE" ||
-        fr.form === "DOCS"
-          ? fr.form
-          : null,
-      notes: typeof fr.notes === "string" ? fr.notes : "",
+      filename: f.filename,
+      blob_sha: f.blob_sha,
+      form: formRole,
+      notes: typeof f.notes === "string" ? f.notes : "",
     });
+  }
+
+  for (const role of REQUIRED_BUG_FORM_ROLES) {
+    if (!seenRoles.has(role)) {
+      throw new FormSnapshotError(
+        "FORM_MISSING_ROLE",
+        `Snapshot missing required form role: ${role}`,
+      );
+    }
   }
 
   const material = {
@@ -203,6 +293,7 @@ export function viewFormSnapshot(
   source: FormSnapshotView["source"],
 ): FormSnapshotView {
   const fetched = Date.parse(snapshot.fetched_at);
+  // Future beyond skew is rejected at validation; residual future within skew → age 0.
   const age_ms = Math.max(0, nowMs - fetched);
   const fresh = age_ms <= FORM_SNAPSHOT_FRESH_MS;
   return {
@@ -218,6 +309,15 @@ export function viewFormSnapshot(
     forms: snapshot.forms,
     source,
   };
+}
+
+/** Resolve the current filename for a GitHub issue form role from a snapshot. */
+export function filenameForFormRole(
+  forms: FormBlobRecord[],
+  role: GitHubIssueForm,
+): string | null {
+  const rec = forms.find((f) => f.form === role);
+  return rec ? rec.filename : null;
 }
 
 /** Compute integrity for fixture generation / tests. */

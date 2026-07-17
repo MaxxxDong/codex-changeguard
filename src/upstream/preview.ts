@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { diagnose } from "../core/diagnose.js";
 import { assertNoLeakPaths, redactText } from "../core/redact.js";
 import { sha256Canonical, sha256Text } from "../evidence/canonical.js";
@@ -11,7 +10,6 @@ import {
 } from "./disclosure.js";
 import {
   bundledOfficialFormSnapshot,
-  FormSnapshotError,
   validateOfficialFormSnapshot,
   viewFormSnapshot,
 } from "./form-snapshot.js";
@@ -25,6 +23,7 @@ import type {
   CapsuleStatus,
   DisclosureDecision,
   UpstreamFormTransport,
+  UpstreamPreviewRequest,
   UpstreamPreviewResult,
   UpstreamSubmissionCapsule,
 } from "./types.js";
@@ -58,7 +57,9 @@ function emptyResult(
     disclosure_manifest: partial.disclosure_manifest,
     transport_calls: partial.transport_calls ?? 0,
     local_incident: partial.local_incident ?? null,
-    network_used: false,
+    // Truthful: production CLI/MCP inject null transport → always false.
+    // Injected transport (tests/orchestration) that actually fires → true.
+    network_used: partial.network_used ?? false,
     target_mutated: false,
     repair_applied: false,
     repair_authorized: false,
@@ -73,6 +74,49 @@ function emptyResult(
 
 function capsuleId(material: unknown): string {
   return `usc_${sha256Canonical(material).slice(0, 24)}`;
+}
+
+/**
+ * Replace free-text fields that may carry injection with a deterministic
+ * quarantine placeholder. Retains structure; no raw injection prose in export.
+ */
+function quarantineRequestFreeText(
+  request: UpstreamPreviewRequest,
+  placeholder: string,
+): UpstreamPreviewRequest {
+  return {
+    ...request,
+    actual_behavior: placeholder,
+    technical_signals: request.technical_signals.map(() => placeholder),
+    reproduction: {
+      ...request.reproduction,
+      steps: request.reproduction.steps.map(() => placeholder),
+      intermittent_marker: request.reproduction.intermittent_marker
+        ? placeholder
+        : null,
+    },
+    observed_facts: request.observed_facts.map(() => placeholder),
+    user_reports: request.user_reports.map(() => placeholder),
+    hypotheses: request.hypotheses.map(() => placeholder),
+    error_strings: [],
+    command_strings: [],
+    evidence_delta: {
+      items: request.evidence_delta.items.map((it) => ({
+        ...it,
+        summary: placeholder,
+      })),
+    },
+    duplicate_search: {
+      ...request.duplicate_search,
+      candidates: request.duplicate_search.candidates.map((c) => ({
+        ...c,
+        title: placeholder,
+        // Keep structural ids/urls for routing inspectability but strip free title.
+      })),
+    },
+    // Drop doctor payload from export path when injection detected.
+    doctor_json: null,
+  };
 }
 
 /**
@@ -101,12 +145,18 @@ export function previewUpstream(
       disclosure_decision,
       disclosure_manifest,
       transport_calls: 0,
+      network_used: false,
       error_code: code,
       error_message: message,
     });
   }
 
-  const { request, injection_detected, injection_reason } = parsed;
+  const {
+    request: parsedRequest,
+    injection_detected,
+    injection_reason,
+    injection_material,
+  } = parsed;
 
   // Quarantine injection-bearing free text for capsule privacy record.
   const quarantine =
@@ -114,19 +164,35 @@ export function previewUpstream(
       ? {
           quarantined: true as const,
           reason: injection_reason,
-          original_sha256: sha256Text(`injection:${injection_reason}`),
+          original_sha256: sha256Text(
+            injection_material ?? `injection:${injection_reason}`,
+          ),
           placeholder: `<quarantined:body:${injection_reason}>`,
         }
       : null;
+
+  // When injection is present, strip free text before any draft construction.
+  const request = injection_detected && quarantine
+    ? quarantineRequestFreeText(parsedRequest, quarantine.placeholder)
+    : parsedRequest;
 
   // Load local incident (read-only) for cross-check; never required for routing.
   const diagnosis = diagnose(options.targetPath);
   const local_incident = diagnosis.incident_fingerprint;
 
   // Doctor sanitization (orchestrator-supplied only; never exec codex).
+  // Skip doctor content when injection already quarantined the request.
   let doctor;
   try {
-    doctor = sanitizeDoctorJson(request.doctor_json);
+    doctor = sanitizeDoctorJson(
+      injection_detected ? null : request.doctor_json,
+    );
+    if (injection_detected) {
+      doctor = {
+        ...doctor,
+        refused_reasons: ["injection_quarantined"],
+      };
+    }
   } catch (e) {
     const code = e instanceof DoctorError ? e.code : "DOCTOR_ERROR";
     const message =
@@ -136,15 +202,15 @@ export function previewUpstream(
       disclosure_decision,
       disclosure_manifest,
       transport_calls: 0,
+      network_used: false,
       local_incident,
       error_code: code,
       error_message: message,
     });
   }
 
-  // Route + form map.
+  // Route first; form map applied after snapshot so filenames follow current forms.
   let routeDecision = routeUpstream(request.case_kind);
-  routeDecision = applyFormMap(routeDecision, request.surface);
 
   // Form snapshot: bundled immutable by default; optional approved transport refresh.
   let transport_calls = 0;
@@ -157,43 +223,50 @@ export function previewUpstream(
       const req = formTransportRequestPayload(disclosure_manifest.manifest_id);
       const resp = transport!.fetchForms(req);
       transport_calls = 1;
-      formSnapshot = validateOfficialFormSnapshot(resp.snapshot);
+      formSnapshot = validateOfficialFormSnapshot(resp.snapshot, nowMs);
       snapshotSource = "transport_refresh";
     } catch (e) {
       transport_calls = 1;
       // Fall back to bundled immutable snapshot; mark via view freshness.
-      if (e instanceof FormSnapshotError) {
-        formSnapshot = bundledOfficialFormSnapshot();
-        snapshotSource = "bundled_immutable";
-      } else {
-        formSnapshot = bundledOfficialFormSnapshot();
-        snapshotSource = "bundled_immutable";
-      }
+      void e;
+      formSnapshot = bundledOfficialFormSnapshot();
+      snapshotSource = "bundled_immutable";
     }
   } else {
     transport_calls = 0;
   }
 
+  // Dynamic form filename from the validated current snapshot role.
+  routeDecision = applyFormMap(
+    routeDecision,
+    request.surface,
+    formSnapshot.forms,
+  );
+
   const form_snapshot = viewFormSnapshot(formSnapshot, nowMs, snapshotSource);
+  // Truthful network/transport: production null transport → false/0; injected call → true/1.
+  const network_used = transport_calls > 0;
 
   // Duplicate assessment (exact enums + zero-delta reaction-only).
   const dupFull = assessDuplicate(request, routeDecision.route);
   const draft_title = dupFull.draft_title;
+  // Injection always nulls usable drafts — including private routes.
+  const blockDrafts =
+    injection_detected || routeDecision.public_issue_draft_forbidden;
   const duplicate = {
     state: dupFull.state,
     matched_issue_id: dupFull.matched_issue_id,
     matched_issue_url: dupFull.matched_issue_url,
     evidence_delta_material: dupFull.evidence_delta_material,
     evidence_delta_hash: dupFull.evidence_delta_hash,
-    recommendation: dupFull.recommendation,
-    // Security path: never render public Issue draft body/comment.
-    draft_body: routeDecision.public_issue_draft_forbidden
-      ? null
-      : dupFull.draft_body,
-    draft_comment: routeDecision.public_issue_draft_forbidden
-      ? null
-      : dupFull.draft_comment,
-    cross_link_issue_ids: dupFull.cross_link_issue_ids,
+    recommendation: injection_detected
+      ? dupFull.recommendation
+      : routeDecision.public_issue_draft_forbidden
+        ? dupFull.recommendation
+        : dupFull.recommendation,
+    draft_body: blockDrafts ? null : dupFull.draft_body,
+    draft_comment: blockDrafts ? null : dupFull.draft_comment,
+    cross_link_issue_ids: injection_detected ? [] : dupFull.cross_link_issue_ids,
   };
 
   const privacy_passed = !injection_detected;
@@ -205,12 +278,12 @@ export function previewUpstream(
     privacy_passed,
   });
 
+  // Privacy/injection takes precedence over private routing and gate outcomes.
   let status: CapsuleStatus;
-  if (routeDecision.route === "BUGCROWD") {
-    status = "ROUTED_PRIVATE";
-  } else if (injection_detected) {
-    // Injection quarantine blocks public draft regardless of other gate checks.
+  if (injection_detected) {
     status = "PREVIEW_BLOCKED";
+  } else if (routeDecision.route === "BUGCROWD") {
+    status = "ROUTED_PRIVATE";
   } else if (!gate.passed) {
     status = "GATE_FAILED";
   } else {
@@ -243,6 +316,13 @@ export function previewUpstream(
     status,
   };
 
+  const exportTitle =
+    injection_detected ||
+    routeDecision.public_issue_draft_forbidden ||
+    duplicate.recommendation === "subscribe_or_upvote"
+      ? null
+      : draft_title;
+
   const capsule: UpstreamSubmissionCapsule = {
     schema_version: 1,
     capsule_id: capsuleId(capsuleMaterial),
@@ -268,18 +348,16 @@ export function previewUpstream(
       injection_quarantined: injection_detected,
       quarantine,
     },
+    // Injection: only placeholders / empty safe fields — no raw free text.
     observed_facts: request.observed_facts,
     user_reports: request.user_reports,
     hypotheses: request.hypotheses,
     error_strings: request.error_strings,
     command_strings: request.command_strings,
     route_rationale: routeDecision.rationale,
-    draft_title:
-      routeDecision.public_issue_draft_forbidden ||
-      duplicate.recommendation === "subscribe_or_upvote"
-        ? null
-        : draft_title,
+    draft_title: exportTitle,
     draft_labels:
+      !injection_detected &&
       routeDecision.route === "GITHUB_ISSUE" &&
       duplicate.state === "NEW_INCIDENT"
         ? ["bug", "changeguard-preview"]
@@ -294,13 +372,12 @@ export function previewUpstream(
     capsule_content_sha256: null,
   });
 
-  // ok when we produced a capsule (including private/gate-failed previews for inspectability)
-  // Fail only on parse/doctor hard errors above.
+  // PREVIEW_BLOCKED is not a success: ok=false so CLI exits non-zero.
+  // ROUTED_PRIVATE / GATE_FAILED remain inspectable previews with ok=true.
   const ok =
     status === "PREVIEW_READY" ||
     status === "ROUTED_PRIVATE" ||
-    status === "GATE_FAILED" ||
-    status === "PREVIEW_BLOCKED";
+    status === "GATE_FAILED";
 
   return emptyResult({
     ok,
@@ -308,6 +385,7 @@ export function previewUpstream(
     disclosure_decision,
     disclosure_manifest,
     transport_calls,
+    network_used,
     local_incident,
     error_code:
       status === "GATE_FAILED"
@@ -322,9 +400,4 @@ export function previewUpstream(
           ? "Prompt-injection content quarantined; preview blocked for public draft."
           : null,
   });
-}
-
-/** Stable nonce helper for tests (not used for external auth). */
-export function randomPreviewNonce(): string {
-  return crypto.randomBytes(8).toString("hex");
 }

@@ -25,6 +25,11 @@ const CREDENTIAL_SHAPES = [
   /\b(?:sk|pk|rk)-[A-Za-z0-9]{8,}\b/g,
   /\b(?:xox[baprs]-)[A-Za-z0-9-]{10,}\b/g,
   /\bAPI[_-]?KEY\s*[:=]\s*\S+/gi,
+  // Cookie / session shapes (including after NFKC of full-width forms).
+  /\bSet-Cookie\s*[:=]\s*\S+/gi,
+  /\bCookie\s*[:=]\s*\S+/gi,
+  /\bsession[_-]?(?:id|token|key|cookie)\s*[:=]\s*\S+/gi,
+  /\b(?:JSESSIONID|PHPSESSID|connect\.sid)\s*[:=]\s*\S+/gi,
 ];
 
 /** Full-width Latin letters/digits/punctuation → compatibility (NFKC). */
