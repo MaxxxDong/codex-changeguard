@@ -186,9 +186,12 @@ const FS_NAMESPACE_META_PROPERTIES = new Set(["promises", "constants"]);
 const CONDITIONAL_OPEN_METHODS = new Set(["open", "openSync"]);
 
 /**
- * Ticket 02 recovery-only fs methods (sync). Allowed exclusively in modules
- * under `src/core/recovery/`. Unknown methods still fail closed. writeFileSync
- * and createWriteStream remain forbidden even in recovery (use open+write+rename).
+ * Ticket 02 recovery-only fs methods (sync). Allowed exclusively in the
+ * registered atomic-write module (`src/core/recovery/atomic-write.ts`).
+ * Unknown methods still fail closed. writeFileSync, createWriteStream,
+ * rmSync, and copyFileSync remain forbidden (no recursive delete; use
+ * open+write+rename only). Any other recovery/CLI/MCP/core module using
+ * write APIs is rejected.
  */
 const RECOVERY_WRITE_FS_METHODS = new Set([
   "writeSync",
@@ -196,8 +199,6 @@ const RECOVERY_WRITE_FS_METHODS = new Set([
   "renameSync",
   "mkdirSync",
   "unlinkSync",
-  "rmSync",
-  "copyFileSync",
 ]);
 
 /** String modes allowed for recovery open (exclusive create / write). */
@@ -425,21 +426,26 @@ function isReadonlyFsMethod(method, nsKind = "fs") {
 }
 
 /**
- * True when the scanned relative path is a registered recovery module.
- * Self-tests may label snippets `self-test:recovery-…`.
+ * True when the scanned relative path is the registered atomic-write recovery
+ * module (exact write-capability exemption). Self-tests may label snippets
+ * `self-test:recovery-atomic-write-…`. Other recovery modules, CLI, MCP, and
+ * core remain under the read-only fs policy.
  * @param {string} rel
  * @returns {boolean}
  */
 function isRecoveryModulePath(rel) {
   if (typeof rel !== "string" || rel.length === 0) return false;
   const n = rel.replace(/\\/g, "/");
-  if (n.includes("self-test:recovery-") || n.startsWith("self-test:recovery-")) {
+  if (
+    n.includes("self-test:recovery-atomic-write-") ||
+    n.startsWith("self-test:recovery-atomic-write-")
+  ) {
     return true;
   }
   return (
-    n.includes("/core/recovery/") ||
-    n.startsWith("src/core/recovery/") ||
-    n.startsWith("core/recovery/")
+    n.endsWith("/core/recovery/atomic-write.ts") ||
+    n === "src/core/recovery/atomic-write.ts" ||
+    n === "core/recovery/atomic-write.ts"
   );
 }
 
@@ -3470,37 +3476,53 @@ fs.closeSync(fd);
       expectViolation: false,
       source: `const a = process.argv; void a;\n`,
     },
-    // --- Ticket 02: recovery module narrow write allowlist ---
-    // Labels must start with `recovery-` so scan path is `self-test:recovery-…`.
+    // --- Ticket 02: atomic-write recovery module narrow write allowlist ---
+    // Labels must start with `recovery-atomic-write-` so scan path is
+    // `self-test:recovery-atomic-write-…`.
     {
-      name: "recovery-allowed open write + writeSync + renameSync",
+      name: "recovery-atomic-write-allowed open write + writeSync + renameSync",
       expectViolation: false,
       source: `import fs, { constants as c } from "node:fs";\nconst fd = fs.openSync("x", c.O_WRONLY | c.O_CREAT | c.O_TRUNC | c.O_EXCL);\nfs.writeSync(fd, "y");\nfs.fsyncSync(fd);\nfs.closeSync(fd);\nfs.renameSync("x", "z");\n`,
     },
     {
-      name: "recovery-allowed mkdirSync unlinkSync",
+      name: "recovery-atomic-write-allowed mkdirSync unlinkSync",
       expectViolation: false,
       source: `import fs from "node:fs";\nfs.mkdirSync("d");\nfs.unlinkSync("f");\n`,
     },
     {
-      name: "recovery-forbidden writeFileSync still blocked",
+      name: "recovery-atomic-write-forbidden writeFileSync still blocked",
       expectViolation: true,
       source: `import fs from "node:fs";\nfs.writeFileSync("x", "y");\n`,
     },
     {
-      name: "recovery-forbidden createWriteStream still blocked",
+      name: "recovery-atomic-write-forbidden createWriteStream still blocked",
       expectViolation: true,
       source: `import fs from "node:fs";\nfs.createWriteStream("x");\n`,
     },
     {
-      name: "recovery-forbidden shell still blocked",
+      name: "recovery-atomic-write-forbidden rmSync",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfs.rmSync("x", { recursive: true });\n`,
+    },
+    {
+      name: "recovery-atomic-write-forbidden copyFileSync",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfs.copyFileSync("a", "b");\n`,
+    },
+    {
+      name: "recovery-atomic-write-forbidden shell still blocked",
       expectViolation: true,
       source: `import { spawnSync } from "node:child_process";\nspawnSync("echo", ["x"]);\n`,
     },
     {
-      name: "recovery-forbidden network still blocked",
+      name: "recovery-atomic-write-forbidden network still blocked",
       expectViolation: true,
       source: `fetch("https://example.invalid");\n`,
+    },
+    {
+      name: "recovery-engine writeSync rejected (non-atomic-write module)",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfs.writeSync(1, "y");\n`,
     },
     {
       name: "non-recovery writeSync still blocked",

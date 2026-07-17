@@ -109,7 +109,8 @@ function toolSchemas() {
           target: targetProp,
           authorization: {
             type: "string",
-            description: "Exact authorization_binding from repair-preview.",
+            description:
+              "Self-contained authorization token from repair-preview (cg1.…).",
           },
         },
       },

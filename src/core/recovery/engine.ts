@@ -2,6 +2,10 @@
  * Ticket 02 recovery engine — preview, authorize-bound apply, verify, rollback.
  * Single registered repair path for the isolated protected-process fixture.
  * Diagnosis modules remain read-only; only this recovery surface mutates.
+ *
+ * Preview is completely read-only over the entire target tree (no .changeguard).
+ * Apply receives a self-contained authorization token; backup paths come only
+ * from registered constants — never from mutable token/session path fields.
  */
 import { MAX_ARTIFACT_BYTES } from "../limits.js";
 import { measureProtectedProcessAst, sha256Buffer } from "../measure.js";
@@ -11,6 +15,11 @@ import {
 } from "../path-safety.js";
 import { assertNoLeakPaths, redactText } from "../redact.js";
 import type { MeasuredEvidence } from "../types.js";
+import {
+  AuthTokenError,
+  decodeAuthorizationToken,
+  encodeAuthorizationToken,
+} from "./auth-token.js";
 import {
   atomicReplaceFile,
   createVerifiedBackup,
@@ -29,6 +38,7 @@ import {
   defaultExpiryIso,
   invalidationMaterial,
   isExpired,
+  mintNonce,
   operationDigest,
   preHandshakeFailureStillPresent,
   PROTECTED_PROCESS_OP,
@@ -43,12 +53,13 @@ import type {
 } from "./types.js";
 import {
   INDUCE_VERIFY_FAIL_REL,
-  RECOVERY_BACKUP_DIR,
-  RECOVERY_CAPSULE_PREVIEW_REL,
+  registeredBackupRel,
   RECOVERY_SESSION_REL,
 } from "./types.js";
 
 const CAPSULE_ID = "protected-process-shim-experimental-v1";
+/** Upper bound on authorization token string length (base64url envelope). */
+const MAX_AUTH_TOKEN_LEN = 48 * 1024;
 
 function userReceipt(
   status: RepairResult["user_resolution"]["status"],
@@ -79,6 +90,7 @@ function baseResult(
     ok: partial.ok,
     operation: partial.operation,
     capsule: partial.capsule ?? null,
+    authorization: partial.authorization ?? null,
     user_resolution: partial.user_resolution,
     upstream_contribution: partial.upstream_contribution,
     evidence: partial.evidence ?? [],
@@ -107,7 +119,11 @@ function fail(
     ok: false,
     operation,
     user_resolution: userReceipt(
-      code === "AUTH_INVALID" || code === "NOT_APPLICABLE"
+      code === "AUTH_INVALID" ||
+        code === "AUTH_EXPIRED" ||
+        code === "AUTH_MALFORMED" ||
+        code === "AUTH_REPLAY" ||
+        code === "NOT_APPLICABLE"
         ? "REPAIR_REFUSED"
         : "INCONCLUSIVE",
       "Repair operation refused or could not complete safely.",
@@ -131,28 +147,34 @@ function buildCapsule(input: {
   op_digest: string;
 }): RepairCapsule {
   const expires_at = defaultExpiryIso();
+  const nonce = mintNonce();
+  const backup_rel = registeredBackupRel(PROTECTED_PROCESS_OP.target_path_alias);
   const invalidation_digest = invalidationMaterial({
     original_sha256: input.original_sha256,
     expected_pattern_count: input.pattern_count,
     scope_digest: input.scope_digest,
     operation_digest: input.op_digest,
+    expected_result_sha256: input.expected_result_sha256,
+    backup_rel,
     capsule_id: CAPSULE_ID,
     mode: "apply_authorized",
     authorization_tier: "experimental_one_shot",
   });
-  const backup_rel = `${RECOVERY_BACKUP_DIR}/${PROTECTED_PROCESS_OP.target_path_alias}.bak`;
   const binding = authorizationBinding({
     capsule_id: CAPSULE_ID,
     scope_digest: input.scope_digest,
     original_sha256: input.original_sha256,
     expected_pattern_count: input.pattern_count,
     operation_digest: input.op_digest,
+    expected_result_sha256: input.expected_result_sha256,
+    backup_rel,
     invalidation_digest,
     trust_tier: "T1_community",
     authorization_tier: "experimental_one_shot",
     mode: "apply_authorized",
     target_path_alias: PROTECTED_PROCESS_OP.target_path_alias,
     expires_at,
+    nonce,
   });
 
   return {
@@ -221,12 +243,14 @@ function buildCapsule(input: {
     },
     human_decision: "pending",
     smoke_result: "not_run",
+    nonce,
   };
 }
 
 /**
  * Preview a Repair Capsule for the isolated protected-process target.
- * Refuses when the positive mechanism is not present (negative control).
+ * Completely read-only over the entire target tree — no .changeguard writes.
+ * Returns a self-contained authorization token for cross-process apply.
  */
 export function previewRepair(targetPath: string): RepairResult {
   let targetReal: string;
@@ -293,21 +317,28 @@ export function previewRepair(targetPath: string): RepairResult {
       op_digest,
     });
 
+    let authorization: string;
+    try {
+      authorization = encodeAuthorizationToken(capsule);
+    } catch (e) {
+      if (e instanceof AuthTokenError) {
+        return fail("preview", e.code, e.message, { evidence });
+      }
+      return fail("preview", "PREVIEW_ERROR", "Preview failed.", { evidence });
+    }
+
     evidence.push({
       kind: "capsule_preview",
       detail: `Capsule ${capsule.capsule_id} binding=${capsule.authorization_binding.slice(0, 16)}…`,
       measured: true,
     });
 
-    // Persist exact capsule so apply uses the same binding/expiry (no re-mint).
-    writeSessionState(targetReal, RECOVERY_CAPSULE_PREVIEW_REL, {
-      ...capsule,
-    });
-
+    // No target writes — token is self-contained for cross-process apply.
     return baseResult({
       ok: true,
       operation: "preview",
       capsule,
+      authorization,
       user_resolution: userReceipt(
         "REPAIR_PREVIEWED",
         "Repair Capsule preview ready. One scope-bound authorization required to apply.",
@@ -341,7 +372,13 @@ export function previewRepair(targetPath: string): RepairResult {
 function recomputeLiveBinding(
   targetReal: string,
   capsule: RepairCapsule,
-): { ok: true; file: ReturnType<typeof openTargetFile>; plan: NonNullable<ReturnType<typeof removeProtectedProcessBlock>> } | { ok: false; code: string; message: string } {
+):
+  | {
+      ok: true;
+      file: ReturnType<typeof openTargetFile>;
+      plan: NonNullable<ReturnType<typeof removeProtectedProcessBlock>>;
+    }
+  | { ok: false; code: string; message: string } {
   if (isExpired(capsule.expires_at)) {
     return { ok: false, code: "AUTH_EXPIRED", message: "Capsule authorization expired." };
   }
@@ -378,10 +415,8 @@ function recomputeLiveBinding(
   if (!plan) {
     return { ok: false, code: "REPAIR_PLAN", message: "Repair plan no longer applicable." };
   }
-  if (
-    capsule.operation.expected_result_sha256 &&
-    plan.result_sha256 !== capsule.operation.expected_result_sha256
-  ) {
+  // expected_result_sha256 is required and bound — always revalidate.
+  if (plan.result_sha256 !== capsule.operation.expected_result_sha256) {
     return {
       ok: false,
       code: "AUTH_INVALID",
@@ -396,11 +431,21 @@ function recomputeLiveBinding(
       message: "Operation digest changed; authorization invalid.",
     };
   }
+  const backup_rel = registeredBackupRel(PROTECTED_PROCESS_OP.target_path_alias);
+  if (capsule.backup.backup_rel !== backup_rel) {
+    return {
+      ok: false,
+      code: "AUTH_INVALID",
+      message: "Backup path refused; authorization invalid.",
+    };
+  }
   const invalidation_digest = invalidationMaterial({
     original_sha256: file.sha256,
     expected_pattern_count: capsule.expected_pattern_count,
     scope_digest,
     operation_digest: op_digest,
+    expected_result_sha256: capsule.operation.expected_result_sha256,
+    backup_rel,
     capsule_id: capsule.capsule_id,
     mode: capsule.mode,
     authorization_tier: capsule.authorization_tier,
@@ -418,12 +463,15 @@ function recomputeLiveBinding(
     original_sha256: file.sha256,
     expected_pattern_count: capsule.expected_pattern_count,
     operation_digest: op_digest,
+    expected_result_sha256: capsule.operation.expected_result_sha256,
+    backup_rel,
     invalidation_digest,
     trust_tier: capsule.trust_tier,
     authorization_tier: capsule.authorization_tier,
     mode: capsule.mode,
     target_path_alias: capsule.target_path_alias,
     expires_at: capsule.expires_at,
+    nonce: capsule.nonce,
   });
   if (expectedBinding !== capsule.authorization_binding) {
     return {
@@ -435,10 +483,56 @@ function recomputeLiveBinding(
   return { ok: true, file, plan };
 }
 
+/**
+ * Refuse replay of a token that already completed a successful apply (or was
+ * consumed and rolled back). Session state is ChangeGuard-owned and written
+ * only after authorized apply begins.
+ */
+function refuseConsumedToken(
+  targetReal: string,
+  capsule: RepairCapsule,
+): { refuse: true; code: string; message: string } | { refuse: false } {
+  const session = readSessionState(targetReal, RECOVERY_SESSION_REL, 64 * 1024);
+  if (!session) return { refuse: false };
+  const consumed =
+    session.consumed === true ||
+    session.status === "resolved_verified" ||
+    session.status === "explicit_rollback";
+  const sameBinding =
+    typeof session.authorization_binding === "string" &&
+    session.authorization_binding.toLowerCase() ===
+      capsule.authorization_binding.toLowerCase();
+  const sameNonce =
+    typeof session.nonce === "string" && session.nonce === capsule.nonce;
+  if (consumed && (sameBinding || sameNonce)) {
+    return {
+      refuse: true,
+      code: "AUTH_REPLAY",
+      message: "Authorization token already consumed; re-preview required.",
+    };
+  }
+  // Materially different session after rollback/recreation: if session records
+  // a different original hash for a still-consumed binding family, refuse silent
+  // re-authorization of a different repair session with this token material.
+  if (
+    consumed &&
+    typeof session.original_sha256 === "string" &&
+    session.original_sha256 !== capsule.original_sha256 &&
+    sameBinding
+  ) {
+    return {
+      refuse: true,
+      code: "AUTH_REPLAY",
+      message: "Authorization does not match this recovery session.",
+    };
+  }
+  return { refuse: false };
+}
+
 function runVerification(
   targetReal: string,
   originalSha: string,
-  expectedResultSha: string | null,
+  expectedResultSha: string,
 ): VerificationReport {
   const checks: VerificationReport["checks"] = [];
   let measured_sha256: string | null = null;
@@ -508,16 +602,14 @@ function runVerification(
           ? "Artifact hash differs from original."
           : "Artifact hash unchanged.",
     });
-    if (expectedResultSha) {
-      checks.push({
-        id: "expected_result_hash",
-        passed: file.sha256 === expectedResultSha,
-        detail:
-          file.sha256 === expectedResultSha
-            ? "Result hash matches capsule expectation."
-            : "Result hash does not match capsule expectation.",
-      });
-    }
+    checks.push({
+      id: "expected_result_hash",
+      passed: file.sha256 === expectedResultSha,
+      detail:
+        file.sha256 === expectedResultSha
+          ? "Result hash matches capsule expectation."
+          : "Result hash does not match capsule expectation.",
+    });
     const health = coreHealthChecks(source);
     core_health_passed = health.passed;
     checks.push(...health.checks);
@@ -552,11 +644,12 @@ function runVerification(
 /**
  * Apply one experimental repair after exact scope-consistent authorization.
  * On verification failure, automatically restores original bytes.
+ * No state write occurs until authorization and live preconditions pass.
  */
 export function applyRepair(targetPath: string, options: ApplyOptions): RepairResult {
   const auth =
     typeof options.authorization === "string" ? options.authorization.trim() : "";
-  if (!auth || auth.length < 32 || auth.length > 128 || !/^[a-f0-9]+$/i.test(auth)) {
+  if (!auth || auth.length < 16 || auth.length > MAX_AUTH_TOKEN_LEN) {
     return fail("apply", "AUTH_INVALID", "Authorization token refused.");
   }
 
@@ -568,23 +661,23 @@ export function applyRepair(targetPath: string, options: ApplyOptions): RepairRe
     return fail("apply", "TARGET_ERROR", "Target refused.");
   }
 
-  // Load the exact capsule from the prior preview (binding must not be re-minted).
-  const stored = readSessionState(targetReal, RECOVERY_CAPSULE_PREVIEW_REL, 256 * 1024);
-  if (!stored || typeof stored.authorization_binding !== "string") {
-    return fail(
-      "apply",
-      "NO_PREVIEW",
-      "No capsule preview; run repair-preview before apply.",
-    );
-  }
-  const capsule = stored as unknown as RepairCapsule;
-  if (auth.toLowerCase() !== String(capsule.authorization_binding).toLowerCase()) {
-    return fail("apply", "AUTH_INVALID", "Authorization does not match preview capsule binding.", {
-      capsule,
-    });
+  // Decode self-contained token (no target-local preview file).
+  let capsule: RepairCapsule;
+  try {
+    capsule = decodeAuthorizationToken(auth);
+  } catch (e) {
+    if (e instanceof AuthTokenError) {
+      return fail("apply", e.code === "AUTH_EXPIRED" ? "AUTH_EXPIRED" : "AUTH_INVALID", e.message);
+    }
+    return fail("apply", "AUTH_INVALID", "Authorization token refused.");
   }
 
-  // Mechanism must still be present and match the stored capsule preconditions.
+  const replay = refuseConsumedToken(targetReal, capsule);
+  if (replay.refuse) {
+    return fail("apply", replay.code, replay.message, { capsule });
+  }
+
+  // Mechanism must still be present and match capsule preconditions.
   const live = recomputeLiveBinding(targetReal, capsule);
   if (!live.ok) {
     return fail("apply", live.code, live.message, { capsule });
@@ -593,14 +686,16 @@ export function applyRepair(targetPath: string, options: ApplyOptions): RepairRe
   const evidence: MeasuredEvidence[] = [
     {
       kind: "authorization",
-      detail: "Authorization matched stored capsule binding.",
+      detail: "Authorization token verified against live preconditions.",
       measured: true,
     },
   ];
   let backupReceipt: BackupReceipt | null = null;
-  const backup_rel = capsule.backup.backup_rel;
+  // Always derive backup path from registered constants — never token/session path.
+  const backup_rel = registeredBackupRel(PROTECTED_PROCESS_OP.target_path_alias);
 
   try {
+    // First authorized mutation: transaction state + backup under ChangeGuard dir.
     const backup = createVerifiedBackup(targetReal, backup_rel, live.file);
     backupReceipt = {
       backup_rel,
@@ -628,7 +723,7 @@ export function applyRepair(targetPath: string, options: ApplyOptions): RepairRe
       measured: true,
     });
 
-    // Session state for explicit rollback.
+    // Session state for explicit rollback / one-shot replay protection.
     writeSessionState(targetReal, RECOVERY_SESSION_REL, {
       schema_version: 1,
       capsule_id: capsule.capsule_id,
@@ -636,8 +731,10 @@ export function applyRepair(targetPath: string, options: ApplyOptions): RepairRe
       result_sha256: replaced.resulting_sha256,
       backup_rel,
       authorization_binding: capsule.authorization_binding,
+      nonce: capsule.nonce,
       applied_at: new Date().toISOString(),
       status: "applied_pending_verify",
+      consumed: false,
     });
 
     const verification = runVerification(
@@ -667,6 +764,11 @@ export function applyRepair(targetPath: string, options: ApplyOptions): RepairRe
         original_sha256: capsule.original_sha256,
         status: "auto_rolled_back",
         backup_rel,
+        authorization_binding: capsule.authorization_binding,
+        nonce: capsule.nonce,
+        // Failed apply is not a successful consumption; same token may retry
+        // only while live preconditions still match.
+        consumed: false,
       });
       evidence.push({
         kind: "auto_rollback",
@@ -713,8 +815,10 @@ export function applyRepair(targetPath: string, options: ApplyOptions): RepairRe
       result_sha256: replaced.resulting_sha256,
       backup_rel,
       authorization_binding: capsule.authorization_binding,
+      nonce: capsule.nonce,
       applied_at: new Date().toISOString(),
       status: "resolved_verified",
+      consumed: true,
     });
 
     return baseResult({
@@ -811,7 +915,7 @@ export function verifyRepair(targetPath: string): RepairResult {
   const expectedResult =
     typeof session?.result_sha256 === "string" ? session.result_sha256 : null;
 
-  if (!originalSha) {
+  if (!originalSha || !expectedResult) {
     return fail(
       "verify",
       "NO_SESSION",
@@ -883,10 +987,8 @@ export function rollbackRepair(targetPath: string): RepairResult {
   }
   const originalSha =
     typeof session.original_sha256 === "string" ? session.original_sha256 : null;
-  const backup_rel =
-    typeof session.backup_rel === "string"
-      ? session.backup_rel
-      : `${RECOVERY_BACKUP_DIR}/${PROTECTED_PROCESS_OP.target_path_alias}.bak`;
+  // Always restore from registered backup path — never trust session.backup_rel.
+  const backup_rel = registeredBackupRel(PROTECTED_PROCESS_OP.target_path_alias);
   if (!originalSha) {
     return fail("rollback", "NO_SESSION", "Session missing original hash.");
   }
@@ -910,7 +1012,10 @@ export function rollbackRepair(targetPath: string): RepairResult {
       capsule_id: session.capsule_id ?? CAPSULE_ID,
       original_sha256: originalSha,
       backup_rel,
+      authorization_binding: session.authorization_binding ?? null,
+      nonce: session.nonce ?? null,
       status: "explicit_rollback",
+      consumed: true,
       rolled_back_at: new Date().toISOString(),
     });
 

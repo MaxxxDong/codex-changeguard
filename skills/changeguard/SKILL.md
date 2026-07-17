@@ -54,16 +54,16 @@ User-resolution and upstream-contribution receipts are independent.
 
 Public seams (same recovery core as CLI):
 
-1. `changeguard repair-preview <isolated-target>` / MCP `changeguard_repair_preview`
-2. `changeguard repair-apply <isolated-target> <authorization_binding>` / MCP `changeguard_repair_apply`
+1. `changeguard repair-preview <isolated-target>` / MCP `changeguard_repair_preview` (read-only; no target writes)
+2. `changeguard repair-apply <isolated-target> <authorization-token>` / MCP `changeguard_repair_apply`
 3. `changeguard verify <isolated-target>` / MCP `changeguard_verify`
 4. `changeguard rollback <isolated-target>` / MCP `changeguard_rollback`
 
 Orchestration:
 
 1. Prefer a disposable/isolated fixture copy — never the live Codex profile.
-2. Preview the Repair Capsule; present target alias, hash, pattern count, risk, backup, verification, rollback, and the one-shot `authorization_binding`.
-3. Apply only with the exact binding from that preview; any target/scope change invalidates it.
+2. Preview the Repair Capsule; present target alias, hash, pattern count, risk, backup, verification, rollback, and the self-contained one-shot `authorization` token (`cg1.…`).
+3. Apply only with the exact token from that preview; any target/scope/token change invalidates it; successful apply consumes the token.
 4. `RESOLVED_VERIFIED` only when verification proves the original failure is gone and core health passes.
 5. On verification failure, automatic rollback restores original bytes; never claim resolved.
 6. Explicit rollback is mitigation (`MITIGATED_VERIFIED_BY_ROLLBACK`), not root-cause resolution.

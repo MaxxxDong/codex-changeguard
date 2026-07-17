@@ -1,8 +1,11 @@
 /**
  * Ticket 02 Scenario Harness — protected-process verified repair vertical slice.
  * Black-box via public CLI/MCP seams; owns target hash proofs for apply/rollback.
+ * Includes adversarial RED/GREEN cases for auth token, capsule mutation, and
+ * recovery write-boundary self-tests (via check:boundary).
  */
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -21,7 +24,14 @@ import {
 } from "../src/harness/scenario.js";
 import { McpTestClient } from "../src/mcp/client.js";
 import { measureProtectedProcessAst, sha256Buffer } from "../src/core/measure.js";
+import {
+  decodeAuthorizationToken,
+  encodeAuthorizationToken,
+  strictValidateCapsule,
+  AuthTokenError,
+} from "../src/core/recovery/auth-token.js";
 import { INDUCE_VERIFY_FAIL_REL } from "../src/core/recovery/index.js";
+import { registeredBackupRel } from "../src/core/recovery/types.js";
 import { makeTempDir } from "./helpers.js";
 
 const PROTECTED_ARTIFACT_SHA =
@@ -47,6 +57,13 @@ function capsuleFields(result: Record<string, unknown>) {
   const capsule = result.capsule as Record<string, unknown> | null;
   assert.ok(capsule, "capsule required");
   return capsule;
+}
+
+function authFromPreview(result: Record<string, unknown>): string {
+  const auth = result.authorization;
+  assert.equal(typeof auth, "string", "self-contained authorization token required");
+  assert.ok(String(auth).startsWith("cg1."), "token prefix cg1.");
+  return String(auth);
 }
 
 test("Ticket02: positive fixture reproduces protected-process failure before handshake (diagnose)", () => {
@@ -100,13 +117,19 @@ test("Ticket02: successful repair preview → apply → RESOLVED_VERIFIED with h
   const op = capsule.operation as Record<string, unknown>;
   assert.equal(op.kind, "exact_block_removal");
   assert.match(String(op.operation_digest), /^[a-f0-9]{64}$/);
+  assert.match(String(op.expected_result_sha256), /^[a-f0-9]{64}$/);
   assert.equal(capsule.authorization_tier, "experimental_one_shot");
   assert.equal(capsule.risk, "moderate");
   assert.ok(capsule.backup && typeof capsule.backup === "object");
+  assert.equal(
+    (capsule.backup as { backup_rel: string }).backup_rel,
+    registeredBackupRel(),
+  );
   assert.ok(capsule.verification && typeof capsule.verification === "object");
   assert.ok(capsule.rollback && typeof capsule.rollback === "object");
   assert.ok(capsule.expires_at);
   assert.ok(capsule.invalidation_digest);
+  assert.match(String(capsule.nonce), /^[a-f0-9]{32}$/);
   assert.ok(capsule.disclosure && typeof capsule.disclosure === "object");
   const disclosure = capsule.disclosure as Record<string, unknown>;
   assert.equal(disclosure.includes_source_bytes, false);
@@ -115,11 +138,16 @@ test("Ticket02: successful repair preview → apply → RESOLVED_VERIFIED with h
   const previewText = preview.stdout;
   assert.equal(previewText.includes("globalThis.process = __cg_shim"), false);
   assertNoLeakText(previewText);
-  // Preview may write capsule state under .changeguard/ but must not touch artifact.
+  // Preview is whole-tree read-only: no .changeguard, tree hash unchanged.
+  assert.equal(hashTargetTree(target), beforeTree, "preview must not mutate tree");
+  assert.equal(
+    fs.existsSync(path.join(target, ".changeguard")),
+    false,
+    "preview must not create .changeguard",
+  );
   assert.equal(artifactSha(target), originalSha, "preview must not mutate artifact");
-  void beforeTree;
 
-  const auth = String(capsule.authorization_binding);
+  const auth = authFromPreview(preview.result!);
   const apply = runCliRepairApply(target, auth);
   assert.equal(apply.exitCode, 0, apply.stdout);
   assert.ok(apply.result);
@@ -174,17 +202,18 @@ test("Ticket02: negative control refuses same repair (wrong mechanism)", () => {
     "REPAIR_REFUSED",
   );
   assert.equal(preview.result!.capsule, null);
+  assert.equal(preview.result!.authorization, null);
   assert.equal(hashTargetTree(target), before);
 
-  // Applying a forged authorization without a valid preview must fail closed.
+  // Applying a forged authorization without a valid token must fail closed.
   const forged = crypto.createHash("sha256").update("forged").digest("hex");
   const apply = runCliRepairApply(target, forged);
   assert.notEqual(apply.exitCode, 0);
   assert.equal(apply.result!.ok, false);
   assert.ok(
     apply.result!.error_code === "AUTH_INVALID" ||
-      apply.result!.error_code === "NOT_APPLICABLE" ||
-      apply.result!.error_code === "NO_PREVIEW",
+      apply.result!.error_code === "AUTH_MALFORMED" ||
+      apply.result!.error_code === "NOT_APPLICABLE",
   );
   assert.equal(hashTargetTree(target), before);
 });
@@ -194,11 +223,11 @@ test("Ticket02: stale or mismatched authorization is refused", () => {
   const target = copyFixtureToTemp("fixtures/protected-process", tmp);
   const preview = runCliRepairPreview(target);
   assert.equal(preview.exitCode, 0);
-  const auth = String(capsuleFields(preview.result!).authorization_binding);
+  const auth = authFromPreview(preview.result!);
   const originalSha = artifactSha(target);
 
   // Wrong token.
-  const wrong = "0".repeat(64);
+  const wrong = "cg1." + Buffer.from(JSON.stringify({ v: 1, capsule: {} })).toString("base64url");
   const bad = runCliRepairApply(target, wrong);
   assert.notEqual(bad.exitCode, 0);
   assert.equal(bad.result!.error_code, "AUTH_INVALID");
@@ -224,7 +253,7 @@ test("Ticket02: induced verification failure auto-rollbacks to original bytes", 
   const originalSha = artifactSha(target);
   const preview = runCliRepairPreview(target);
   assert.equal(preview.exitCode, 0);
-  const auth = String(capsuleFields(preview.result!).authorization_binding);
+  const auth = authFromPreview(preview.result!);
 
   // Harness plants sentinel under isolated target (black-box induce).
   const sentinel = path.join(target, INDUCE_VERIFY_FAIL_REL);
@@ -255,7 +284,7 @@ test("Ticket02: explicit rollback restores exact original bytes/hash", () => {
   const target = copyFixtureToTemp("fixtures/protected-process", tmp);
   const originalSha = artifactSha(target);
   const preview = runCliRepairPreview(target);
-  const auth = String(capsuleFields(preview.result!).authorization_binding);
+  const auth = authFromPreview(preview.result!);
   const apply = runCliRepairApply(target, auth);
   assert.equal(apply.exitCode, 0, apply.stdout);
   const repairedSha = artifactSha(target);
@@ -296,7 +325,7 @@ test("Ticket02: CLI and MCP repair-preview equivalence on positive fixture", asy
     const cliCap = cli.result!.capsule as Record<string, unknown>;
     const mcpCap = mcp.capsule!;
     // Stable capsule fields must match across seams; binding includes expires_at
-    // so successive previews mint distinct one-shot tokens (not reusable).
+    // and nonce so successive previews mint distinct one-shot tokens (not reusable).
     assert.equal(cliCap.original_sha256, mcpCap.original_sha256);
     assert.equal(cliCap.expected_pattern_count, mcpCap.expected_pattern_count);
     assert.equal(cliCap.target_path_alias, mcpCap.target_path_alias);
@@ -306,6 +335,8 @@ test("Ticket02: CLI and MCP repair-preview equivalence on positive fixture", asy
       (mcpCap.operation as { operation_digest: string }).operation_digest,
     );
     assert.match(String(mcpCap.authorization_binding), /^[a-f0-9]{64}$/);
+    assert.equal(typeof mcp.authorization, "string");
+    assert.ok(String(mcp.authorization).startsWith("cg1."));
     assert.equal(cli.result!.network_used, false);
     assert.equal(mcp.network_used, false);
   } finally {
@@ -331,4 +362,220 @@ test("Ticket02: usage errors remain generic and path-free", () => {
   assert.ok(res.result);
   assert.equal(res.result!.error_code, "USAGE");
   assertNoLeakText(res.stdout);
+});
+
+// ---------------------------------------------------------------------------
+// Adversarial RED/GREEN cases (Ticket 02 corrections)
+// ---------------------------------------------------------------------------
+
+test("Ticket02 adversarial: backup path redirect to incident.json is refused", () => {
+  const tmp = makeTempDir("cg-t02-adv-backup-");
+  const target = copyFixtureToTemp("fixtures/protected-process", tmp);
+  const preview = runCliRepairPreview(target);
+  assert.equal(preview.exitCode, 0);
+  const capsule = { ...(capsuleFields(preview.result!) as object) } as Record<
+    string,
+    unknown
+  >;
+  const backup = { ...(capsule.backup as object) } as Record<string, unknown>;
+  backup.backup_rel = "incident.json"; // redirect attack
+  capsule.backup = backup;
+  // Tampered capsule must fail strict validation (binding + path constant).
+  assert.throws(
+    () => strictValidateCapsule(capsule),
+    (e: unknown) => e instanceof AuthTokenError,
+  );
+  // Even if an attacker re-encodes with a forged binding field, apply rejects.
+  const forgedToken =
+    "cg1." +
+    Buffer.from(
+      JSON.stringify({
+        v: 1,
+        capsule: {
+          ...capsule,
+          authorization_binding: "0".repeat(64),
+          invalidation_digest: "1".repeat(64),
+        },
+      }),
+    ).toString("base64url");
+  const apply = runCliRepairApply(target, forgedToken);
+  assert.notEqual(apply.exitCode, 0);
+  assert.equal(apply.result!.ok, false);
+  assert.ok(
+    apply.result!.error_code === "AUTH_INVALID" ||
+      apply.result!.error_code === "AUTH_MALFORMED",
+  );
+  assert.equal(artifactSha(target), PROTECTED_ARTIFACT_SHA);
+  // incident.json must remain intact (never used as backup target).
+  const incidentPath = path.join(target, "incident.json");
+  assert.equal(fs.existsSync(incidentPath), true);
+  const incident = fs.readFileSync(incidentPath, "utf8");
+  assert.ok(incident.length > 0);
+  assert.equal(JSON.parse(incident).schema_version !== undefined || incident.length > 10, true);
+});
+
+test("Ticket02 adversarial: expected_result_sha256 null/removal is refused", () => {
+  const tmp = makeTempDir("cg-t02-adv-hash-");
+  const target = copyFixtureToTemp("fixtures/protected-process", tmp);
+  const preview = runCliRepairPreview(target);
+  assert.equal(preview.exitCode, 0);
+  const capsule = structuredClone(capsuleFields(preview.result!)) as Record<
+    string,
+    unknown
+  >;
+  const op = { ...(capsule.operation as object) } as Record<string, unknown>;
+
+  op.expected_result_sha256 = null;
+  capsule.operation = op;
+  assert.throws(() => strictValidateCapsule(capsule), AuthTokenError);
+
+  delete op.expected_result_sha256;
+  capsule.operation = op;
+  assert.throws(() => strictValidateCapsule(capsule), AuthTokenError);
+
+  // Wrong expected hash also fails.
+  const capsule2 = structuredClone(capsuleFields(preview.result!)) as Record<
+    string,
+    unknown
+  >;
+  const op2 = { ...(capsule2.operation as object) } as Record<string, unknown>;
+  op2.expected_result_sha256 = "a".repeat(64);
+  capsule2.operation = op2;
+  assert.throws(() => strictValidateCapsule(capsule2), AuthTokenError);
+
+  const forged =
+    "cg1." +
+    Buffer.from(JSON.stringify({ v: 1, capsule: capsule2 })).toString("base64url");
+  const apply = runCliRepairApply(target, forged);
+  assert.notEqual(apply.exitCode, 0);
+  assert.equal(apply.result!.ok, false);
+});
+
+test("Ticket02 adversarial: extra capsule fields are refused", () => {
+  const tmp = makeTempDir("cg-t02-adv-extra-");
+  const target = copyFixtureToTemp("fixtures/protected-process", tmp);
+  const preview = runCliRepairPreview(target);
+  assert.equal(preview.exitCode, 0);
+  const capsule = structuredClone(capsuleFields(preview.result!)) as Record<
+    string,
+    unknown
+  >;
+  capsule.evil_field = "pwn";
+  assert.throws(() => strictValidateCapsule(capsule), AuthTokenError);
+
+  const op = { ...(capsule.operation as object) } as Record<string, unknown>;
+  delete capsule.evil_field;
+  // Restore a valid clone then inject extra operation field.
+  const good = structuredClone(capsuleFields(preview.result!)) as Record<
+    string,
+    unknown
+  >;
+  const opGood = { ...(good.operation as object) } as Record<string, unknown>;
+  opGood.extra_op = true;
+  good.operation = opGood;
+  assert.throws(() => strictValidateCapsule(good), AuthTokenError);
+
+  const forged =
+    "cg1." +
+    Buffer.from(JSON.stringify({ v: 1, capsule: good })).toString("base64url");
+  const apply = runCliRepairApply(target, forged);
+  assert.notEqual(apply.exitCode, 0);
+  assert.equal(apply.result!.ok, false);
+  void op;
+  void target;
+});
+
+test("Ticket02 adversarial: preview leaves whole-tree hash unchanged and no .changeguard", () => {
+  const tmp = makeTempDir("cg-t02-adv-preview-");
+  const target = copyFixtureToTemp("fixtures/protected-process", tmp);
+  const before = hashTargetTree(target);
+  assert.equal(fs.existsSync(path.join(target, ".changeguard")), false);
+
+  const preview = runCliRepairPreview(target);
+  assert.equal(preview.exitCode, 0, preview.stdout);
+  assert.equal(preview.result!.target_mutated, false);
+  assert.equal(hashTargetTree(target), before);
+  assert.equal(fs.existsSync(path.join(target, ".changeguard")), false);
+  assert.equal(
+    fs.existsSync(path.join(target, ".changeguard", "capsule-preview.json")),
+    false,
+  );
+  // Token is self-contained and round-trips without target state.
+  const auth = authFromPreview(preview.result!);
+  const decoded = decodeAuthorizationToken(auth);
+  assert.equal(decoded.original_sha256, PROTECTED_ARTIFACT_SHA);
+  assert.equal(decoded.authorization_binding, capsuleFields(preview.result!).authorization_binding);
+});
+
+test("Ticket02 adversarial: stale/expired/replayed token refused", () => {
+  const tmp = makeTempDir("cg-t02-adv-replay-");
+  const target = copyFixtureToTemp("fixtures/protected-process", tmp);
+  const preview = runCliRepairPreview(target);
+  assert.equal(preview.exitCode, 0);
+  const auth = authFromPreview(preview.result!);
+  const originalSha = artifactSha(target);
+
+  // Expired token: re-mint capsule with past expiry (strict validate recomputes binding).
+  const capsule = decodeAuthorizationToken(auth);
+  const expired = {
+    ...capsule,
+    expires_at: new Date(Date.now() - 60_000).toISOString(),
+  };
+  // Binding no longer matches after expiry change unless we rebuild — either way apply fails.
+  assert.throws(() => encodeAuthorizationToken(expired as typeof capsule), AuthTokenError);
+
+  // Apply once successfully.
+  const apply1 = runCliRepairApply(target, auth);
+  assert.equal(apply1.exitCode, 0, apply1.stdout);
+  assert.equal(apply1.result!.repair_applied, true);
+  const repairedSha = artifactSha(target);
+  assert.notEqual(repairedSha, originalSha);
+
+  // Replay same token after successful apply → refused.
+  const replay = runCliRepairApply(target, auth);
+  assert.notEqual(replay.exitCode, 0);
+  assert.equal(replay.result!.ok, false);
+  assert.ok(
+    replay.result!.error_code === "AUTH_REPLAY" ||
+      replay.result!.error_code === "AUTH_INVALID",
+  );
+
+  // After rollback, same token still must not re-apply (consumed).
+  const rb = runCliRollback(target);
+  assert.equal(rb.exitCode, 0, rb.stdout);
+  assert.equal(artifactSha(target), originalSha);
+  const afterRb = runCliRepairApply(target, auth);
+  assert.notEqual(afterRb.exitCode, 0);
+  assert.equal(afterRb.result!.ok, false);
+  assert.ok(
+    afterRb.result!.error_code === "AUTH_REPLAY" ||
+      afterRb.result!.error_code === "AUTH_INVALID",
+  );
+
+  // Fresh preview mints a new token that can apply on restored target.
+  const preview2 = runCliRepairPreview(target);
+  assert.equal(preview2.exitCode, 0);
+  const auth2 = authFromPreview(preview2.result!);
+  assert.notEqual(auth2, auth);
+  const apply2 = runCliRepairApply(target, auth2);
+  assert.equal(apply2.exitCode, 0, apply2.stdout);
+  assert.equal(apply2.result!.repair_applied, true);
+});
+
+test("Ticket02 adversarial: recovery rmSync/copyFileSync and non-atomic write rejected by boundary", () => {
+  // Boundary self-test covers synthetic recovery-atomic-write forbidden methods
+  // and non-atomic recovery module writes. Run the dedicated self-test binary.
+  const res = spawnSync(
+    process.execPath,
+    [path.join(process.cwd(), "scripts/check-production-boundary.mjs"), "--self-test"],
+    { encoding: "utf8", env: { ...process.env, NO_COLOR: "1" } },
+  );
+  assert.equal(res.status, 0, res.stdout + res.stderr);
+  // Production scan must also pass (atomic-write only exemption).
+  const prod = spawnSync(
+    process.execPath,
+    [path.join(process.cwd(), "scripts/check-production-boundary.mjs")],
+    { encoding: "utf8", env: { ...process.env, NO_COLOR: "1" } },
+  );
+  assert.equal(prod.status, 0, prod.stdout + prod.stderr);
 });

@@ -92,24 +92,25 @@ Public seams (shared core):
 3. `changeguard verify <isolated-target>` / MCP `changeguard_verify` `{ target }`
 4. `changeguard rollback <isolated-target>` / MCP `changeguard_rollback` `{ target }`
 
-Repair Capsule (preview) includes: one target path alias, original SHA-256, exact expected pattern count, operation digest, authorization tier, risk, verified backup plan, verification plan, rollback recipe, expiry/invalidation digests, and disclosure metadata **without** source bytes or secrets. Preview persists the exact capsule under the isolated target (`.changeguard/capsule-preview.json`) so apply uses the same one-shot binding.
+Repair Capsule (preview) includes: one target path alias, original SHA-256, exact expected pattern count, required expected result SHA-256, operation digest, authorization tier, risk, verified backup plan (registered backup relative path only), verification plan, rollback recipe, nonce, expiry/invalidation digests, and disclosure metadata **without** source bytes or secrets. Preview is completely read-only over the entire target tree — it does **not** write `.changeguard/` or any other target-local state. Cross-process CLI/MCP preview→apply uses a self-contained bounded authorization token (`cg1.…`) whose expiry and capsule material are encoded so apply can reconstruct and revalidate without process-global memory or a daemon.
 
-Authorization is deterministically bound to the exact capsule material and live scope. Any target hash, pattern count, scope, operation, permission, or capsule change invalidates the binding. There is no reusable global trust token.
+Authorization is deterministically bound to the exact capsule material (including nonce, expiry, expected result hash, and registered backup path) and live scope. Any target hash, pattern count, scope, operation, permission, or capsule change invalidates the binding. Decoded capsules reject unknown/extra/mismatched fields. Apply and rollback never trust a backup path from mutable token or session JSON — backup writes always use the registered constant under `.changeguard/backup/`. There is no reusable global trust token. After a successful apply the same token is consumed in ChangeGuard-owned session state and cannot apply again; after explicit rollback the token remains consumed so it cannot silently re-authorize a different session.
 
 Mutation contract (registered recovery only):
 
 1. resolve isolated target; refuse symlink targets and symlink path segments;
-2. re-check opened target identity (TOCTOU);
-3. create verified backup of original bytes under `.changeguard/backup/`;
-4. write sibling temp, fsync where supported, atomic rename;
-5. verify resulting hash/metadata;
-6. run original-failure + core-health verification;
-7. on any verification failure, automatically restore exact original bytes — `RESOLVED_VERIFIED` is impossible;
-8. explicit `rollback` restores original bytes from the verified backup.
+2. decode and strictly validate the self-contained authorization token; refuse expired/replayed tokens;
+3. re-check opened target identity (TOCTOU) and revalidate every live precondition against the token;
+4. create verified backup of original bytes under the registered `.changeguard/backup/` path (first authorized write);
+5. write sibling temp, fsync where supported, atomic rename;
+6. verify resulting hash/metadata;
+7. run original-failure + core-health verification;
+8. on any verification failure, automatically restore exact original bytes — `RESOLVED_VERIFIED` is impossible;
+9. explicit `rollback` restores original bytes from the verified backup using the registered path only.
 
 `user_resolution.status = RESOLVED_VERIFIED` requires: original protected-process failure no longer reproduces **and** registered core health checks pass. User-resolution and upstream-contribution receipts remain independent; recovery never claims external submission.
 
-Diagnosis modules stay read-only. The production-boundary guard allows only a narrow registered write method set inside `src/core/recovery/`; network, shell, loaders, and host-capability controls remain fail-closed everywhere.
+Diagnosis modules stay read-only. The production-boundary guard allows only a narrow registered write method set inside the exact `src/core/recovery/atomic-write.ts` module (`writeSync`/`fsyncSync`/`renameSync`/`mkdirSync`/`unlinkSync` plus proven write open flags); `rmSync`, `copyFileSync`, recursive delete, and write APIs in any other recovery/CLI/MCP/core module are rejected. Network, shell, loaders, and host-capability controls remain fail-closed everywhere.
 
 ## 3. Detection and localization ladder
 

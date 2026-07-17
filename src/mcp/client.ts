@@ -249,6 +249,8 @@ export type RepairViaMcp = {
     target_path_alias: string;
     [key: string]: unknown;
   } | null;
+  /** Self-contained authorization token from preview (null on non-preview). */
+  authorization: string | null;
   user_resolution: {
     status: string;
     summary: string;

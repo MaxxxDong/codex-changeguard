@@ -3,7 +3,7 @@
  * Commands:
  *   changeguard diagnose <isolated-target>
  *   changeguard repair-preview <isolated-target>
- *   changeguard repair-apply <isolated-target> <authorization-binding>
+ *   changeguard repair-apply <isolated-target> <authorization-token>
  *   changeguard verify <isolated-target>
  *   changeguard rollback <isolated-target>
  */

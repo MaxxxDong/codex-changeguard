@@ -85,14 +85,17 @@ Product specification (canonical): experimental repair may run **once** on an is
 
 Recovery rules:
 
-- mutation only beneath an explicitly isolated/allowed target root via registered recovery modules (`src/core/recovery/`)
-- one Repair Capsule; authorization bound deterministically to capsule + live scope; no reusable global trust token
-- refuse symlinks and TOCTOU; re-check opened target; verified backup; sibling temp; fsync where supported; atomic replace; verify resulting hash
+- mutation only beneath an explicitly isolated/allowed target root via registered recovery modules; write-capable fs methods only in `src/core/recovery/atomic-write.ts`
+- repair-preview is completely read-only over the target tree (no `.changeguard` or other target writes)
+- one Repair Capsule; self-contained one-shot authorization token (`cg1.…`) encodes capsule material + nonce/expiry; apply revalidates every live precondition; no process-global memory/daemon; no reusable global trust token
+- mutation-relevant fields (`backup.backup_rel`, `operation.expected_result_sha256`, digests, alias, counts) are derived from registered constants and/or bound into canonical invalidation/authorization material; decoded capsules reject unknown/extra/mismatched fields; apply/rollback never trust a path from mutable target-local or token JSON
+- refuse expired, malformed, and successfully-consumed/replayed tokens; session state is written only after authorized apply begins
+- refuse symlinks and TOCTOU; re-check opened target; verified backup at registered path; sibling temp; fsync where supported; atomic replace; verify resulting hash
 - `RESOLVED_VERIFIED` only when original failure no longer reproduces **and** core health checks pass
 - failed verification auto-rolls back exact original bytes and makes resolved status impossible
-- explicit rollback restores exact original bytes/hash
+- explicit rollback restores exact original bytes/hash from the registered backup path
 - receipts separate user resolution from upstream contribution and never claim external submission
-- production-boundary guard keeps diagnosis read-only; recovery modules may use only a narrow registered write method set (still no shell/network/loaders)
+- production-boundary guard keeps diagnosis read-only; atomic-write recovery may use only `writeSync`/`fsyncSync`/`renameSync`/`mkdirSync`/`unlinkSync` (no `rmSync`, `copyFileSync`, recursive delete, shell/network/loaders)
 
 Never:
 

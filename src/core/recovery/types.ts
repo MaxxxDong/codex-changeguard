@@ -66,8 +66,11 @@ export interface CapsuleOperation {
   expected_pattern_count: number;
   /** SHA-256 of canonical operation description (no source bytes). */
   operation_digest: string;
-  /** SHA-256 of expected post-repair bytes when known; null if computed at apply. */
-  expected_result_sha256: string | null;
+  /**
+   * SHA-256 of expected post-repair bytes (required; bound into authorization).
+   * Null/omission is rejected at decode — never optional mutable material.
+   */
+  expected_result_sha256: string;
 }
 
 /**
@@ -106,6 +109,11 @@ export interface RepairCapsule {
   disclosure: CapsuleDisclosure;
   human_decision: "pending" | "approved" | "rejected";
   smoke_result: "not_run" | "pass" | "fail" | "error";
+  /**
+   * One-shot nonce minted at preview (hex). Bound into authorization material
+   * so each preview yields a distinct token without target mutation.
+   */
+  nonce: string;
 }
 
 export interface VerificationCheckResult {
@@ -145,6 +153,11 @@ export interface RepairResult {
   ok: boolean;
   operation: RepairOperationName;
   capsule: RepairCapsule | null;
+  /**
+   * Self-contained bounded authorization token from preview (null otherwise).
+   * Cross-process CLI/MCP apply input — no target-local preview persistence.
+   */
+  authorization: string | null;
   user_resolution: UserResolutionReceipt;
   upstream_contribution: UpstreamContributionReceipt;
   evidence: MeasuredEvidence[];
@@ -163,7 +176,10 @@ export interface RepairResult {
 }
 
 export interface ApplyOptions {
-  /** Exact authorization binding from a prior preview of this capsule/scope. */
+  /**
+   * Self-contained authorization token from repair-preview (cg1.…).
+   * Encodes capsule material + nonce/expiry; apply revalidates live preconditions.
+   */
   authorization: string;
 }
 
@@ -173,5 +189,10 @@ export const INDUCE_VERIFY_FAIL_REL = ".changeguard/test-force-verify-fail";
 export const RECOVERY_STATE_DIR = ".changeguard";
 export const RECOVERY_BACKUP_DIR = ".changeguard/backup";
 export const RECOVERY_SESSION_REL = ".changeguard/session.json";
-/** Exact capsule from the last successful preview (authorization source of truth). */
-export const RECOVERY_CAPSULE_PREVIEW_REL = ".changeguard/capsule-preview.json";
+
+/** Registered backup relative path — never trust capsule/session mutable fields. */
+export function registeredBackupRel(
+  targetPathAlias: string = "BROWSER_CLIENT_COPY_A",
+): string {
+  return `${RECOVERY_BACKUP_DIR}/${targetPathAlias}.bak`;
+}

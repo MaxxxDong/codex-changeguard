@@ -2,6 +2,7 @@
  * Registered protected-process experimental repair (exact block removal).
  * Operates only on the named BROWSER_CLIENT_COPY_A artifact under an isolated target.
  */
+import crypto from "node:crypto";
 import {
   MAX_ARTIFACT_BYTES,
   PROTECTED_ARTIFACT_REL,
@@ -274,37 +275,49 @@ export function artifactRel(): string {
   return PROTECTED_PROCESS_OP.artifact_rel;
 }
 
-/** Stable invalidation material for capsule binding. */
+/**
+ * Stable invalidation material for capsule binding.
+ * Includes every mutation-relevant registered field (result hash, backup path).
+ */
 export function invalidationMaterial(input: {
   original_sha256: string;
   expected_pattern_count: number;
   scope_digest: string;
   operation_digest: string;
+  expected_result_sha256: string;
+  backup_rel: string;
   capsule_id: string;
   mode: string;
   authorization_tier: string;
 }): string {
   return digestObject({
-    v: 1,
+    v: 2,
     ...input,
   });
 }
 
+/**
+ * Deterministic one-shot authorization binding.
+ * Binds nonce/expiry plus all mutation-relevant operation fields.
+ */
 export function authorizationBinding(input: {
   capsule_id: string;
   scope_digest: string;
   original_sha256: string;
   expected_pattern_count: number;
   operation_digest: string;
+  expected_result_sha256: string;
+  backup_rel: string;
   invalidation_digest: string;
   trust_tier: string;
   authorization_tier: string;
   mode: string;
   target_path_alias: string;
   expires_at: string;
+  nonce: string;
 }): string {
   return digestObject({
-    kind: "changeguard_repair_authorization_v1",
+    kind: "changeguard_repair_authorization_v2",
     ...input,
   });
 }
@@ -318,6 +331,11 @@ export function isExpired(expiresAt: string, nowMs = Date.now()): boolean {
   const t = Date.parse(expiresAt);
   if (!Number.isFinite(t)) return true;
   return nowMs >= t;
+}
+
+/** 16-byte random nonce as 32 hex chars (one-shot preview mint). */
+export function mintNonce(): string {
+  return crypto.randomBytes(16).toString("hex");
 }
 
 export function hashForLog(sha: string): string {

@@ -74,6 +74,10 @@ isolated target filesystem (implemented in `tests/ticket02-repair-harness.test.t
 - induced verification failure (harness sentinel) auto-rollbacks to exact original bytes
 - explicit `rollback` restores exact original SHA-256; status is mitigation, not resolve
 - CLI/MCP capsule stable-field equivalence; diagnose remains read-only
+- adversarial: backup path redirect refused; `expected_result_sha256` null/removal refused; extra capsule fields refused
+- adversarial: preview whole-tree hash unchanged and no `.changeguard`; self-contained token round-trip
+- adversarial: expired/malformed token refused; successful-apply and post-rollback replay refused; fresh preview re-applies
+- adversarial: production-boundary rejects recovery `rmSync`/`copyFileSync` and non-atomic recovery module writes
 
 ## Ticket 01 Scenario Harness (public seams)
 

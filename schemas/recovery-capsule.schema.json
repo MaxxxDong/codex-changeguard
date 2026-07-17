@@ -26,7 +26,8 @@
     "authorization_binding",
     "disclosure",
     "human_decision",
-    "smoke_result"
+    "smoke_result",
+    "nonce"
   ],
   "properties": {
     "schema_version": {"const": 1},
@@ -42,13 +43,13 @@
     "operation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "target_path_alias", "expected_pattern_count", "operation_digest"],
+      "required": ["kind", "target_path_alias", "expected_pattern_count", "operation_digest", "expected_result_sha256"],
       "properties": {
         "kind": {"enum": ["exact_block_removal"]},
         "target_path_alias": {"type": "string", "minLength": 1, "maxLength": 128},
         "expected_pattern_count": {"type": "integer", "minimum": 0, "maximum": 32},
         "operation_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
-        "expected_result_sha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"}
+        "expected_result_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
       }
     },
     "applicability": {
@@ -127,6 +128,7 @@
       }
     },
     "human_decision": {"enum": ["pending", "approved", "rejected"]},
-    "smoke_result": {"enum": ["not_run", "pass", "fail", "error"]}
+    "smoke_result": {"enum": ["not_run", "pass", "fail", "error"]},
+    "nonce": {"type": "string", "pattern": "^[a-f0-9]{32}$"}
   }
 }
