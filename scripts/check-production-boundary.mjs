@@ -13,7 +13,19 @@
  *   a later direct call
  * - dynamic `import(...)`, `require(...)`, or `node:module` / `createRequire`
  *   loader surfaces (static ESM imports only on the production graph)
- * - eval / Function capability acquisition or use / process.dlopen / process.binding
+ * - static imports/re-exports of `process` / `node:process` (forbidden at the
+ *   module-policy layer like `node:module`; Ticket 01 uses only the global
+ *   `process` safe-read surface)
+ * - eval / Function capability acquisition or use
+ * - process host object: the whole `process` value may not escape (alias, pass, return,
+ *   spread, Proxy/Object.create argument, container store, or object-destructure). Direct
+ *   static member reads/calls on process (process.argv, process.cwd(), process.env, …)
+ *   remain allowed; dangerous native-loader members stay forbidden as references/calls.
+ * - process native-loader surfaces: dlopen / binding / getBuiltinModule / _linkedBinding
+ *   (property reference or call; including aliases and globalThis.process forms)
+ * - network global capability references: fetch / WebSocket / XMLHttpRequest
+ *   (alias, pass, bind, Reflect.apply, sequence, construct through alias — not only
+ *   direct invocation; globalThis/global/window member and static-string element forms)
  *
  * open/openSync are allowed only as a direct call through a proven `node:fs`
  * namespace (or simple namespace alias) with statically proven read-only flags.
@@ -68,8 +80,9 @@ const ALLOWED_NODE_BUILTINS = new Set([
   "zlib",
   "constants",
   // "module" intentionally absent: node:module / createRequire are forbidden loaders.
+  // "process" intentionally absent: node:process imports are forbidden; Ticket 01
+  // uses only the global process safe-read surface (process.argv, process.cwd(), …).
   "perf_hooks",
-  "process",
   "v8",
 ]);
 
@@ -89,6 +102,7 @@ const FORBIDDEN_MODULES = new Set([
   "inspector",
   "async_hooks",
   "module",
+  "process",
 ]);
 
 /**
@@ -190,6 +204,9 @@ const WRITE_CAPABLE_FLAG_NAMES = new Set([
 
 const FORBIDDEN_GLOBALS = new Set(["fetch", "WebSocket", "XMLHttpRequest"]);
 
+/** Host object roots used to re-acquire globals (fetch, process, eval, …). */
+const GLOBAL_OBJECT_ROOTS = new Set(["globalThis", "global", "window"]);
+
 const FORBIDDEN_CHILD_METHODS = new Set([
   "spawn",
   "spawnSync",
@@ -200,7 +217,13 @@ const FORBIDDEN_CHILD_METHODS = new Set([
   "fork",
 ]);
 
-const FORBIDDEN_PROCESS_METHODS = new Set(["dlopen", "binding"]);
+/** Native-loader / builtin-escape surfaces on proven `process` roots. */
+const FORBIDDEN_PROCESS_METHODS = new Set([
+  "dlopen",
+  "binding",
+  "getBuiltinModule",
+  "_linkedBinding",
+]);
 
 function normalizeModuleSpec(spec) {
   if (typeof spec !== "string") return null;
@@ -1054,6 +1077,192 @@ function isDirectCallExpressionCallee(expr) {
 }
 
 /**
+ * True when `expr` is the immediate constructor expression of a NewExpression.
+ * @param {ts.Expression} expr
+ * @returns {boolean}
+ */
+function isDirectNewExpressionCallee(expr) {
+  const parent = expr.parent;
+  return Boolean(parent && ts.isNewExpression(parent) && parent.expression === expr);
+}
+
+/**
+ * True when identifier/property access is a direct call or `new` callee (those
+ * paths already emit a specific violation); capability-reference checks skip them.
+ * @param {ts.Expression} expr
+ * @returns {boolean}
+ */
+function isDirectCallOrNewCallee(expr) {
+  return isDirectCallExpressionCallee(expr) || isDirectNewExpressionCallee(expr);
+}
+
+/**
+ * True when a name is a forbidden global capability (network, code-exec, or loader).
+ * @param {string} name
+ * @returns {boolean}
+ */
+function isForbiddenGlobalCapabilityName(name) {
+  return (
+    FORBIDDEN_GLOBALS.has(name) ||
+    FORBIDDEN_CODE_EXEC_GLOBALS.has(name) ||
+    FORBIDDEN_LOADER_APIS.has(name)
+  );
+}
+
+/**
+ * True when `expr` resolves to the global `process` object: bare `process`, a
+ * simple local alias of process, or `globalThis`/`global`/`window`.`process`.
+ * @param {ts.Expression} expr
+ * @param {Map<string, ts.Expression>} bindings
+ * @param {Set<string>} [visiting]
+ * @returns {boolean}
+ */
+function isProvenProcessRoot(expr, bindings, visiting = new Set()) {
+  const cur = unwrapStaticExpr(expr);
+  if (ts.isIdentifier(cur)) {
+    if (cur.text === "process") return true;
+    if (visiting.has(cur.text)) return false;
+    const init = bindings.get(cur.text);
+    if (!init) return false;
+    visiting.add(cur.text);
+    try {
+      return isProvenProcessRoot(init, bindings, visiting);
+    } finally {
+      visiting.delete(cur.text);
+    }
+  }
+  const chain = resolveMemberChain(cur);
+  if (
+    chain &&
+    chain.length === 2 &&
+    GLOBAL_OBJECT_ROOTS.has(chain[0]) &&
+    chain[1] === "process"
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * True when `expr` is (possibly under paren / `as` / non-null wrappers) the
+ * immediate receiver of a property or element access. Used to allow
+ * `process.argv` / `(process as any).cwd` while rejecting value-level escapes.
+ * Comma/sequence wrappers are intentionally NOT walked: `(0, process).x` is a
+ * value escape of process before the member access.
+ * @param {ts.Expression} expr
+ * @returns {boolean}
+ */
+function isMemberAccessReceiverRoot(expr) {
+  let cur = /** @type {ts.Node} */ (expr);
+  while (cur.parent) {
+    const p = cur.parent;
+    if (ts.isParenthesizedExpression(p) && p.expression === cur) {
+      cur = p;
+      continue;
+    }
+    if (
+      (ts.isAsExpression(p) ||
+        ts.isNonNullExpression(p) ||
+        (typeof ts.isTypeAssertionExpression === "function" &&
+          ts.isTypeAssertionExpression(p))) &&
+      /** @type {ts.AsExpression | ts.NonNullExpression | ts.TypeAssertion} */ (p)
+        .expression === cur
+    ) {
+      cur = p;
+      continue;
+    }
+    if (p.kind === ts.SyntaxKind.TypeAssertionExpression && "expression" in p) {
+      if (/** @type {ts.TypeAssertion} */ (p).expression === cur) {
+        cur = p;
+        continue;
+      }
+    }
+    if (ts.isPropertyAccessExpression(p) && p.expression === cur) return true;
+    if (ts.isElementAccessExpression(p) && p.expression === cur) return true;
+    return false;
+  }
+  return false;
+}
+
+/**
+ * True when `expr` is a host-rooted process object access
+ * (`globalThis.process` / `global.process` / `window.process`), not a deeper
+ * member chain such as `globalThis.process.argv`.
+ * @param {ts.Expression} expr
+ * @returns {boolean}
+ */
+function isHostRootedProcessObjectAccess(expr) {
+  const chain = resolveMemberChain(expr);
+  return Boolean(
+    chain &&
+      chain.length === 2 &&
+      GLOBAL_OBJECT_ROOTS.has(chain[0]) &&
+      chain[1] === "process",
+  );
+}
+
+/**
+ * True when identifier `process` is used as a value-level host capability
+ * (alias, pass, return, spread, argument, container store, destructure source),
+ * not as a declaration/type name, property name, or direct static member
+ * receiver (`process.argv`, `process.cwd()`).
+ * @param {ts.Identifier} id
+ * @returns {boolean}
+ */
+function isProcessObjectValueEscape(id) {
+  if (!ts.isIdentifier(id) || id.text !== "process") return false;
+  const p = id.parent;
+  // `foo.process` property name is not the global process value.
+  if (p && ts.isPropertyAccessExpression(p) && p.name === id) return false;
+  // Direct static member root is allowed; dangerous members are policed separately.
+  if (isMemberAccessReceiverRoot(id)) return false;
+  return isForbiddenCapabilityIdentifierUse(id);
+}
+
+/**
+ * Terminal process method on a proven process root, if any.
+ * Returns method name, `"\0computed"` for dynamic keys, or null when the
+ * access is not a process capability surface of interest.
+ * @param {ts.Expression} expr
+ * @param {Map<string, ts.Expression>} bindings
+ * @returns {string | null}
+ */
+function resolveProcessCapabilityMethod(expr, bindings) {
+  const cur = unwrapStaticExpr(expr);
+  if (!ts.isPropertyAccessExpression(cur) && !ts.isElementAccessExpression(cur)) {
+    return null;
+  }
+  const base = propertyAccessBase(cur);
+  if (!base) return null;
+
+  // process.METHOD / alias.METHOD / globalThis.process.METHOD
+  if (!isProvenProcessRoot(base, bindings)) {
+    // Flattened chain fallback (same semantics when base unwrap is noisy).
+    const chain = resolveMemberChain(cur);
+    if (
+      chain &&
+      chain.length >= 3 &&
+      GLOBAL_OBJECT_ROOTS.has(chain[0]) &&
+      chain[1] === "process"
+    ) {
+      const method = chain[2];
+      if (method === "\0computed") return "\0computed";
+      if (FORBIDDEN_PROCESS_METHODS.has(method)) return method;
+    }
+    return null;
+  }
+
+  let method = staticTerminalName(cur);
+  if (method === null && ts.isElementAccessExpression(cur)) {
+    return "\0computed";
+  }
+  if (!method) return null;
+  if (method === "\0computed") return "\0computed";
+  if (FORBIDDEN_PROCESS_METHODS.has(method)) return method;
+  return null;
+}
+
+/**
  * True when an identifier is used as a value-level capability reference
  * (alias, pass, sequence operand, etc.), not as a declaration name or type.
  * @param {ts.Identifier} id
@@ -1423,9 +1632,6 @@ function scanSourceText(file, text, rel) {
   /** Local names for child_process named methods. */
   /** @type {Map<string, string>} */
   const namedChildMethods = new Map();
-  /** Identifiers known to alias process (rare; process is global). */
-  /** @type {Set<string>} */
-  const processAliases = new Set(["process"]);
 
   /**
    * @param {ts.ImportClause | undefined} clause
@@ -1543,7 +1749,7 @@ function scanSourceText(file, text, rel) {
    * @param {ts.PropertyAccessExpression | ts.ElementAccessExpression} access
    */
   function checkFsCapabilityReference(access) {
-    if (isDirectCallExpressionCallee(access)) {
+    if (isDirectCallOrNewCallee(access)) {
       return;
     }
     const refBindings = bindingsForNode(access, sf);
@@ -1647,6 +1853,50 @@ function scanSourceText(file, text, rel) {
   }
 
   /**
+   * Forbidden network/code-exec/loader capability via globalThis/global/window
+   * member or static-string element access (alias, pass, store — not only call).
+   * @param {ts.PropertyAccessExpression | ts.ElementAccessExpression} access
+   */
+  function checkGlobalObjectCapabilityReference(access) {
+    if (isDirectCallOrNewCallee(access)) {
+      return;
+    }
+    const chain = resolveMemberChain(access);
+    if (!chain || chain.length < 2 || !GLOBAL_OBJECT_ROOTS.has(chain[0])) {
+      return;
+    }
+    const prop = chain[1];
+    if (prop === "\0computed") {
+      // Fully dynamic host-object key: fail closed (may be fetch / eval / process / …).
+      violations.push(`${rel}: computed globalThis capability reference (fail-closed)`);
+      return;
+    }
+    if (isForbiddenGlobalCapabilityName(prop)) {
+      violations.push(`${rel}: forbidden capability reference '${chain[0]}.${prop}'`);
+    }
+  }
+
+  /**
+   * Forbidden process native-loader capability reference (dlopen / binding /
+   * getBuiltinModule / _linkedBinding) without requiring a later direct call.
+   * @param {ts.PropertyAccessExpression | ts.ElementAccessExpression} access
+   */
+  function checkProcessCapabilityReference(access) {
+    if (isDirectCallOrNewCallee(access)) {
+      return;
+    }
+    const refBindings = bindingsForNode(access, sf);
+    const method = resolveProcessCapabilityMethod(access, refBindings);
+    if (method === "\0computed") {
+      violations.push(`${rel}: computed process capability reference (fail-closed)`);
+      return;
+    }
+    if (method) {
+      violations.push(`${rel}: forbidden process.${method} capability reference`);
+    }
+  }
+
+  /**
    * @param {ts.Expression} callee
    * @param {boolean} isNew
    * @param {readonly ts.Expression[] | undefined} args
@@ -1717,32 +1967,26 @@ function scanSourceText(file, text, rel) {
     }
 
     // Single-ident chain already handled above for Identifier callees.
-    // eval via globalThis["eval"] / globalThis.eval
-    if (
-      (chain[0] === "globalThis" || chain[0] === "global" || chain[0] === "window") &&
-      chain.length >= 2
-    ) {
+    // eval / fetch / require via globalThis["eval"] / globalThis.fetch
+    if (GLOBAL_OBJECT_ROOTS.has(chain[0]) && chain.length >= 2) {
       const prop = chain[1];
       if (prop === "\0computed") {
         violations.push(`${rel}: computed globalThis property call (fail-closed)`);
         return;
       }
-      if (
-        FORBIDDEN_GLOBALS.has(prop) ||
-        FORBIDDEN_CODE_EXEC_GLOBALS.has(prop) ||
-        FORBIDDEN_LOADER_APIS.has(prop)
-      ) {
+      if (isForbiddenGlobalCapabilityName(prop)) {
         violations.push(`${rel}: forbidden ${chain[0]}.${prop}`);
       }
     }
 
-    // process.dlopen / process.binding
-    if (processAliases.has(chain[0]) && chain.length >= 2) {
-      const method = chain[1];
-      if (method === "\0computed") {
+    // process.dlopen / binding / getBuiltinModule / _linkedBinding
+    // (proven process root, simple alias, or globalThis/global/window.process)
+    {
+      const procMethod = resolveProcessCapabilityMethod(callee, callBindings);
+      if (procMethod === "\0computed") {
         violations.push(`${rel}: computed process property call (fail-closed)`);
-      } else if (FORBIDDEN_PROCESS_METHODS.has(method)) {
-        violations.push(`${rel}: forbidden process.${method}`);
+      } else if (procMethod) {
+        violations.push(`${rel}: forbidden process.${procMethod}`);
       }
     }
 
@@ -1889,12 +2133,17 @@ function scanSourceText(file, text, rel) {
     // Destructure / object-pattern extract of non-read-only or open capability
     // from a proven fs namespace fails immediately (do not wait for a later call).
     // Object rest (`const { ...bag } = fs`) extracts the full capability surface.
+    // Whole-process object destructuring is rejected conservatively (dangerous
+    // member extract and rest both escape process as a capability surface).
     if (
       ts.isVariableDeclaration(node) &&
       node.initializer &&
       ts.isObjectBindingPattern(node.name)
     ) {
       const bindBindings = bindingsForNode(node, sf);
+      if (isProvenProcessRoot(node.initializer, bindBindings)) {
+        violations.push(`${rel}: forbidden process object destructuring`);
+      }
       const nsKind = resolveTrustedFsNsKind(
         node.initializer,
         bindBindings,
@@ -1921,27 +2170,46 @@ function scanSourceText(file, text, rel) {
       }
     }
 
-    // Property / element capability references on proven fs namespaces:
-    // consume(fs.writeFileSync), Reflect.apply(fs.openSync, …), (0, fs.m)(),
-    // fs.openSync.bind(fs), array/object storage, etc. Direct call callees are
-    // owned by checkCallOrNew (non-read-only always forbidden; open only with
-    // proven read-only flags through a proven namespace).
+    // Property / element capability references on proven fs namespaces,
+    // forbidden host globals (fetch/WebSocket/…), and process native loaders:
+    // consume(fs.writeFileSync), const f = fetch / globalThis.fetch,
+    // const g = process.getBuiltinModule, Reflect.apply(...), (0, x)(),
+    // array/object storage, etc. Direct call / new callees are owned by
+    // checkCallOrNew.
+    // Also: host-rooted process object (`globalThis.process`) may not escape as
+    // a value — only as the immediate static member-access receiver.
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
       checkFsCapabilityReference(node);
+      checkGlobalObjectCapabilityReference(node);
+      checkProcessCapabilityReference(node);
+      if (
+        isHostRootedProcessObjectAccess(node) &&
+        !isMemberAccessReceiverRoot(node) &&
+        !isDirectCallOrNewCallee(node)
+      ) {
+        violations.push(`${rel}: forbidden process object capability escape`);
+      }
     }
 
-    // eval / Function / createRequire as value capabilities (alias, pass, sequence).
-    // Conservative: any value-position identifier with these names is forbidden.
+    // eval / Function / createRequire / fetch / WebSocket / XMLHttpRequest as
+    // value capabilities (alias, pass, sequence). Conservative: any
+    // value-position identifier with these names is forbidden.
+    // Global `process` is a host capability: value-level use (alias/pass/return/
+    // spread/argument/store) is forbidden; direct static member roots remain
+    // allowed (isProcessObjectValueEscape).
     if (ts.isIdentifier(node)) {
       const name = node.text;
-      if (FORBIDDEN_CODE_EXEC_GLOBALS.has(name) || FORBIDDEN_LOADER_APIS.has(name)) {
+      if (isForbiddenGlobalCapabilityName(name)) {
         if (isForbiddenCapabilityIdentifierUse(node)) {
           // Direct call / new already reported a specific message; still OK to
-          // mark acquisition forms (const e = eval; (0, eval); foo(eval)).
-          if (!isDirectCallExpressionCallee(node) && !(node.parent && ts.isNewExpression(node.parent) && node.parent.expression === node)) {
+          // mark acquisition forms (const e = eval; const f = fetch; foo(fetch)).
+          if (!isDirectCallOrNewCallee(node)) {
             violations.push(`${rel}: forbidden capability reference '${name}'`);
           }
         }
+      }
+      if (isProcessObjectValueEscape(node)) {
+        violations.push(`${rel}: forbidden process object capability escape`);
       }
     }
 
@@ -2530,6 +2798,257 @@ fs.closeSync(fd);
       name: "safe Function type annotation only",
       expectViolation: false,
       source: `const f: Function = (() => 1) as unknown as Function;\nvoid f;\n`,
+    },
+    // --- R14: network global capability references (not only direct call) ---
+    {
+      name: "fetch alias then call",
+      expectViolation: true,
+      source: `const f = fetch; f("https://x");\n`,
+    },
+    {
+      name: "Reflect.apply fetch",
+      expectViolation: true,
+      source: `Reflect.apply(fetch, null, ["https://x"]);\n`,
+    },
+    {
+      name: "globalThis.fetch alias then call",
+      expectViolation: true,
+      source: `const f2 = globalThis.fetch; f2("https://x");\n`,
+    },
+    {
+      name: "WebSocket alias then construct",
+      expectViolation: true,
+      source: `const W = WebSocket; new W("wss://x");\n`,
+    },
+    {
+      name: "XMLHttpRequest alias then construct",
+      expectViolation: true,
+      source: `const X = XMLHttpRequest; new X();\n`,
+    },
+    {
+      name: "comma sequence fetch remains detected",
+      expectViolation: true,
+      source: `(0, fetch)("https://x");\n`,
+    },
+    {
+      name: "globalThis string-element fetch reference",
+      expectViolation: true,
+      source: `const f = globalThis["fetch"]; void f;\n`,
+    },
+    {
+      name: "window.WebSocket capability reference",
+      expectViolation: true,
+      source: `const W = window.WebSocket; void W;\n`,
+    },
+    {
+      name: "fetch stored in array",
+      expectViolation: true,
+      source: `const bag = [fetch]; void bag;\n`,
+    },
+    {
+      name: "XMLHttpRequest passed as value",
+      expectViolation: true,
+      source: `function consume(_x: unknown) {}\nconsume(XMLHttpRequest);\n`,
+    },
+    // --- R14: process native-loader capability references ---
+    {
+      name: "process.getBuiltinModule call",
+      expectViolation: true,
+      source: `process.getBuiltinModule("fs").writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "process.getBuiltinModule alias then call",
+      expectViolation: true,
+      source: `const g = process.getBuiltinModule; g("net");\n`,
+    },
+    {
+      name: "globalThis.process.getBuiltinModule call",
+      expectViolation: true,
+      source: `globalThis.process.getBuiltinModule("child_process").execSync("id");\n`,
+    },
+    {
+      name: "process.dlopen alias then call",
+      expectViolation: true,
+      source: `const d = process.dlopen; d({} as any, "x");\n`,
+    },
+    {
+      name: "process.binding alias then call",
+      expectViolation: true,
+      source: `const b = process.binding; b("fs");\n`,
+    },
+    {
+      name: "process._linkedBinding call",
+      expectViolation: true,
+      source: `process._linkedBinding("fs").writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "process._linkedBinding alias then call",
+      expectViolation: true,
+      source: `const l = process._linkedBinding; l("fs");\n`,
+    },
+    {
+      name: "process alias then getBuiltinModule reference",
+      expectViolation: true,
+      source: `const p = process; const g = p.getBuiltinModule; void g;\n`,
+    },
+    {
+      name: "process string-element getBuiltinModule reference",
+      expectViolation: true,
+      source: `const g = process["getBuiltinModule"]; void g;\n`,
+    },
+    {
+      name: "computed process capability reference fail-closed",
+      expectViolation: true,
+      source: `const k = "getBuiltinModule"; const g = process[k]; void g;\n`,
+    },
+    // --- R14: existing require controls must not regress ---
+    {
+      name: "require alias then call",
+      expectViolation: true,
+      source: `const r = require; r("fs");\n`,
+    },
+    {
+      name: "module.require call",
+      expectViolation: true,
+      source: `module.require("fs");\n`,
+    },
+    {
+      name: "process.mainModule.require call",
+      expectViolation: true,
+      source: `process.mainModule.require("fs");\n`,
+    },
+    {
+      name: "require.main.require call",
+      expectViolation: true,
+      source: `require.main.require("fs");\n`,
+    },
+    // --- R14: legitimate process / fs controls stay safe ---
+    {
+      name: "safe process.argv read",
+      expectViolation: false,
+      source: `const a = process.argv; void a;\n`,
+    },
+    {
+      name: "safe process.cwd call",
+      expectViolation: false,
+      source: `const c = process.cwd(); void c;\n`,
+    },
+    {
+      name: "safe process.env read",
+      expectViolation: false,
+      source: `const e = process.env; void e;\n`,
+    },
+    {
+      name: "safe static ESM fs open read-only",
+      expectViolation: false,
+      source: `import fs from "node:fs";\nconst fd = fs.openSync("x", "r");\nfs.closeSync(fd);\n`,
+    },
+    // --- R15: process object must not escape as a value ---
+    {
+      name: "process destructure getBuiltinModule extract",
+      expectViolation: true,
+      source: `const { getBuiltinModule: g } = process;\ng("fs");\n`,
+    },
+    {
+      name: "process Proxy wrap then getBuiltinModule",
+      expectViolation: true,
+      source: `const p = new Proxy(process, {});\np.getBuiltinModule("fs").writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "process object spread copy then getBuiltinModule",
+      expectViolation: true,
+      source: `const p2 = { ...process };\np2.getBuiltinModule("fs").writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "process Object.create prototype escape then getBuiltinModule",
+      expectViolation: true,
+      source: `const p3 = Object.create(process);\np3.getBuiltinModule("fs").writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "process simple alias escape",
+      expectViolation: true,
+      source: `const p = process; void p;\n`,
+    },
+    {
+      name: "process chained alias then getBuiltinModule",
+      expectViolation: true,
+      source: `const p = process; const q = p; q.getBuiltinModule("fs");\n`,
+    },
+    {
+      name: "process returned as value",
+      expectViolation: true,
+      source: `function leak() { return process; }\nvoid leak;\n`,
+    },
+    {
+      name: "process passed as argument",
+      expectViolation: true,
+      source: `function consume(_x: unknown) {}\nconsume(process);\n`,
+    },
+    {
+      name: "process stored in array container",
+      expectViolation: true,
+      source: `const bag = [process]; void bag;\n`,
+    },
+    {
+      name: "process stored in object container",
+      expectViolation: true,
+      source: `const bag = { p: process }; void bag;\n`,
+    },
+    {
+      name: "globalThis.process value escape",
+      expectViolation: true,
+      source: `const p = globalThis.process; void p;\n`,
+    },
+    {
+      name: "process object rest destructure",
+      expectViolation: true,
+      source: `const { ...bag } = process; void bag;\n`,
+    },
+    {
+      name: "safe globalThis.process.argv read",
+      expectViolation: false,
+      source: `const a = globalThis.process.argv; void a;\n`,
+    },
+    {
+      name: "safe process.env.NODE_ENV read",
+      expectViolation: false,
+      source: `const n = process.env.NODE_ENV; void n;\n`,
+    },
+    {
+      name: "safe process.stdout write call",
+      expectViolation: false,
+      source: `process.stdout.write("ok");\n`,
+    },
+    // --- R16: node:process static imports forbidden (module-policy, like node:module) ---
+    {
+      name: "node:process default import forbidden",
+      expectViolation: true,
+      source: `import p from "node:process";\np.getBuiltinModule("fs").writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "node:process namespace import forbidden",
+      expectViolation: true,
+      source: `import * as p from "node:process";\np.getBuiltinModule("fs").writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "node:process named getBuiltinModule import forbidden",
+      expectViolation: true,
+      source: `import { getBuiltinModule as g } from "node:process";\ng("fs").writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "process bare import forbidden",
+      expectViolation: true,
+      source: `import process from "process";\nvoid process.argv;\n`,
+    },
+    {
+      name: "node:process re-export forbidden",
+      expectViolation: true,
+      source: `export { getBuiltinModule } from "node:process";\n`,
+    },
+    {
+      name: "safe global process.argv control (no node:process import)",
+      expectViolation: false,
+      source: `const a = process.argv; void a;\nconst c = process.cwd(); void c;\nconst n = process.env.NODE_ENV; void n;\nconst g = globalThis.process.argv; void g;\n`,
     },
   ];
 
