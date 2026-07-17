@@ -227,7 +227,8 @@ export function assessDuplicate(
   if (exact) {
     const state: DuplicateState = "EXACT_DUPLICATE";
     if (!hasMaterial) {
-      // Zero Evidence Delta: recommend subscribe/upvote only — no body/comment.
+      // Zero Evidence Delta: recommend subscribe/upvote only — no body/comment
+      // and no cross-link actions (reaction-only compliance).
       return {
         state,
         matched_issue_id: exact.issue_id,
@@ -237,7 +238,7 @@ export function assessDuplicate(
         recommendation: "subscribe_or_upvote" satisfies DuplicateRecommendation,
         draft_body: null,
         draft_comment: null,
-        cross_link_issue_ids: related.map((r) => r.issue_id),
+        cross_link_issue_ids: [],
         draft_title: null,
       };
     }

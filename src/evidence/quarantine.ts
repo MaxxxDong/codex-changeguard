@@ -20,9 +20,20 @@ const INSTRUCTION_PATTERNS: ReadonlyArray<{ id: string; re: RegExp }> = [
   { id: "exfil", re: /\b(?:exfiltrat|steal\s+token|send\s+secrets)\b/i },
 ];
 
+/**
+ * Normalize untrusted prose before instruction-pattern matching:
+ * NFKC, then strip Unicode Format controls (Cf) including zero-width,
+ * bidi, BOM, and other invisible format characters used for obfuscation.
+ * Deterministic; never returns executable content.
+ */
+export function normalizeForInstructionScan(text: string): string {
+  return text.normalize("NFKC").replace(/\p{Cf}/gu, "");
+}
+
 export function detectInstructionLike(text: string): string | null {
+  const normalized = normalizeForInstructionScan(text);
   for (const p of INSTRUCTION_PATTERNS) {
-    if (p.re.test(text)) return p.id;
+    if (p.re.test(normalized)) return p.id;
   }
   return null;
 }

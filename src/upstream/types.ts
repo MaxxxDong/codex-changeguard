@@ -271,7 +271,9 @@ export interface UpstreamSubmissionCapsule {
   privacy_review: {
     /**
      * Exactly: no injection AND secrets_redacted AND paths_redacted AND
-     * session_excluded (same booleans as displayed).
+     * session_excluded. The three booleans are the explicit request privacy
+     * review only (doctor redaction stays in doctor_inclusion). The same four
+     * operands feed maintainer_value_gate.privacy_review.
      */
     passed: boolean;
     secrets_redacted: boolean;

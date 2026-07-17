@@ -772,6 +772,114 @@ if (cwdListing.includes("state") || cwdListing.includes("version-fingerprint.jso
   fail("SessionStart must not write state into session cwd.");
 }
 
+// Ticket 10: packaged upstream-preview from outside repo cwd (no network).
+const upstreamReadySrc = path.join(
+  packageDir,
+  "fixtures",
+  "upstream",
+  "request-new-incident-cli.json",
+);
+const upstreamBlockedSrc = path.join(
+  packageDir,
+  "fixtures",
+  "upstream",
+  "request-prompt-injection.json",
+);
+if (!fs.existsSync(upstreamReadySrc) || !fs.existsSync(upstreamBlockedSrc)) {
+  fail("Package missing Ticket 10 upstream request fixtures.");
+}
+const readyReqPath = path.join(outside, "upstream-ready.json");
+const blockedReqPath = path.join(outside, "upstream-blocked.json");
+fs.copyFileSync(upstreamReadySrc, readyReqPath);
+fs.copyFileSync(upstreamBlockedSrc, blockedReqPath);
+
+const readyUp = spawnSync(
+  process.execPath,
+  [
+    path.join(packageDir, "bin/changeguard.js"),
+    "upstream-preview",
+    fixtureDest,
+    `--request=${readyReqPath}`,
+    "--disclose-refused",
+  ],
+  {
+    cwd: outside,
+    encoding: "utf8",
+    env: { ...process.env, NO_COLOR: "1" },
+  },
+);
+if (readyUp.status !== 0) {
+  fail(
+    `Packaged upstream-preview PREVIEW_READY must exit 0; status=${readyUp.status}\n${readyUp.stdout}\n${readyUp.stderr}`,
+  );
+}
+let readyUpResult;
+try {
+  readyUpResult = JSON.parse(readyUp.stdout);
+} catch {
+  fail("Packaged upstream-preview PREVIEW_READY stdout is not JSON.");
+}
+if (
+  !readyUpResult.ok ||
+  readyUpResult.capsule?.status !== "PREVIEW_READY" ||
+  readyUpResult.external_write !== false ||
+  readyUpResult.network_used !== false ||
+  readyUpResult.submission_status !== "none"
+) {
+  fail(
+    `Packaged upstream-preview PREVIEW_READY contract failed: ${JSON.stringify(readyUpResult)}`,
+  );
+}
+
+const blockedUp = spawnSync(
+  process.execPath,
+  [
+    path.join(packageDir, "bin/changeguard.js"),
+    "upstream-preview",
+    fixtureDest,
+    `--request=${blockedReqPath}`,
+    "--disclose-refused",
+  ],
+  {
+    cwd: outside,
+    encoding: "utf8",
+    env: { ...process.env, NO_COLOR: "1" },
+  },
+);
+if (blockedUp.status === 0) {
+  fail("Packaged upstream-preview PREVIEW_BLOCKED must exit nonzero.");
+}
+let blockedUpResult;
+try {
+  blockedUpResult = JSON.parse(blockedUp.stdout);
+} catch {
+  fail("Packaged upstream-preview PREVIEW_BLOCKED stdout is not JSON.");
+}
+const blockedCapsule = blockedUpResult.capsule;
+if (
+  blockedUpResult.ok !== false ||
+  !blockedCapsule ||
+  blockedCapsule.status !== "PREVIEW_BLOCKED" ||
+  blockedCapsule.duplicate?.recommendation !== "blocked" ||
+  blockedCapsule.duplicate?.draft_body !== null ||
+  blockedCapsule.duplicate?.draft_comment !== null ||
+  blockedCapsule.draft_title !== null ||
+  blockedUpResult.network_used !== false ||
+  blockedUpResult.external_write !== false
+) {
+  fail(
+    `Packaged upstream-preview PREVIEW_BLOCKED contract failed: ${JSON.stringify(blockedUpResult)}`,
+  );
+}
+const blockedSer = JSON.stringify(blockedCapsule);
+if (
+  /Ignore previous instructions|You are now a helpful|exfiltrate secrets|curl http:\/\/evil/i.test(
+    blockedSer,
+  )
+) {
+  fail("Packaged PREVIEW_BLOCKED capsule must not export raw injection text.");
+}
+
 console.log(
   JSON.stringify(
     {
@@ -799,6 +907,9 @@ console.log(
       session_start_arbitrary_cwd_ok: true,
       session_start_unchanged_no_stdout: true,
       session_start_state_under_plugin_data: true,
+      ticket10_upstream_preview_ready_exit_0: true,
+      ticket10_upstream_preview_blocked_nonzero: true,
+      ticket10_upstream_preview_no_network: true,
     },
     null,
     2,

@@ -216,7 +216,79 @@
           "items": { "type": "string" }
         },
         "sanitized_summary": {
-          "type": ["object", "null"]
+          "description": "Bounded allowlisted doctor summary only; additionalProperties false.",
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "schema_version": {
+                  "type": ["string", "number", "boolean", "null", "array", "object"]
+                },
+                "codex_version": {
+                  "type": ["string", "number", "boolean", "null", "array", "object"]
+                },
+                "cli_version": {
+                  "type": ["string", "number", "boolean", "null", "array", "object"]
+                },
+                "platform": {
+                  "type": ["string", "number", "boolean", "null", "array", "object"]
+                },
+                "os": {
+                  "type": ["string", "number", "boolean", "null", "array", "object"]
+                },
+                "arch": {
+                  "type": ["string", "number", "boolean", "null", "array", "object"]
+                },
+                "node_version": {
+                  "type": ["string", "number", "boolean", "null", "array", "object"]
+                },
+                "rust_version": {
+                  "type": ["string", "number", "boolean", "null", "array", "object"]
+                },
+                "shell": {
+                  "type": ["string", "number", "boolean", "null", "array", "object"]
+                },
+                "sandbox_mode": {
+                  "type": ["string", "number", "boolean", "null", "array", "object"]
+                },
+                "features": {
+                  "type": ["string", "number", "boolean", "null", "array", "object"]
+                },
+                "mcp_servers": {
+                  "type": ["string", "number", "boolean", "null", "array", "object"]
+                },
+                "plugins": {
+                  "type": ["string", "number", "boolean", "null", "array", "object"]
+                },
+                "skills": {
+                  "type": ["string", "number", "boolean", "null", "array", "object"]
+                },
+                "hooks": {
+                  "type": ["string", "number", "boolean", "null", "array", "object"]
+                },
+                "auth_mode": {
+                  "type": ["string", "number", "boolean", "null", "array", "object"]
+                },
+                "network_mode": {
+                  "type": ["string", "number", "boolean", "null", "array", "object"]
+                },
+                "workdir_alias": {
+                  "type": ["string", "number", "boolean", "null", "array", "object"]
+                },
+                "status": {
+                  "type": ["string", "number", "boolean", "null", "array", "object"]
+                },
+                "checks": {
+                  "type": ["string", "number", "boolean", "null", "array", "object"]
+                },
+                "summary": {
+                  "type": ["string", "number", "boolean", "null", "array", "object"]
+                }
+              }
+            }
+          ]
         },
         "refused_reasons": {
           "type": "array",
@@ -246,7 +318,35 @@
         "paths_redacted": { "type": "boolean" },
         "session_excluded": { "type": "boolean" },
         "injection_quarantined": { "type": "boolean" },
-        "quarantine": { "type": ["object", "null"] }
+        "quarantine": {
+          "description": "Exact QuarantineRecord shape or null; additionalProperties false.",
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "quarantined",
+                "reason",
+                "original_sha256",
+                "placeholder"
+              ],
+              "properties": {
+                "quarantined": { "const": true },
+                "reason": { "type": "string", "minLength": 1, "maxLength": 128 },
+                "original_sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "placeholder": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              }
+            }
+          ]
+        }
       }
     },
     "observed_facts": {

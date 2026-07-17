@@ -184,10 +184,25 @@ function applyCapsuleExportInvariant(input: {
   }
 
   // PREVIEW_READY only: public/discussion drafts and labels may export.
-  const draft_title =
-    assessed.recommendation === "subscribe_or_upvote"
-      ? null
-      : assessed.draft_title;
+  // Exact-dup zero-delta subscribe/upvote: no drafts and no cross-link actions.
+  if (assessed.recommendation === "subscribe_or_upvote") {
+    return {
+      duplicate: {
+        state: assessed.state,
+        matched_issue_id: assessed.matched_issue_id,
+        matched_issue_url: assessed.matched_issue_url,
+        evidence_delta_material: assessed.evidence_delta_material,
+        evidence_delta_hash: assessed.evidence_delta_hash,
+        recommendation: "subscribe_or_upvote",
+        draft_body: null,
+        draft_comment: null,
+        cross_link_issue_ids: [],
+      },
+      draft_title: null,
+      draft_labels: [],
+    };
+  }
+
   return {
     duplicate: {
       state: assessed.state,
@@ -200,7 +215,7 @@ function applyCapsuleExportInvariant(input: {
       draft_comment: assessed.draft_comment,
       cross_link_issue_ids: assessed.cross_link_issue_ids,
     },
-    draft_title,
+    draft_title: assessed.draft_title,
     draft_labels:
       route === "GITHUB_ISSUE" && assessed.state === "NEW_INCIDENT"
         ? ["bug", "changeguard-preview"]
@@ -351,11 +366,11 @@ export function previewUpstream(
     cross_link_issue_ids: injection_detected ? [] : assessed.cross_link_issue_ids,
   };
 
-  // Displayed privacy booleans are exactly the operands of `passed`.
-  const secrets_redacted =
-    request.privacy_review.secrets_redacted || doctor.secrets_redacted;
-  const paths_redacted =
-    request.privacy_review.paths_redacted || doctor.paths_redacted;
+  // Request privacy booleans only (never OR-lift doctor redaction into them).
+  // Doctor secrets/paths stay in doctor_inclusion. passed and the gate privacy
+  // check share these exact four operands.
+  const secrets_redacted = request.privacy_review.secrets_redacted;
+  const paths_redacted = request.privacy_review.paths_redacted;
   const session_excluded = request.privacy_review.session_excluded;
   const privacy_review_passed =
     !injection_detected &&
@@ -368,7 +383,7 @@ export function previewUpstream(
     route: routeDecision.route,
     duplicate: assessmentForGate,
     doctor,
-    privacy_passed: !injection_detected,
+    privacy_passed: privacy_review_passed,
   });
 
   // Injection → PREVIEW_BLOCKED. Gate failure precedes private routing:
@@ -406,27 +421,24 @@ export function previewUpstream(
       ? "Open a GitHub Discussion for product support questions (not a bug Issue form)."
       : null;
 
-  const capsuleMaterial = {
+  // GATE_FAILED: strip submission-reconstructable free text; keep only
+  // structured gate diagnostics and quarantine-safe metadata.
+  const stripFreeText = status === "GATE_FAILED";
+  const observed_facts = stripFreeText ? [] : request.observed_facts;
+  const user_reports = stripFreeText ? [] : request.user_reports;
+  const hypotheses = stripFreeText ? [] : request.hypotheses;
+  const error_strings = stripFreeText ? [] : request.error_strings;
+  const command_strings = stripFreeText ? [] : request.command_strings;
+
+  // Canonical payload without id / content hash — content-addresses distinct
+  // safe capsule/draft/facts/doctor/snapshot/gate material (no circular hash).
+  const capsulePayload = {
+    schema_version: 1 as const,
     mode: "preview_only" as const,
     locality: "local_only" as const,
-    route: routeDecision.route,
-    github_issue_form: routeDecision.github_issue_form,
-    duplicate_state: duplicate.state,
-    evidence_delta_hash: duplicate.evidence_delta_hash,
-    form_snapshot_id: form_snapshot.snapshot_id,
-    form_integrity: form_snapshot.integrity_sha256,
-    gate_passed: gate.passed,
-    status,
-  };
-
-  const capsule: UpstreamSubmissionCapsule = {
-    schema_version: 1,
-    capsule_id: capsuleId(capsuleMaterial),
-    mode: "preview_only",
-    locality: "local_only",
-    repair_authorized: false,
-    external_write: false,
-    requires_ticket11_confirmation: true,
+    repair_authorized: false as const,
+    external_write: false as const,
+    requires_ticket11_confirmation: true as const,
     status,
     route: routeDecision.route,
     github_issue_form: routeDecision.github_issue_form,
@@ -443,18 +455,22 @@ export function previewUpstream(
       injection_quarantined: injection_detected,
       quarantine,
     },
-    // Injection: only placeholders / empty safe fields — no raw free text.
-    observed_facts: request.observed_facts,
-    user_reports: request.user_reports,
-    hypotheses: request.hypotheses,
-    error_strings: request.error_strings,
-    command_strings: request.command_strings,
+    observed_facts,
+    user_reports,
+    hypotheses,
+    error_strings,
+    command_strings,
     route_rationale: routeDecision.rationale,
     draft_title: exported.draft_title,
     draft_labels: exported.draft_labels,
     private_report_guidance,
     support_guidance,
     discussion_guidance,
+  };
+
+  const capsule: UpstreamSubmissionCapsule = {
+    ...capsulePayload,
+    capsule_id: capsuleId(capsulePayload),
     capsule_content_sha256: "",
   };
   capsule.capsule_content_sha256 = sha256Canonical({

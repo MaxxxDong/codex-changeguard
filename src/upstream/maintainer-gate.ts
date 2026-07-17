@@ -95,13 +95,12 @@ export function evaluateMaintainerValueGate(input: {
       : `Doctor not included (${doctor.refused_reasons.join(", ") || "none"}).`,
   });
 
+  // privacy_passed must be the exact four-operand request privacy review
+  // (no injection AND secrets_redacted AND paths_redacted AND session_excluded).
+  // Doctor redaction lives only in doctor_inclusion — never OR-lifted here.
   checks.push({
     id: "privacy_review",
-    passed:
-      privacy_passed &&
-      request.privacy_review.secrets_redacted &&
-      request.privacy_review.paths_redacted &&
-      request.privacy_review.session_excluded,
+    passed: privacy_passed,
     detail: privacy_passed
       ? "Privacy review flags accepted."
       : "Privacy review incomplete or failed.",

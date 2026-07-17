@@ -485,19 +485,24 @@ Central export invariant:
 
 - Only `PREVIEW_READY` may export public/discussion draft content.
 - `ROUTED_PRIVATE` exports only private guidance and `private_report` recommendation (null public drafts).
-- Exact duplicate with **zero** material Evidence Delta on `PREVIEW_READY` → `subscribe_or_upvote` only; `draft_body` and `draft_comment` are null (official “search first / react only” guidance).
+- Exact duplicate with **zero** material Evidence Delta on `PREVIEW_READY` → `subscribe_or_upvote` only; `draft_body`, `draft_comment`, and `cross_link_issue_ids` are empty/null (official “search first / react only” guidance; no cross-link actions).
 - Exact duplicate with **material** Evidence Delta → `comment_with_delta` structured comment preview only.
 - Related mechanisms remain separate (`RELATED_NOT_SAME`) with cross-links; symptom similarity alone cannot merge incidents.
+- `GATE_FAILED` strips submission-reconstructable free text (`observed_facts` / `user_reports` / `hypotheses` / `error_strings` / `command_strings`) and keeps structured gate diagnostics / quarantine-safe metadata only.
+
+### Capsule identity
+
+`capsule_id` is content-addressed from a canonical capsule payload that excludes `capsule_id` and `capsule_content_sha256` (drafts, facts, doctor inclusion, form snapshot, gate, privacy, route/status). Distinct safe content with identical routing/form/state/delta therefore yields distinct ids. `capsule_content_sha256` is then derived from the final capsule contract (including `capsule_id`, with content hash nulled for the hash input) — no circular hashing.
 
 ### Maintainer-value gate
 
-Requires: route, duplicate search (Issue path), surface, platform/version or explicit unknown reason, actual behavior, ≥1 technical signal, sanitized baseline diagnostics (doctor inclusion or explicit refusal), privacy review flags, reproduction quality or intermittent marker, and material value over an existing Issue. Separates `observed_facts`, `user_reports`, and `hypotheses`. Exact technical error/command strings are preserved except required secret/path redaction.
+Requires: route, duplicate search (Issue path), surface, platform/version or explicit unknown reason, actual behavior, ≥1 technical signal, sanitized baseline diagnostics (doctor inclusion or explicit refusal), privacy review flags, reproduction quality or intermittent marker, and material value over an existing Issue. Separates `observed_facts`, `user_reports`, and `hypotheses`. Exact technical error/command strings are preserved except required secret/path redaction (except on `GATE_FAILED`, where free text is stripped).
 
-Capsule `privacy_review.passed` is exactly: no injection **and** `secrets_redacted` **and** `paths_redacted` **and** `session_excluded` (those booleans are exported and aligned with pass semantics). Prompt-injection scanning after NFKC covers every free-text field that can enter a capsule/draft, including `platform.os` / `platform.arch` / `platform.unknown_reason`, `codex_version`, and `version_unknown_reason`.
+Capsule `privacy_review.passed` is exactly: no injection **and** request `secrets_redacted` **and** `paths_redacted` **and** `session_excluded`. Those three booleans are the explicit request privacy review only; doctor redaction stays in `doctor_inclusion` and is never OR-lifted into the request review. The maintainer-gate `privacy_review` check uses the same four operands. Prompt-injection scanning after NFKC plus strip of Unicode format / zero-width / bidi controls covers every free-text field that can enter a capsule/draft, including `platform.os` / `platform.arch` / `platform.unknown_reason`, `codex_version`, and `version_unknown_reason`. Quarantine evidence hashes the scan-normalized material only — never raw malicious text.
 
 ### Doctor envelope
 
-Orchestrator may supply a bounded `codex doctor --json` object. ChangeGuard sanitizes allowlisted keys, shows an inclusion manifest, and never executes `codex` or arbitrary shell.
+Orchestrator may supply a bounded `codex doctor --json` object. ChangeGuard sanitizes allowlisted keys, shows an inclusion manifest, and never executes `codex` or arbitrary shell. Capsule schema constrains `doctor_inclusion.sanitized_summary` to that allowlist (`additionalProperties: false`) and `privacy_review.quarantine` to the exact `QuarantineRecord` shape.
 
 ### Official form snapshot
 

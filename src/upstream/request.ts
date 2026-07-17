@@ -1,5 +1,8 @@
 import { nfkc, redactText, assertNoLeakPaths } from "../core/redact.js";
-import { detectInstructionLike } from "../evidence/quarantine.js";
+import {
+  detectInstructionLike,
+  normalizeForInstructionScan,
+} from "../evidence/quarantine.js";
 import {
   ALLOWED_REQUEST_KEYS,
   FORBIDDEN_UPSTREAM_KEYS,
@@ -510,11 +513,13 @@ export function parseUpstreamRequest(raw: unknown): {
     throw new UpstreamRequestError("SCHEMA", "schema_version must be 1.");
   }
 
-  // Detect prompt injection across ALL free-text fields after NFKC.
+  // Detect prompt injection across ALL free-text fields after NFKC +
+  // strip of Unicode format/zero-width/bidi controls (shared with evidence).
   const rawStrings = collectRawUserStrings(obj);
-  const textBlob = rawStrings.map((s) => nfkc(s)).join("\n");
+  const textBlob = rawStrings.map((s) => normalizeForInstructionScan(s)).join("\n");
   const injection_reason = detectInstructionLike(textBlob);
   const injection_detected = injection_reason !== null;
+  // Hash material is the scan-normalized blob only — never raw malicious text.
   const injection_material = injection_detected ? textBlob : null;
 
   if (obj.doctor_json !== undefined && obj.doctor_json !== null) {

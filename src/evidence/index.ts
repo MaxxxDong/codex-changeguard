@@ -41,6 +41,7 @@ export {
 } from "./allowlist.js";
 export {
   detectInstructionLike,
+  normalizeForInstructionScan,
   quarantineProse,
   assertNotExecutable,
 } from "./quarantine.js";

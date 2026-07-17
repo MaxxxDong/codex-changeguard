@@ -213,21 +213,24 @@ Black-box and contract coverage in `tests/ticket10-upstream-preview.test.ts`:
 - four routes: `GITHUB_ISSUE`, `GITHUB_DISCUSSIONS`, `BUGCROWD`, `OPENAI_SUPPORT`
 - four Issue forms: APP / CLI / EXTENSION / OTHER (`1-codex-app.yml`, `3-cli.yml`, `2-extension.yml`, `4-bug-report.yml`)
 - security → Bugcrowd private-only (no public Issue draft body)
-- exact duplicate zero Evidence Delta → `subscribe_or_upvote`, null body/comment
+- exact duplicate zero Evidence Delta → `subscribe_or_upvote`, null body/comment, empty cross-links
 - exact duplicate material Evidence Delta → structured comment preview
 - related-not-same → separate body + cross-links
 - new incident → `open_new` with maintainer-value body; facts/reports/hypotheses separated
-- maintainer-value gate fails when technical signals or privacy review missing (`GATE_FAILED`, `ok: false`, recommendation `blocked`, null drafts)
-- privacy_review.passed = no injection AND secrets_redacted AND paths_redacted AND session_excluded (session exported; negative combinations)
+- content-addressed `capsule_id` / `capsule_content_sha256`: two new incidents with same routing and empty delta but different behavior yield distinct ids/hashes
+- maintainer-value gate fails when technical signals or privacy review missing (`GATE_FAILED`, `ok: false`, recommendation `blocked`, null drafts; free text stripped)
+- privacy_review.passed = no injection AND request secrets_redacted AND paths_redacted AND session_excluded (not OR-lifted from doctor; same four operands as gate privacy check)
 - privacy/gate failure precedes BUGCROWD `ROUTED_PRIVATE`; only gate-passed private route is `ROUTED_PRIVATE`
-- doctor sanitization + inclusion manifest; forbidden doctor keys fail closed; secrets/paths redacted
+- doctor sanitization + inclusion manifest; forbidden doctor keys fail closed; secrets/paths redacted in doctor_inclusion only
 - immutable form snapshot integrity (main commit + blob SHAs + `integrity_sha256`); stale vs fresh labels
 - approved fake form transport (one call, official allowlist only); refused / zero transport (`transport_calls: 0`)
 - injected transport refresh failure: `transport_calls: 1` / `network_used: true` but `source=bundled_immutable` with bundled freshness (never transport_refresh/live)
-- prompt injection quarantine (`PREVIEW_BLOCKED`); platform/version side-channels scanned after NFKC; CLI/MCP side-channel coverage
-- export invariant: only `PREVIEW_READY` may export public/discussion drafts; `blocked` for blocked/failed; zero-delta exact dup keeps `subscribe_or_upvote` + null drafts
+- prompt injection quarantine (`PREVIEW_BLOCKED`); platform/version side-channels scanned after NFKC + format/ZWSP/bidi strip; CLI/MCP side-channel coverage
+- export invariant: only `PREVIEW_READY` may export public/discussion drafts; `blocked` for blocked/failed; zero-delta exact dup keeps `subscribe_or_upvote` + null drafts + no cross-links
+- schema contracts: exact `QuarantineRecord` shape; allowlisted doctor `sanitized_summary` (`additionalProperties: false`)
 - malformed/oversized/extra fields fail closed
 - CLI/MCP `upstream-preview` / `changeguard_upstream_preview` stable-field equivalence; target tree hash unchanged
+- package-smoke invokes packaged `upstream-preview` for PREVIEW_READY (exit 0) and PREVIEW_BLOCKED (nonzero, null drafts, no raw injection) from outside repo cwd
 - capsule never `SUBMITTED`/`POSTED`; `external_write: false`; schema `preview_only`
 
 ## Initial commands
