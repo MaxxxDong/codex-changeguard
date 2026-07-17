@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "capsule_id": "protected-process-local-shim-preview",
+  "trust_tier": "T1_community",
+  "mode": "preview_only",
+  "applicability": {
+    "version_match": false,
+    "platform_match": true,
+    "target_hash_match": true,
+    "pattern_count_match": true
+  },
+  "backup": {
+    "required": true,
+    "original_sha256": "57ee77a283eb230c6c6d47353af13a25cec4c331b511868c8fbf7ccd3dd1b2f6",
+    "receipt_id": null
+  },
+  "dry_run_checks": [
+    "pattern-count-equals-one",
+    "apply-to-disposable-copy",
+    "node-check",
+    "minimal-handshake-smoke",
+    "verify-original-unchanged"
+  ],
+  "rollback_recipe": [
+    "Do not modify the installed artifact in preview-only mode.",
+    "For a future authorized apply, restore exact original bytes and verify the original SHA-256."
+  ],
+  "human_decision": "pending",
+  "smoke_result": "not_run"
+}

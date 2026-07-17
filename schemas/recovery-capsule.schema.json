@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-changeguard/recovery-capsule.schema.json",
+  "title": "RecoveryCapsule",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "capsule_id",
+    "trust_tier",
+    "mode",
+    "applicability",
+    "backup",
+    "dry_run_checks",
+    "rollback_recipe",
+    "human_decision"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "capsule_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+    "trust_tier": {"enum": ["T4_official_release", "T3_official_commit", "T2_maintainer_workaround", "T1_community", "T0_model_generated"]},
+    "mode": {"enum": ["preview_only", "dry_run_disposable", "apply_authorized"]},
+    "applicability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version_match", "platform_match", "target_hash_match", "pattern_count_match"],
+      "properties": {
+        "version_match": {"type": "boolean"},
+        "platform_match": {"type": "boolean"},
+        "target_hash_match": {"type": "boolean"},
+        "pattern_count_match": {"type": "boolean"}
+      }
+    },
+    "backup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "original_sha256"],
+      "properties": {
+        "required": {"const": true},
+        "original_sha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+        "receipt_id": {"type": ["string", "null"], "maxLength": 256}
+      }
+    },
+    "dry_run_checks": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {"type": "string", "maxLength": 256}
+    },
+    "rollback_recipe": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {"type": "string", "maxLength": 512}
+    },
+    "human_decision": {"enum": ["pending", "approved", "rejected"]},
+    "smoke_result": {"enum": ["not_run", "pass", "fail", "error"]}
+  }
+}

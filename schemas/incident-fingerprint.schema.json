@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-changeguard/incident-fingerprint.schema.json",
+  "title": "IncidentFingerprint",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "surface",
+    "platform",
+    "failure_phase",
+    "error",
+    "local_facts_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "codex_version": {"type": ["string", "null"], "maxLength": 128},
+    "build_sha": {"type": ["string", "null"], "pattern": "^[a-fA-F0-9]{7,64}$"},
+    "surface": {
+      "enum": ["desktop", "cli", "plugin", "mcp", "browser_control", "app_server", "unknown"]
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "arch"],
+      "properties": {
+        "os": {"enum": ["macos", "windows", "linux", "unknown"]},
+        "arch": {"type": "string", "maxLength": 64},
+        "sandbox_class": {"type": ["string", "null"], "maxLength": 128}
+      }
+    },
+    "failure_phase": {
+      "enum": [
+        "startup",
+        "hook_load",
+        "extension_handshake",
+        "tab_discovery",
+        "navigation",
+        "tool_call",
+        "output_decode",
+        "shutdown",
+        "unknown"
+      ]
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class", "normalized_message"],
+      "properties": {
+        "class": {"type": "string", "maxLength": 256},
+        "normalized_message": {"type": "string", "maxLength": 2048},
+        "message_digest": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"}
+      }
+    },
+    "stack_frames": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["module", "file", "symbol", "line_bucket"],
+        "properties": {
+          "module": {"type": ["string", "null"], "maxLength": 256},
+          "file": {"type": ["string", "null"], "maxLength": 256},
+          "symbol": {"type": ["string", "null"], "maxLength": 256},
+          "line_bucket": {"type": ["integer", "null"], "minimum": 0}
+        }
+      }
+    },
+    "config_keys": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 512,
+      "items": {"type": "string", "maxLength": 256}
+    },
+    "feature_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 512,
+      "items": {"type": "string", "maxLength": 256}
+    },
+    "artifact_hashes": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path_alias", "sha256"],
+        "properties": {
+          "path_alias": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$"},
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+        }
+      }
+    },
+    "ast_signature_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 128,
+      "items": {"type": "string", "maxLength": 128}
+    },
+    "local_facts_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "codex_version": null,
+  "build_sha": null,
+  "surface": "browser_control",
+  "platform": {
+    "os": "macos",
+    "arch": "arm64",
+    "sandbox_class": "desktop_extension_runtime"
+  },
+  "failure_phase": "extension_handshake",
+  "error": {
+    "class": "TypeError",
+    "normalized_message": "protected global process binding rejected assignment",
+    "message_digest": "57ee77a283eb230c6c6d47353af13a25cec4c331b511868c8fbf7ccd3dd1b2f6"
+  },
+  "stack_frames": [
+    {
+      "module": "browser-client",
+      "file": "browser-client.mjs",
+      "symbol": "module_initialization",
+      "line_bucket": 30
+    }
+  ],
+  "config_keys": [],
+  "feature_ids": ["browser_control"],
+  "artifact_hashes": [
+    {
+      "path_alias": "BROWSER_CLIENT_COPY_A",
+      "sha256": "57ee77a283eb230c6c6d47353af13a25cec4c331b511868c8fbf7ccd3dd1b2f6"
+    }
+  ],
+  "ast_signature_ids": ["js.global-process-shim-redefinition.v1"],
+  "local_facts_digest": "57ee77a283eb230c6c6d47353af13a25cec4c331b511868c8fbf7ccd3dd1b2f6"
+}

@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "claim_id": "protected-process-shim-local-pattern",
+  "statement": "The installed browser client contains the known protected-process shim redefinition pattern and fails before extension handshake.",
+  "provenance": ["local_observed", "user_reported", "model_inferred"],
+  "source_spans": [
+    {
+      "source_id": "local-probe:ast-pattern-v1",
+      "source_type": "probe",
+      "locator": "BROWSER_CLIENT_COPY_A#js.global-process-shim-redefinition.v1",
+      "trust": "local_observed"
+    },
+    {
+      "source_id": "openai-codex-issue-32925-comment-4964841817",
+      "source_type": "issue",
+      "locator": "https://github.com/openai/codex/issues/32925#issuecomment-4964841817",
+      "trust": "community"
+    }
+  ],
+  "local_matcher": "matched",
+  "confidence": 0.93,
+  "counterevidence": [
+    "The upstream Issue comment is community evidence and does not by itself prove an official root cause."
+  ],
+  "suggested_probe_ids": [
+    "js.process-descriptor.v1",
+    "js.browser-client-ast-pattern.v1",
+    "js.protected-process-fixture.v1"
+  ],
+  "verdict_lock": "human_decision_required"
+}

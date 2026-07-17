@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "codex_version": "0.145.0-alpha.18",
+  "build_sha": null,
+  "surface": "app_server",
+  "platform": {
+    "os": "macos",
+    "arch": "arm64",
+    "sandbox_class": "workspace_write"
+  },
+  "failure_phase": "startup",
+  "error": {
+    "class": "SyntaxError",
+    "normalized_message": "unrelated fixture syntax failure before app server startup",
+    "message_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "stack_frames": [
+    {
+      "module": "unrelated-fixture",
+      "file": "fixture.mjs",
+      "symbol": "parse_fixture",
+      "line_bucket": 10
+    }
+  ],
+  "config_keys": [],
+  "feature_ids": [],
+  "artifact_hashes": [],
+  "ast_signature_ids": [],
+  "local_facts_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}

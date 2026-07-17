@@ -1,0 +1,19 @@
+{
+  "name": "codex-changeguard",
+  "version": "0.1.0",
+  "description": "Evidence-bound Codex update impact analysis, incident localization, and reversible recovery planning.",
+  "author": {
+    "name": "Codex ChangeGuard Contributors"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex ChangeGuard",
+    "shortDescription": "Explain updates, localize incidents, and preview reversible recovery.",
+    "longDescription": "Codex ChangeGuard maps official Codex changes and issue evidence to redacted local facts, runs deterministic probes, and produces evidence-bound impact contracts and recovery previews.",
+    "developerName": "Codex ChangeGuard Contributors",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Analyze this Codex update or incident with ChangeGuard. Keep observed facts, issue candidates, model inferences, and safe recovery actions clearly separated."
+  },
+  "mcpServers": "./.mcp.json"
+}
