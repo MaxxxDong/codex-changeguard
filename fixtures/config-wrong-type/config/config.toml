@@ -1,0 +1,9 @@
+model = "gpt-5.4"
+model_provider = "openai"
+notify = true
+
+[shell_environment_policy]
+set = "PATH=/usr/bin"
+
+[features]
+browser_control = true

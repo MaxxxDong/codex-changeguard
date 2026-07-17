@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "codex_version": "0.50.0",
+  "build_sha": null,
+  "surface": "cli",
+  "platform": {
+    "os": "macos",
+    "arch": "arm64",
+    "sandbox_class": null
+  },
+  "failure_phase": "startup",
+  "error": {
+    "class": "ConfigObsoleteKeyError",
+    "normalized_message": "obsolete key legacy_experimental_shell",
+    "message_digest": "3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "stack_frames": [
+    {
+      "module": "codex-cli",
+      "file": "config.toml",
+      "symbol": "load_config",
+      "line_bucket": 10
+    }
+  ],
+  "config_keys": [
+    "legacy_experimental_shell"
+  ],
+  "feature_ids": [],
+  "artifact_hashes": [],
+  "ast_signature_ids": [],
+  "local_facts_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+}

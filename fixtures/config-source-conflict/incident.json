@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "codex_version": "0.50.0",
+  "build_sha": null,
+  "surface": "cli",
+  "platform": {
+    "os": "macos",
+    "arch": "arm64",
+    "sandbox_class": null
+  },
+  "failure_phase": "startup",
+  "error": {
+    "class": "ConfigSourceConflictError",
+    "normalized_message": "conflicting model across config sources",
+    "message_digest": "4444444444444444444444444444444444444444444444444444444444444444"
+  },
+  "stack_frames": [
+    {
+      "module": "codex-cli",
+      "file": "config.toml",
+      "symbol": "load_config",
+      "line_bucket": 10
+    }
+  ],
+  "config_keys": [
+    "model"
+  ],
+  "feature_ids": [],
+  "artifact_hashes": [],
+  "ast_signature_ids": [],
+  "local_facts_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+}

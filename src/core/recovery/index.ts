@@ -13,5 +13,6 @@ export type {
   ApplyOptions,
   VerificationReport,
   BackupReceipt,
+  AdminHandoff,
 } from "./types.js";
 export { INDUCE_VERIFY_FAIL_REL } from "./types.js";

@@ -97,6 +97,13 @@ title similarity alone cannot create high confidence. Without a verified fix,
 diagnosis returns `UPSTREAM_BLOCKED` (or `INCONCLUSIVE`) and never authorizes a
 symptom-level Repair Capsule. Active crash probes require disposable isolation.
 
+### Configuration / startup fault pack (Ticket 07)
+
+Isolated control-root fixtures classify invalid TOML, wrong types, obsolete keys, and
+source conflicts with distinct fingerprints. Registered `config_set` / `config_remove`
+repairs run through the Ticket 02 engine with startup verification and automatic
+rollback; managed policy targets return `ADMIN_ACTION_REQUIRED` without bypass guidance.
+
 ## Plugin surfaces
 
 - Skill commands for update scanning, incident diagnosis, Impact Card, and recovery preview

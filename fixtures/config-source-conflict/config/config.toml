@@ -1,0 +1,6 @@
+model = "gpt-5.4"
+model_provider = "openai"
+notify = true
+
+[features]
+browser_control = true

@@ -6,7 +6,7 @@ import type {
   UserResolutionReceipt,
 } from "../types.js";
 
-/** User-resolution statuses reachable after Ticket 02 recovery. */
+/** User-resolution statuses reachable after Ticket 02/07 recovery. */
 export type RecoveryUserStatus =
   | "INCONCLUSIVE"
   | "DIAGNOSIS_COMPLETE"
@@ -16,9 +16,13 @@ export type RecoveryUserStatus =
   | "RESOLVED_VERIFIED"
   | "MITIGATED_VERIFIED_BY_ROLLBACK"
   | "REPAIR_REFUSED"
-  | "REPAIR_FAILED_ROLLED_BACK";
+  | "REPAIR_FAILED_ROLLED_BACK"
+  | "ADMIN_ACTION_REQUIRED";
 
-export type RepairOperationKind = "exact_block_removal";
+export type RepairOperationKind =
+  | "exact_block_removal"
+  | "config_set"
+  | "config_remove";
 
 export type RepairRisk = "low" | "moderate" | "high";
 
@@ -71,6 +75,27 @@ export interface CapsuleOperation {
    * Null/omission is rejected at decode — never optional mutable material.
    */
   expected_result_sha256: string;
+  /**
+   * Config repair fields (Ticket 07). Always present; null for exact_block_removal.
+   * Secret values never appear — only redacted summaries / registered non-secret literals.
+   */
+  config_key: string | null;
+  old_value_type: string | null;
+  old_value_summary: string | null;
+  new_value: string | null;
+}
+
+/** Bounded IT handoff facts when ADMIN_ACTION_REQUIRED (no secrets/bypass). */
+export interface AdminHandoff {
+  policy_class: string;
+  target_path_alias: string;
+  config_key: string | null;
+  requested_action: string;
+  /** Content digests only — never file bodies. */
+  evidence_digests: string[];
+  admin_owned: boolean;
+  signed: boolean;
+  permission_bound: boolean;
 }
 
 /**
@@ -173,6 +198,8 @@ export interface RepairResult {
   resulting_sha256: string | null;
   /** Distinct from user_resolution; never claims external contribution. */
   contribution_claim: "none" | "local_only";
+  /** Present only for managed/admin-owned/signed/permission-bound targets. */
+  admin_handoff: AdminHandoff | null;
 }
 
 export interface ApplyOptions {

@@ -1,0 +1,5 @@
+model = "gpt-5.4"
+model_provider = "openai"
+
+[shell_environment_policy]
+set = "PATH=/usr/bin"

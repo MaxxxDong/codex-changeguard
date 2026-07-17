@@ -43,6 +43,24 @@ This document owns the ChangeGuard verification matrix. Passing a model-generate
 - “disable Browser”, “move to SSD”, and “disable SecureLink” remain hypotheses or mitigations until their own controlled A/B tests pass
 - an open GitHub Issue without verified Issue/PR/commit/release linkage cannot reach `FIX_COMMIT_LINKED`
 
+## Ticket 07 Scenario Harness (config/startup fault pack)
+
+Black-box coverage in `tests/ticket07-config-startup.test.ts`:
+
+- distinct fingerprints for invalid TOML, wrong type, obsolete key, source conflict
+- valid `config_set` / `config_remove` repair → `RESOLVED_VERIFIED` with startup verification (original failure, config reload, registered command)
+- wrong candidate (negative control) refused
+- managed policy → `ADMIN_ACTION_REQUIRED` + IT handoff; no privilege-elevation ops
+- induced verification failure auto-rollbacks exact config bytes
+- invalid TOML diagnosed but not auto-repaired
+- no project-source read (sentinel file)
+- symlink / path-escape refused
+- replay after apply refused; TOCTOU hash change refuses apply
+- CLI/MCP diagnose and repair-preview equivalence
+- explicit rollback restores original bytes
+- prior Ticket 02 protected-process path still works
+- oversized config and malformed incident fail closed
+
 ## Ticket 09 Scenario Harness (Desktop Browser crash-family classifier)
 
 Black-box + classifier coverage in `tests/ticket09-crash-family.test.ts`

@@ -44,7 +44,16 @@ import {
   PROTECTED_PROCESS_OP,
   removeProtectedProcessBlock,
 } from "./protected-process.js";
+import {
+  buildLiveConfigPlan,
+  configStartupVerification,
+  isConfigCapsuleId,
+  planConfigRepair,
+  relForConfigAlias,
+  type ConfigRepairPlan,
+} from "./config-repair.js";
 import type {
+  AdminHandoff,
   ApplyOptions,
   BackupReceipt,
   RepairCapsule,
@@ -106,6 +115,7 @@ function baseResult(
     backup: partial.backup ?? null,
     resulting_sha256: partial.resulting_sha256 ?? null,
     contribution_claim: "none",
+    admin_handoff: partial.admin_handoff ?? null,
   };
 }
 
@@ -119,14 +129,18 @@ function fail(
     ok: false,
     operation,
     user_resolution: userReceipt(
-      code === "AUTH_INVALID" ||
-        code === "AUTH_EXPIRED" ||
-        code === "AUTH_MALFORMED" ||
-        code === "AUTH_REPLAY" ||
-        code === "NOT_APPLICABLE"
-        ? "REPAIR_REFUSED"
-        : "INCONCLUSIVE",
-      "Repair operation refused or could not complete safely.",
+      code === "ADMIN_ACTION_REQUIRED"
+        ? "ADMIN_ACTION_REQUIRED"
+        : code === "AUTH_INVALID" ||
+            code === "AUTH_EXPIRED" ||
+            code === "AUTH_MALFORMED" ||
+            code === "AUTH_REPLAY" ||
+            code === "NOT_APPLICABLE"
+          ? "REPAIR_REFUSED"
+          : "INCONCLUSIVE",
+      code === "ADMIN_ACTION_REQUIRED"
+        ? "Administrator action required; no local bypass offered."
+        : "Repair operation refused or could not complete safely.",
     ),
     upstream_contribution: upstreamReceipt(
       "NONE",
@@ -194,6 +208,10 @@ function buildCapsule(input: {
       expected_pattern_count: input.pattern_count,
       operation_digest: input.op_digest,
       expected_result_sha256: input.expected_result_sha256,
+      config_key: null,
+      old_value_type: null,
+      old_value_summary: null,
+      new_value: null,
     },
     applicability: {
       version_match: false,
@@ -248,7 +266,8 @@ function buildCapsule(input: {
 }
 
 /**
- * Preview a Repair Capsule for the isolated protected-process target.
+ * Preview a Repair Capsule for the isolated target.
+ * Tries protected-process first, then Ticket 07 config set/remove.
  * Completely read-only over the entire target tree — no .changeguard writes.
  * Returns a self-contained authorization token for cross-process apply.
  */
@@ -262,8 +281,10 @@ export function previewRepair(targetPath: string): RepairResult {
   }
 
   const evidence: MeasuredEvidence[] = [];
+  const scope_digest = scopeDigestForTarget(targetReal);
+
+  // --- Protected-process path ---
   try {
-    const scope_digest = scopeDigestForTarget(targetReal);
     const file = openTargetFile(targetReal, artifactRel(), MAX_ARTIFACT_BYTES);
     const ast = measureProtectedProcessAst(file.bytes.toString("utf8"));
     evidence.push({
@@ -277,107 +298,354 @@ export function previewRepair(targetPath: string): RepairResult {
       measured: true,
     });
 
-    // Mechanism gate: must be exactly one protected-process block.
-    if (!ast.matched || ast.blockCount !== 1) {
-      return fail(
-        "preview",
-        "NOT_APPLICABLE",
-        "Protected-process repair is not applicable to this target.",
-        {
-          evidence,
-          user_resolution: userReceipt(
-            "REPAIR_REFUSED",
-            "No matching protected-process mechanism; repair refused.",
-          ),
-        },
-      );
-    }
-
-    const source = file.bytes.toString("utf8");
-    // Pre-handshake signal: failure mechanism is the shim itself (before browser handshake).
-    if (!preHandshakeFailureStillPresent(source)) {
-      return fail("preview", "NOT_APPLICABLE", "Original failure mechanism not present.", {
-        evidence,
-      });
-    }
-
-    const plan = removeProtectedProcessBlock(source);
-    if (!plan || plan.result_pattern_count !== 0) {
-      return fail("preview", "REPAIR_PLAN", "Could not plan exact block removal.", {
-        evidence,
-      });
-    }
-
-    const op_digest = operationDigest();
-    const capsule = buildCapsule({
-      scope_digest,
-      original_sha256: file.sha256,
-      pattern_count: 1,
-      expected_result_sha256: plan.result_sha256,
-      op_digest,
-    });
-
-    let authorization: string;
-    try {
-      authorization = encodeAuthorizationToken(capsule);
-    } catch (e) {
-      if (e instanceof AuthTokenError) {
-        return fail("preview", e.code, e.message, { evidence });
+    if (ast.matched && ast.blockCount === 1) {
+      const source = file.bytes.toString("utf8");
+      if (preHandshakeFailureStillPresent(source)) {
+        const plan = removeProtectedProcessBlock(source);
+        if (plan && plan.result_pattern_count === 0) {
+          const op_digest = operationDigest();
+          const capsule = buildCapsule({
+            scope_digest,
+            original_sha256: file.sha256,
+            pattern_count: 1,
+            expected_result_sha256: plan.result_sha256,
+            op_digest,
+          });
+          let authorization: string;
+          try {
+            authorization = encodeAuthorizationToken(capsule);
+          } catch (e) {
+            if (e instanceof AuthTokenError) {
+              return fail("preview", e.code, e.message, { evidence });
+            }
+            return fail("preview", "PREVIEW_ERROR", "Preview failed.", { evidence });
+          }
+          evidence.push({
+            kind: "capsule_preview",
+            detail: `Capsule ${capsule.capsule_id} binding=${capsule.authorization_binding.slice(0, 16)}…`,
+            measured: true,
+          });
+          return baseResult({
+            ok: true,
+            operation: "preview",
+            capsule,
+            authorization,
+            user_resolution: userReceipt(
+              "REPAIR_PREVIEWED",
+              "Repair Capsule preview ready. One scope-bound authorization required to apply.",
+            ),
+            upstream_contribution: upstreamReceipt(
+              "CANDIDATE_ONLY",
+              "Local experimental repair only; no external submission.",
+              ["openai/codex#32925"],
+            ),
+            evidence,
+            target_mutated: false,
+            repair_applied: false,
+          });
+        }
       }
-      return fail("preview", "PREVIEW_ERROR", "Preview failed.", { evidence });
     }
-
-    evidence.push({
-      kind: "capsule_preview",
-      detail: `Capsule ${capsule.capsule_id} binding=${capsule.authorization_binding.slice(0, 16)}…`,
-      measured: true,
-    });
-
-    // No target writes — token is self-contained for cross-process apply.
-    return baseResult({
-      ok: true,
-      operation: "preview",
-      capsule,
-      authorization,
-      user_resolution: userReceipt(
-        "REPAIR_PREVIEWED",
-        "Repair Capsule preview ready. One scope-bound authorization required to apply.",
-      ),
-      upstream_contribution: upstreamReceipt(
-        "CANDIDATE_ONLY",
-        "Local experimental repair only; no external submission.",
-        ["openai/codex#32925"],
-      ),
-      evidence,
-      target_mutated: false,
-      repair_applied: false,
-    });
   } catch (e) {
     if (e instanceof PathSafetyError) {
-      // Missing artifact on negative control → not applicable.
-      if (e.code === "CANDIDATE_NOT_FOUND") {
-        return fail(
-          "preview",
-          "NOT_APPLICABLE",
-          "Protected-process repair is not applicable to this target.",
-          { evidence },
-        );
+      if (e.code !== "CANDIDATE_NOT_FOUND") {
+        return fail("preview", e.code, e.message, { evidence });
       }
+      // Missing protected-process artifact — fall through to config path.
+    } else {
+      return fail("preview", "PREVIEW_ERROR", "Preview failed.", { evidence });
+    }
+  }
+
+  // --- Ticket 07 config path ---
+  try {
+    return previewConfigRepair(targetReal, scope_digest, evidence);
+  } catch (e) {
+    if (e instanceof PathSafetyError) {
       return fail("preview", e.code, e.message, { evidence });
     }
     return fail("preview", "PREVIEW_ERROR", "Preview failed.", { evidence });
   }
 }
 
+function previewConfigRepair(
+  targetReal: string,
+  scope_digest: string,
+  evidence: MeasuredEvidence[],
+): RepairResult {
+  const { probe, managed_block } = planConfigRepair(targetReal);
+
+  if (managed_block && probe.managed) {
+    const m = probe.managed;
+    const handoff: AdminHandoff = {
+      policy_class: m.policy_class,
+      target_path_alias: m.path_alias,
+      config_key: probe.fault?.config_key || null,
+      requested_action:
+        "Contact IT/admin to update managed Codex control configuration through approved enterprise change process.",
+      evidence_digests: [m.sha256].filter(Boolean),
+      admin_owned: m.admin_owned,
+      signed: m.signed,
+      permission_bound: m.permission_bound,
+    };
+    evidence.push({
+      kind: "managed_policy",
+      detail: `policy_class=${m.policy_class} admin_owned=${m.admin_owned}`,
+      measured: true,
+    });
+    return baseResult({
+      ok: false,
+      operation: "preview",
+      user_resolution: userReceipt(
+        "ADMIN_ACTION_REQUIRED",
+        "Managed/admin-owned/signed/permission-bound configuration requires administrator action.",
+      ),
+      upstream_contribution: upstreamReceipt(
+        "NONE",
+        "No local repair; IT handoff only.",
+      ),
+      evidence,
+      error_code: "ADMIN_ACTION_REQUIRED",
+      error_message:
+        "Target is under managed policy; local mutation is refused and no privilege-elevation guidance is offered.",
+      admin_handoff: handoff,
+    });
+  }
+
+  if (!probe.fault) {
+    return fail(
+      "preview",
+      "NOT_APPLICABLE",
+      "No applicable protected-process or config repair for this target.",
+      {
+        evidence,
+        user_resolution: userReceipt(
+          "REPAIR_REFUSED",
+          "No matching repairable mechanism; repair refused.",
+        ),
+      },
+    );
+  }
+
+  // Open the fault target file and build a live plan.
+  const target_rel =
+    probe.fault.path_rel ||
+    relForConfigAlias(probe.fault.path_alias) ||
+    null;
+  if (!target_rel) {
+    return fail("preview", "NOT_APPLICABLE", "Config repair target unknown.", {
+      evidence,
+    });
+  }
+  // Source conflict repairs the override file.
+  const openRel =
+    probe.fault.fault_class === "ConfigSourceConflictError"
+      ? "config/config.override.toml"
+      : target_rel;
+
+  let file: ReturnType<typeof openTargetFile>;
+  try {
+    file = openTargetFile(targetReal, openRel, MAX_ARTIFACT_BYTES);
+  } catch (e) {
+    if (e instanceof PathSafetyError) {
+      return fail("preview", e.code, e.message, { evidence });
+    }
+    return fail("preview", "PREVIEW_ERROR", "Preview failed.", { evidence });
+  }
+
+  const text = file.bytes.toString("utf8");
+  const plan = buildLiveConfigPlan(text, file.sha256, probe);
+  if (!plan || !plan.next_text) {
+    return fail(
+      "preview",
+      "NOT_APPLICABLE",
+      "Config fault is not covered by a registered set/remove repair.",
+      {
+        evidence,
+        user_resolution: userReceipt(
+          "REPAIR_REFUSED",
+          "Config fault diagnosed but no registered repair operation applies.",
+        ),
+      },
+    );
+  }
+
+  evidence.push({
+    kind: "config_fault",
+    detail: `fault_class=${plan.fault.fault_class} key=${plan.config_key}`,
+    measured: true,
+  });
+  evidence.push({
+    kind: "config_hash",
+    detail: `Measured ${plan.target_path_alias} sha256=${file.sha256}`,
+    measured: true,
+  });
+
+  const capsule = buildConfigCapsule(scope_digest, plan);
+  let authorization: string;
+  try {
+    authorization = encodeAuthorizationToken(capsule);
+  } catch (e) {
+    if (e instanceof AuthTokenError) {
+      return fail("preview", e.code, e.message, { evidence });
+    }
+    return fail("preview", "PREVIEW_ERROR", "Preview failed.", { evidence });
+  }
+
+  evidence.push({
+    kind: "capsule_preview",
+    detail: `Capsule ${capsule.capsule_id} op=${plan.kind} key=${plan.config_key}`,
+    measured: true,
+  });
+
+  return baseResult({
+    ok: true,
+    operation: "preview",
+    capsule,
+    authorization,
+    user_resolution: userReceipt(
+      "REPAIR_PREVIEWED",
+      "Config Repair Capsule preview ready. One scope-bound authorization required to apply.",
+    ),
+    upstream_contribution: upstreamReceipt(
+      "CANDIDATE_ONLY",
+      "Local experimental config repair only; no external submission.",
+      ["openai/codex#33790"],
+    ),
+    evidence,
+    target_mutated: false,
+    repair_applied: false,
+  });
+}
+
+function buildConfigCapsule(
+  scope_digest: string,
+  plan: ConfigRepairPlan,
+): RepairCapsule {
+  const expires_at = defaultExpiryIso();
+  const nonce = mintNonce();
+  const backup_rel = registeredBackupRel(plan.target_path_alias);
+  const invalidation_digest = invalidationMaterial({
+    original_sha256: plan.original_sha256,
+    expected_pattern_count: plan.expected_pattern_count,
+    scope_digest,
+    operation_digest: plan.operation_digest,
+    expected_result_sha256: plan.result_sha256,
+    backup_rel,
+    capsule_id: plan.capsule_id,
+    mode: "apply_authorized",
+    authorization_tier: "experimental_one_shot",
+  });
+  const binding = authorizationBinding({
+    capsule_id: plan.capsule_id,
+    scope_digest,
+    original_sha256: plan.original_sha256,
+    expected_pattern_count: plan.expected_pattern_count,
+    operation_digest: plan.operation_digest,
+    expected_result_sha256: plan.result_sha256,
+    backup_rel,
+    invalidation_digest,
+    trust_tier: "T1_community",
+    authorization_tier: "experimental_one_shot",
+    mode: "apply_authorized",
+    target_path_alias: plan.target_path_alias,
+    expires_at,
+    nonce,
+  });
+
+  return {
+    schema_version: 1,
+    capsule_id: plan.capsule_id,
+    trust_tier: "T1_community",
+    mode: "apply_authorized",
+    authorization_tier: "experimental_one_shot",
+    risk: "moderate",
+    target_path_alias: plan.target_path_alias,
+    scope_digest,
+    original_sha256: plan.original_sha256,
+    expected_pattern_count: plan.expected_pattern_count,
+    operation: {
+      kind: plan.kind,
+      target_path_alias: plan.target_path_alias,
+      expected_pattern_count: plan.expected_pattern_count,
+      operation_digest: plan.operation_digest,
+      expected_result_sha256: plan.result_sha256,
+      config_key: plan.config_key,
+      old_value_type: plan.old_value_type,
+      old_value_summary: plan.old_value_summary,
+      new_value: plan.new_value,
+    },
+    applicability: {
+      version_match: false,
+      platform_match: true,
+      target_hash_match: true,
+      pattern_count_match: true,
+    },
+    backup: {
+      required: true,
+      original_sha256: plan.original_sha256,
+      backup_rel,
+      verified: false,
+      receipt_id: null,
+    },
+    verification: {
+      checks: [
+        "original-failure-not-reproduced",
+        "config-reload",
+        "registered-command",
+        "result-hash-matches-expected",
+      ],
+      original_failure_must_not_reproduce: true,
+      core_health_required: true,
+    },
+    rollback: {
+      recipe: [
+        "Restore exact original config bytes from verified backup under the isolated target.",
+        "Re-verify original SHA-256.",
+        "Clear applied-repair session state.",
+      ],
+      restores_original_sha256: plan.original_sha256,
+    },
+    dry_run_checks: [
+      "config-fault-matches-registered-op",
+      "target-hash-matches",
+      "scope-isolated",
+      "authorization-binding-fresh",
+    ],
+    expires_at,
+    invalidation_digest,
+    authorization_binding: binding,
+    disclosure: {
+      fields_leaving_device: [],
+      includes_source_bytes: false,
+      includes_secrets: false,
+    },
+    human_decision: "pending",
+    smoke_result: "not_run",
+    nonce,
+  };
+}
+
+type LivePlan =
+  | {
+      kind: "exact_block_removal";
+      file: ReturnType<typeof openTargetFile>;
+      next: string;
+      target_rel: string;
+    }
+  | {
+      kind: "config_set" | "config_remove";
+      file: ReturnType<typeof openTargetFile>;
+      next: string;
+      target_rel: string;
+      config_plan: ConfigRepairPlan;
+    };
+
 function recomputeLiveBinding(
   targetReal: string,
   capsule: RepairCapsule,
 ):
-  | {
-      ok: true;
-      file: ReturnType<typeof openTargetFile>;
-      plan: NonNullable<ReturnType<typeof removeProtectedProcessBlock>>;
-    }
+  | { ok: true; live: LivePlan }
   | { ok: false; code: string; message: string } {
   if (isExpired(capsule.expires_at)) {
     return { ok: false, code: "AUTH_EXPIRED", message: "Capsule authorization expired." };
@@ -386,6 +654,26 @@ function recomputeLiveBinding(
   if (scope_digest !== capsule.scope_digest) {
     return { ok: false, code: "AUTH_INVALID", message: "Scope changed; authorization invalid." };
   }
+
+  if (capsule.operation.kind === "exact_block_removal") {
+    return recomputeProtectedProcessBinding(targetReal, capsule, scope_digest);
+  }
+  if (
+    capsule.operation.kind === "config_set" ||
+    capsule.operation.kind === "config_remove"
+  ) {
+    return recomputeConfigBinding(targetReal, capsule, scope_digest);
+  }
+  return { ok: false, code: "AUTH_INVALID", message: "Unknown operation kind." };
+}
+
+function recomputeProtectedProcessBinding(
+  targetReal: string,
+  capsule: RepairCapsule,
+  scope_digest: string,
+):
+  | { ok: true; live: LivePlan }
+  | { ok: false; code: string; message: string } {
   let file: ReturnType<typeof openTargetFile>;
   try {
     file = openTargetFile(targetReal, artifactRel(), MAX_ARTIFACT_BYTES);
@@ -415,7 +703,6 @@ function recomputeLiveBinding(
   if (!plan) {
     return { ok: false, code: "REPAIR_PLAN", message: "Repair plan no longer applicable." };
   }
-  // expected_result_sha256 is required and bound — always revalidate.
   if (plan.result_sha256 !== capsule.operation.expected_result_sha256) {
     return {
       ok: false,
@@ -439,8 +726,130 @@ function recomputeLiveBinding(
       message: "Backup path refused; authorization invalid.",
     };
   }
+  const bindingCheck = verifyBindingMaterial(
+    capsule,
+    file.sha256,
+    scope_digest,
+    op_digest,
+    backup_rel,
+  );
+  if (!bindingCheck.ok) return bindingCheck;
+  return {
+    ok: true,
+    live: {
+      kind: "exact_block_removal",
+      file,
+      next: plan.next,
+      target_rel: artifactRel(),
+    },
+  };
+}
+
+function recomputeConfigBinding(
+  targetReal: string,
+  capsule: RepairCapsule,
+  scope_digest: string,
+):
+  | { ok: true; live: LivePlan }
+  | { ok: false; code: string; message: string } {
+  if (!isConfigCapsuleId(capsule.capsule_id)) {
+    return { ok: false, code: "AUTH_INVALID", message: "Config capsule id refused." };
+  }
+  const target_rel = relForConfigAlias(capsule.target_path_alias);
+  if (!target_rel) {
+    return { ok: false, code: "AUTH_INVALID", message: "Config target alias refused." };
+  }
+  let file: ReturnType<typeof openTargetFile>;
+  try {
+    file = openTargetFile(targetReal, target_rel, MAX_ARTIFACT_BYTES);
+  } catch (e) {
+    if (e instanceof PathSafetyError) {
+      return { ok: false, code: e.code, message: e.message };
+    }
+    return { ok: false, code: "TARGET_ERROR", message: "Target refused." };
+  }
+  if (file.sha256 !== capsule.original_sha256) {
+    return {
+      ok: false,
+      code: "AUTH_INVALID",
+      message: "Target hash changed; authorization invalid.",
+    };
+  }
+  const { probe, managed_block } = planConfigRepair(targetReal);
+  if (managed_block) {
+    return {
+      ok: false,
+      code: "ADMIN_ACTION_REQUIRED",
+      message: "Target became managed; authorization invalid.",
+    };
+  }
+  const text = file.bytes.toString("utf8");
+  const config_plan = buildLiveConfigPlan(text, file.sha256, probe);
+  if (!config_plan || config_plan.capsule_id !== capsule.capsule_id) {
+    return {
+      ok: false,
+      code: "AUTH_INVALID",
+      message: "Config repair plan no longer applicable.",
+    };
+  }
+  if (config_plan.result_sha256 !== capsule.operation.expected_result_sha256) {
+    return {
+      ok: false,
+      code: "AUTH_INVALID",
+      message: "Operation result digest changed; authorization invalid.",
+    };
+  }
+  if (config_plan.operation_digest !== capsule.operation.operation_digest) {
+    return {
+      ok: false,
+      code: "AUTH_INVALID",
+      message: "Operation digest changed; authorization invalid.",
+    };
+  }
+  if (config_plan.config_key !== capsule.operation.config_key) {
+    return {
+      ok: false,
+      code: "AUTH_INVALID",
+      message: "Config key changed; authorization invalid.",
+    };
+  }
+  const backup_rel = registeredBackupRel(capsule.target_path_alias);
+  if (capsule.backup.backup_rel !== backup_rel) {
+    return {
+      ok: false,
+      code: "AUTH_INVALID",
+      message: "Backup path refused; authorization invalid.",
+    };
+  }
+  const bindingCheck = verifyBindingMaterial(
+    capsule,
+    file.sha256,
+    scope_digest,
+    config_plan.operation_digest,
+    backup_rel,
+  );
+  if (!bindingCheck.ok) return bindingCheck;
+  return {
+    ok: true,
+    live: {
+      kind: config_plan.kind,
+      file,
+      next: config_plan.next_text,
+      target_rel,
+      config_plan,
+    },
+  };
+}
+
+function verifyBindingMaterial(
+  capsule: RepairCapsule,
+  original_sha256: string,
+  scope_digest: string,
+  op_digest: string,
+  backup_rel: string,
+): { ok: true } | { ok: false; code: string; message: string } {
   const invalidation_digest = invalidationMaterial({
-    original_sha256: file.sha256,
+    original_sha256,
     expected_pattern_count: capsule.expected_pattern_count,
     scope_digest,
     operation_digest: op_digest,
@@ -460,7 +869,7 @@ function recomputeLiveBinding(
   const expectedBinding = authorizationBinding({
     capsule_id: capsule.capsule_id,
     scope_digest,
-    original_sha256: file.sha256,
+    original_sha256,
     expected_pattern_count: capsule.expected_pattern_count,
     operation_digest: op_digest,
     expected_result_sha256: capsule.operation.expected_result_sha256,
@@ -480,7 +889,7 @@ function recomputeLiveBinding(
       message: "Capsule binding mismatch; authorization invalid.",
     };
   }
-  return { ok: true, file, plan };
+  return { ok: true };
 }
 
 /**
@@ -533,6 +942,10 @@ function runVerification(
   targetReal: string,
   originalSha: string,
   expectedResultSha: string,
+  opts: {
+    family: "protected_process" | "config";
+    target_rel: string;
+  } = { family: "protected_process", target_rel: artifactRel() },
 ): VerificationReport {
   const checks: VerificationReport["checks"] = [];
   let measured_sha256: string | null = null;
@@ -572,6 +985,23 @@ function runVerification(
         measured_pattern_count: null,
       };
     }
+  }
+
+  if (opts.family === "config") {
+    const r = configStartupVerification(
+      targetReal,
+      expectedResultSha,
+      opts.target_rel,
+      originalSha,
+    );
+    return {
+      passed: r.passed,
+      original_failure_reproduces: r.original_failure_reproduces,
+      core_health_passed: r.core_health_passed,
+      checks: r.checks,
+      measured_sha256: r.measured_sha256,
+      measured_pattern_count: null,
+    };
   }
 
   try {
@@ -678,10 +1108,11 @@ export function applyRepair(targetPath: string, options: ApplyOptions): RepairRe
   }
 
   // Mechanism must still be present and match capsule preconditions.
-  const live = recomputeLiveBinding(targetReal, capsule);
-  if (!live.ok) {
-    return fail("apply", live.code, live.message, { capsule });
+  const liveResult = recomputeLiveBinding(targetReal, capsule);
+  if (!liveResult.ok) {
+    return fail("apply", liveResult.code, liveResult.message, { capsule });
   }
+  const live = liveResult.live;
 
   const evidence: MeasuredEvidence[] = [
     {
@@ -692,7 +1123,10 @@ export function applyRepair(targetPath: string, options: ApplyOptions): RepairRe
   ];
   let backupReceipt: BackupReceipt | null = null;
   // Always derive backup path from registered constants — never token/session path.
-  const backup_rel = registeredBackupRel(PROTECTED_PROCESS_OP.target_path_alias);
+  const backup_rel = registeredBackupRel(capsule.target_path_alias);
+  const target_rel = live.target_rel;
+  const verifyFamily: "protected_process" | "config" =
+    live.kind === "exact_block_removal" ? "protected_process" : "config";
 
   try {
     // First authorized mutation: transaction state + backup under ChangeGuard dir.
@@ -709,10 +1143,10 @@ export function applyRepair(targetPath: string, options: ApplyOptions): RepairRe
       measured: true,
     });
 
-    const newBytes = Buffer.from(live.plan.next, "utf8");
+    const newBytes = Buffer.from(live.next, "utf8");
     const replaced = atomicReplaceFile(
       targetReal,
-      artifactRel(),
+      target_rel,
       live.file,
       newBytes,
       MAX_ARTIFACT_BYTES,
@@ -730,6 +1164,9 @@ export function applyRepair(targetPath: string, options: ApplyOptions): RepairRe
       original_sha256: capsule.original_sha256,
       result_sha256: replaced.resulting_sha256,
       backup_rel,
+      target_path_alias: capsule.target_path_alias,
+      target_rel,
+      repair_family: verifyFamily,
       authorization_binding: capsule.authorization_binding,
       nonce: capsule.nonce,
       applied_at: new Date().toISOString(),
@@ -741,6 +1178,7 @@ export function applyRepair(targetPath: string, options: ApplyOptions): RepairRe
       targetReal,
       capsule.original_sha256,
       capsule.operation.expected_result_sha256,
+      { family: verifyFamily, target_rel },
     );
     evidence.push({
       kind: "verification",
@@ -752,18 +1190,21 @@ export function applyRepair(targetPath: string, options: ApplyOptions): RepairRe
       // Automatic rollback — RESOLVED_VERIFIED is impossible.
       restoreFromBackup(
         targetReal,
-        artifactRel(),
+        target_rel,
         backup_rel,
         capsule.original_sha256,
         MAX_ARTIFACT_BYTES,
       );
-      const restored = openTargetFile(targetReal, artifactRel(), MAX_ARTIFACT_BYTES);
+      const restored = openTargetFile(targetReal, target_rel, MAX_ARTIFACT_BYTES);
       writeSessionState(targetReal, RECOVERY_SESSION_REL, {
         schema_version: 1,
         capsule_id: capsule.capsule_id,
         original_sha256: capsule.original_sha256,
         status: "auto_rolled_back",
         backup_rel,
+        target_path_alias: capsule.target_path_alias,
+        target_rel,
+        repair_family: verifyFamily,
         authorization_binding: capsule.authorization_binding,
         nonce: capsule.nonce,
         // Failed apply is not a successful consumption; same token may retry
@@ -814,6 +1255,9 @@ export function applyRepair(targetPath: string, options: ApplyOptions): RepairRe
       original_sha256: capsule.original_sha256,
       result_sha256: replaced.resulting_sha256,
       backup_rel,
+      target_path_alias: capsule.target_path_alias,
+      target_rel,
+      repair_family: verifyFamily,
       authorization_binding: capsule.authorization_binding,
       nonce: capsule.nonce,
       applied_at: new Date().toISOString(),
@@ -857,7 +1301,7 @@ export function applyRepair(targetPath: string, options: ApplyOptions): RepairRe
       try {
         restoreFromBackup(
           targetReal,
-          artifactRel(),
+          target_rel,
           backup_rel,
           capsule.original_sha256,
           MAX_ARTIFACT_BYTES,
@@ -923,7 +1367,17 @@ export function verifyRepair(targetPath: string): RepairResult {
     );
   }
 
-  const verification = runVerification(targetReal, originalSha, expectedResult);
+  const family =
+    session?.repair_family === "config" ? "config" : "protected_process";
+  const target_rel =
+    typeof session?.target_rel === "string" && session.target_rel.length > 0
+      ? session.target_rel
+      : artifactRel();
+
+  const verification = runVerification(targetReal, originalSha, expectedResult, {
+    family,
+    target_rel,
+  });
   const evidence: MeasuredEvidence[] = [
     {
       kind: "verification",
@@ -987,8 +1441,17 @@ export function rollbackRepair(targetPath: string): RepairResult {
   }
   const originalSha =
     typeof session.original_sha256 === "string" ? session.original_sha256 : null;
+  const alias =
+    typeof session.target_path_alias === "string" &&
+    session.target_path_alias.length > 0
+      ? session.target_path_alias
+      : PROTECTED_PROCESS_OP.target_path_alias;
+  const target_rel =
+    typeof session.target_rel === "string" && session.target_rel.length > 0
+      ? session.target_rel
+      : artifactRel();
   // Always restore from registered backup path — never trust session.backup_rel.
-  const backup_rel = registeredBackupRel(PROTECTED_PROCESS_OP.target_path_alias);
+  const backup_rel = registeredBackupRel(alias);
   if (!originalSha) {
     return fail("rollback", "NO_SESSION", "Session missing original hash.");
   }
@@ -997,7 +1460,7 @@ export function rollbackRepair(targetPath: string): RepairResult {
   try {
     const restored = restoreFromBackup(
       targetReal,
-      artifactRel(),
+      target_rel,
       backup_rel,
       originalSha,
       MAX_ARTIFACT_BYTES,
@@ -1012,6 +1475,9 @@ export function rollbackRepair(targetPath: string): RepairResult {
       capsule_id: session.capsule_id ?? CAPSULE_ID,
       original_sha256: originalSha,
       backup_rel,
+      target_path_alias: alias,
+      target_rel,
+      repair_family: session.repair_family ?? "protected_process",
       authorization_binding: session.authorization_binding ?? null,
       nonce: session.nonce ?? null,
       status: "explicit_rollback",
@@ -1020,7 +1486,7 @@ export function rollbackRepair(targetPath: string): RepairResult {
     });
 
     // Confirm exact original bytes.
-    const live = openTargetFile(targetReal, artifactRel(), MAX_ARTIFACT_BYTES);
+    const live = openTargetFile(targetReal, target_rel, MAX_ARTIFACT_BYTES);
     if (live.sha256 !== originalSha) {
       return fail("rollback", "ROLLBACK_MISMATCH", "Rollback hash mismatch.", {
         evidence,

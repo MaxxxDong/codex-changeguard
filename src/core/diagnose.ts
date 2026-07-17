@@ -22,6 +22,7 @@ import {
   classifyCrashFamily,
   shouldClassifyCrashFamily,
 } from "./crash-family.js";
+import { probeConfigControlFiles } from "./config/index.js";
 import type {
   DiagnosisResult,
   DiagnoseOptions,
@@ -240,29 +241,6 @@ export function diagnose(
     }
   }
 
-  // Build output fingerprint from declared surface facts + measured evidence.
-  const outFp: IncidentFingerprint = {
-    ...declared,
-    artifact_hashes: measuredArtifactSha
-      ? [
-          {
-            path_alias: "BROWSER_CLIENT_COPY_A",
-            sha256: measuredArtifactSha,
-          },
-        ]
-      : declared.artifact_hashes?.length
-        ? [] // do not echo unproven declared hashes as measured
-        : [],
-    ast_signature_ids: measuredAstIds.length
-      ? measuredAstIds
-      : [], // never promote declared-only AST ids
-    local_facts_digest: recomputeLocalFactsDigest(
-      declared,
-      measuredArtifactSha,
-      measuredAstIds,
-    ),
-  };
-
   // Positive path: independent hash + AST + compatible surface/error/phase.
   const signatureCompatible =
     declared.error.class === "TypeError" &&
@@ -273,6 +251,24 @@ export function diagnose(
       false);
 
   if (artifactPresent && astMatched && signatureCompatible) {
+    const outFp: IncidentFingerprint = {
+      ...declared,
+      artifact_hashes: measuredArtifactSha
+        ? [
+            {
+              path_alias: "BROWSER_CLIENT_COPY_A",
+              sha256: measuredArtifactSha,
+            },
+          ]
+        : [],
+      ast_signature_ids: measuredAstIds.length ? measuredAstIds : [],
+      local_facts_digest: recomputeLocalFactsDigest(
+        declared,
+        measuredArtifactSha,
+        measuredAstIds,
+        null,
+      ),
+    };
     // SOURCE_COMPONENT_LOCATED only from independently measured local evidence.
     evidence.push({
       kind: "component_located",
@@ -313,9 +309,118 @@ export function diagnose(
     });
   }
 
+  // Ticket 07: bounded Codex control-file probe (named candidates only).
+  try {
+    const configProbe = probeConfigControlFiles(targetReal);
+    if (configProbe.control_files_present) {
+      evidence.push({
+        kind: "config_probe",
+        detail: `Control files read=${configProbe.files_read.length} primary=${configProbe.measured_sha_primary ? "yes" : "no"} override=${configProbe.measured_sha_override ? "yes" : "no"}`,
+        measured: true,
+      });
+    }
+    if (configProbe.fault) {
+      const fault = configProbe.fault;
+      evidence.push({
+        kind: "config_fault",
+        detail: `fault_class=${fault.fault_class} key=${fault.config_key || "(none)"}`,
+        measured: true,
+      });
+      const measuredKeys = fault.config_keys.slice(0, 32);
+      const measuredConfig = {
+        fault_class: fault.fault_class,
+        config_keys: measuredKeys,
+        primary_sha256: configProbe.measured_sha_primary,
+        override_sha256: configProbe.measured_sha_override,
+      };
+      const configFpBase: IncidentFingerprint = {
+        ...declared,
+        failure_phase: "startup",
+        error: {
+          class: fault.fault_class,
+          normalized_message: redactText(fault.detail).slice(0, 512),
+          message_digest: null,
+        },
+        config_keys: measuredKeys,
+        artifact_hashes: measuredArtifactSha
+          ? [
+              {
+                path_alias: "BROWSER_CLIENT_COPY_A",
+                sha256: measuredArtifactSha,
+              },
+            ]
+          : [],
+        ast_signature_ids: measuredAstIds.length ? measuredAstIds : [],
+        local_facts_digest: "0".repeat(64), // replaced below
+      };
+      const outFp: IncidentFingerprint = {
+        ...configFpBase,
+        local_facts_digest: recomputeLocalFactsDigest(
+          configFpBase,
+          measuredArtifactSha,
+          measuredAstIds,
+          measuredConfig,
+        ),
+      };
+      evidence.push({
+        kind: "component_located",
+        detail:
+          "Local Codex control configuration fault located via bounded parser/validator; no project source read.",
+        measured: true,
+      });
+      return baseResult({
+        ok: true,
+        diagnosis_state: "SOURCE_COMPONENT_LOCATED",
+        incident_fingerprint: outFp,
+        user_resolution: userReceipt(
+          "DIAGNOSIS_COMPLETE",
+          `Config/startup fault classified as ${fault.fault_class}. No repair applied.`,
+        ),
+        upstream_contribution: upstreamReceipt(
+          "CANDIDATE_ONLY",
+          "openai/codex#33790 remains a user-reported pattern candidate unless official linkage exists.",
+          ["openai/codex#33790"],
+        ),
+        evidence,
+        error_code: null,
+        error_message: null,
+      });
+    }
+  } catch (e) {
+    if (e instanceof PathSafetyError) {
+      return fail(e.code, e.message);
+    }
+    return fail("CONFIG_PROBE_ERROR", "Config probe refused.");
+  }
+
+  // Build output fingerprint from declared surface facts + measured evidence.
+  const outFp: IncidentFingerprint = {
+    ...declared,
+    artifact_hashes: measuredArtifactSha
+      ? [
+          {
+            path_alias: "BROWSER_CLIENT_COPY_A",
+            sha256: measuredArtifactSha,
+          },
+        ]
+      : declared.artifact_hashes?.length
+        ? [] // do not echo unproven declared hashes as measured
+        : [],
+    ast_signature_ids: measuredAstIds.length
+      ? measuredAstIds
+      : [], // never promote declared-only AST ids
+    local_facts_digest: recomputeLocalFactsDigest(
+      declared,
+      measuredArtifactSha,
+      measuredAstIds,
+      null,
+    ),
+  };
+
   // Ticket 09 — Desktop Browser crash-family classifier (Fixture E).
-  // Runs only when protected-process localization did not claim the component.
-  // Prefer natural-failure crash metadata; never actively crash primary Codex.
+  // Runs only when protected-process localization and config-fault probe
+  // did not claim the component. Prefer natural-failure crash metadata;
+  // never actively crash primary Codex.
   if (shouldClassifyCrashFamily(outFp)) {
     const modelIds = options.model_preferred_issue_ids ?? null;
     const classification = classifyCrashFamily(outFp, {

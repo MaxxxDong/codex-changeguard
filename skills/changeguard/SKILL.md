@@ -109,7 +109,7 @@ Both call `assessImpact()` and return the same structured Impact Card. Productio
 
 ## Ticket 09 — Desktop Browser crash-family classifier
 
-When the isolated target carries sanitized `crash_metadata` (or browser-crash signals), `changeguard diagnose` routes through the shared crash-family classifier after the protected-process path does not claim the component.
+When the isolated target carries sanitized `crash_metadata` (or browser-crash signals), `changeguard diagnose` routes through the shared crash-family classifier after the protected-process path and Ticket 07 config-fault probe do not claim the component.
 
 ### Required behavior
 
@@ -128,13 +128,17 @@ When the isolated target carries sanitized `crash_metadata` (or browser-crash si
 - actively crashing the user's primary Codex instance
 - promoting open Issues to `FIX_COMMIT_LINKED` without verified PR/commit/release linkage
 
+## Ticket 07 — configuration / startup fault pack
+
+Diagnosis and repair use the same public seams as Tickets 01–02. Control files are limited to registered paths under an isolated target (`config/config.toml`, optional override and managed.policy marker). Distinct measured fault classes (`ConfigTomlSyntaxError`, `ConfigSchemaTypeError`, `ConfigObsoleteKeyError`, `ConfigSourceConflictError`) produce distinct fingerprints. Repair Capsules for registered `config_set` / `config_remove` operations show redacted old-value summaries, never secret material. Managed/admin-owned targets return `ADMIN_ACTION_REQUIRED` with IT handoff facts only. Startup verification covers original failure, config reload, and a basic registered command; verification failure auto-rolls back.
+
 ## Planned commands
 
 - `/changeguard scan`: compare installed and last-seen Codex fingerprints via the shared instance core (Ticket 03)
-- `/changeguard diagnose`: build an incident fingerprint via the shared core (Ticket 01 implemented for isolated targets)
+- `/changeguard diagnose`: build an incident fingerprint via the shared core (Ticket 01 + Ticket 07 config faults for isolated targets)
 - `/changeguard impact`: official-evidence Impact Card via the shared core (Ticket 04)
 - `/changeguard repro-pack`: show the disclosure manifest and export a redacted evidence package after confirmation
-- `/changeguard recovery-preview` / repair-preview: build a Repair Capsule (Ticket 02 for protected-process isolated targets)
-- `/changeguard verify` / `/changeguard rollback`: Ticket 02 recovery seams
+- `/changeguard recovery-preview` / repair-preview: build a Repair Capsule (Ticket 02 protected-process + Ticket 07 config set/remove on isolated targets)
+- `/changeguard verify` / `/changeguard rollback`: shared recovery seams
 
 Upstream submission remains a later ticket. This Skill freezes the safety contract and routes diagnosis/repair/scan/impact through the shared core only.

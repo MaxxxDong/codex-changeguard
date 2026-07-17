@@ -1,0 +1,6 @@
+{
+  "policy_class": "enterprise_mdm",
+  "admin_owned": true,
+  "signed": true,
+  "permission_bound": true
+}

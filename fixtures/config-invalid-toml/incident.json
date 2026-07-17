@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "codex_version": "0.50.0",
+  "build_sha": null,
+  "surface": "cli",
+  "platform": {
+    "os": "macos",
+    "arch": "arm64",
+    "sandbox_class": null
+  },
+  "failure_phase": "startup",
+  "error": {
+    "class": "ConfigTomlSyntaxError",
+    "normalized_message": "invalid TOML in Codex control config",
+    "message_digest": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "stack_frames": [
+    {
+      "module": "codex-cli",
+      "file": "config.toml",
+      "symbol": "load_config",
+      "line_bucket": 10
+    }
+  ],
+  "config_keys": [],
+  "feature_ids": [],
+  "artifact_hashes": [],
+  "ast_signature_ids": [],
+  "local_facts_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+}

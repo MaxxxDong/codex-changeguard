@@ -52,7 +52,8 @@ Evidence-locked verdict + Recovery Capsule preview
 - `bin/changeguard.js` / `dist/cli/main.js`: Rescue CLI (`diagnose|impact|repair-*|verify|rollback|scan|scan-system|session-start`)
 - `src/core/diagnose.ts`: single shared diagnosis core used by CLI and MCP
 - `src/core/crash-family.ts`: Ticket 09 Desktop Browser crash-family classifier (deterministic gates; Fixture E)
-- `src/core/recovery/`: Ticket 02 isolated protected-process repair (preview/apply/verify/rollback)
+- `src/core/recovery/`: Ticket 02 isolated protected-process repair + Ticket 07 config set/remove (preview/apply/verify/rollback; one engine)
+- `src/core/config/`: Ticket 07 bounded Codex control TOML parser/validator and fault probe (read-only)
 - `src/evidence/*` + `src/impact/*`: official evidence refresh/snapshot, Change-to-Local Graph, Impact Card (Ticket 04)
 - `src/instances/`: multi-instance enumeration, version-fingerprint state, affected-instance resolution, repair-target binding contract
 - `src/instances/system-adapter.ts`: production registered system enumeration (capability-injectable)
@@ -77,7 +78,7 @@ Both call `diagnose()` and return the same `DiagnosisResult` shape:
 
 Core I/O rules:
 
-- read only named candidates (`incident.json`, optional `artifacts/browser-client.mjs`)
+- read only named candidates (`incident.json`, optional `artifacts/browser-client.mjs`, and Ticket 07 registered control paths `config/config.toml`, `config/config.override.toml`, `config/managed.policy.json`)
 - fail-closed no-follow: refuse a target that is itself a symlink; refuse any symlink in any intermediate segment or leaf of named candidates (even if it currently resolves inside the target)
 - open with `O_NOFOLLOW` when available, `fstat` the fd, require a regular file, enforce the byte limit from the fd, and compare stable pre-open metadata where meaningful
 - explicit byte limits; never recursively crawl a project tree
@@ -357,9 +358,28 @@ Expected path:
 
 The precise claim is: “The exact affected pattern is present in these local artifacts and the bundled probe reproduces the same protected-process failure mechanism.” It is not: “OpenAI officially confirmed Issue #32925 as the root cause.” After verified repair on an isolated fixture, `RESOLVED_VERIFIED` means only that the original local failure no longer reproduces and core health checks passed.
 
-### Fixture B — invalid TOML setup hang
+### 2.7 Ticket 07 configuration / schema-drift / startup fault pack
 
-Synthetic Windows config with an invalid `shell_environment_policy.set` value. The TOML/schema probe must identify the invalid structure; Issue #33790 remains a user-reported pattern unless official linkage exists.
+Bounded read-only probe of registered Codex control files under an isolated instance/config root. Distinct measured fault classes become distinct Incident Fingerprints:
+
+| Fault class | Meaning |
+| --- | --- |
+| `ConfigTomlSyntaxError` | Invalid TOML syntax / unsupported structure / size bound |
+| `ConfigSchemaTypeError` | Known key with wrong value type (or unknown key refused) |
+| `ConfigObsoleteKeyError` | Registered obsolete key present |
+| `ConfigSourceConflictError` | Same key differs between primary and override |
+
+Parser/validator is deterministic and fail-closed: no configuration execution, no project-code import, no silent accept of unknown structure. Ordinary project source/data/Git history is never scanned.
+
+Repair uses the **same** Ticket 02 recovery engine with narrowly extended operation kinds `config_set` / `config_remove`:
+
+- Capsule shows target alias, redacted old-value type/summary, new value (non-secret registered literals only), precondition hash, backup, verification, rollback, authorization scope
+- Startup verification (isolated fixture, no shell): original fault absent + config reload + basic registered command preconditions; any failure auto-rolls back
+- Managed/admin-owned/signed/permission-bound targets → `ADMIN_ACTION_REQUIRED` + bounded IT handoff facts; never chmod/privilege-elevation guidance
+
+### Fixture B — invalid TOML / config schema drift (Ticket 07)
+
+Synthetic control-root fixtures under `fixtures/config-*` cover invalid TOML, wrong `shell_environment_policy.set` type, obsolete keys, source conflicts, and managed policy. The TOML/schema probe identifies the invalid structure; Issue #33790 remains a user-reported pattern unless official linkage exists. Registered experimental repairs may set/remove only allowlisted control keys on isolated fixtures.
 
 ### Fixture C — untracked Skill handoff omission
 

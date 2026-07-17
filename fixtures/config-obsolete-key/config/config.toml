@@ -1,0 +1,7 @@
+model = "gpt-5.4"
+model_provider = "openai"
+legacy_experimental_shell = true
+notify = false
+
+[features]
+browser_control = false

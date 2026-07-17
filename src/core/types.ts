@@ -17,6 +17,8 @@ export type DiagnosisState =
  * Ticket 02 recovery may emit repair/resolve/rollback statuses.
  * Ticket 09 crash-family may emit UPSTREAM_BLOCKED when a candidate
  * matches but no verifiable fix / safe applicability evidence exists.
+ * Ticket 07 config recovery may emit ADMIN_ACTION_REQUIRED for
+ * managed/admin-owned control targets (no privilege-elevation bypass).
  * Only RESOLVED_VERIFIED claims the original problem is fixed.
  */
 export type UserResolutionStatus =
@@ -29,7 +31,8 @@ export type UserResolutionStatus =
   | "RESOLVED_VERIFIED"
   | "MITIGATED_VERIFIED_BY_ROLLBACK"
   | "REPAIR_REFUSED"
-  | "REPAIR_FAILED_ROLLED_BACK";
+  | "REPAIR_FAILED_ROLLED_BACK"
+  | "ADMIN_ACTION_REQUIRED";
 
 export type UpstreamContributionStatus =
   | "NONE"

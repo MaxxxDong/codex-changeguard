@@ -510,13 +510,22 @@ export function parseIncidentJson(text: string): IncidentFingerprint {
   return fp;
 }
 
+/** Optional measured config-fault material (Ticket 07). */
+export interface MeasuredConfigFacts {
+  fault_class: string;
+  config_keys: string[];
+  primary_sha256: string | null;
+  override_sha256: string | null;
+}
+
 /** Recompute local_facts_digest from measured fields (not self-declared alone). */
 export function recomputeLocalFactsDigest(
   fp: IncidentFingerprint,
   measuredArtifactSha: string | null,
   measuredAstIds: string[],
+  measuredConfig: MeasuredConfigFacts | null = null,
 ): string {
-  const payload = {
+  const payload: Record<string, unknown> = {
     surface: fp.surface,
     platform: fp.platform,
     failure_phase: fp.failure_phase,
@@ -525,6 +534,13 @@ export function recomputeLocalFactsDigest(
     measured_artifact_sha: measuredArtifactSha,
     measured_ast: measuredAstIds.slice().sort(),
   };
+  // Only include config material when measured — keeps Tickets 01–04 digests stable.
+  if (measuredConfig) {
+    payload.measured_config_fault = measuredConfig.fault_class;
+    payload.measured_config_keys = measuredConfig.config_keys.slice().sort();
+    payload.measured_config_primary_sha = measuredConfig.primary_sha256;
+    payload.measured_config_override_sha = measuredConfig.override_sha256;
+  }
   return sha256Hex(JSON.stringify(payload));
 }
 

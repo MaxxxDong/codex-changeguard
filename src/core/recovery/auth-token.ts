@@ -4,7 +4,7 @@
  * No secret/signature — integrity is the deterministic authorization_binding digest.
  */
 import { canonicalJson } from "./canonical.js";
-import type { RepairCapsule } from "./types.js";
+import type { RepairCapsule, RepairOperationKind } from "./types.js";
 import {
   RECOVERY_BACKUP_DIR,
   registeredBackupRel,
@@ -15,6 +15,19 @@ import {
   operationDigest,
   PROTECTED_PROCESS_OP,
 } from "./protected-process.js";
+import {
+  CONFIG_OBSOLETE_CAPSULE_ID,
+  CONFIG_SOURCE_CONFLICT_CAPSULE_ID,
+  CONFIG_WRONG_TYPE_CAPSULE_ID,
+  configOperationDigest,
+  isConfigCapsuleId,
+  REGISTERED_TYPE_FIX,
+  registeredConfigAliases,
+} from "./config-repair.js";
+import {
+  CONFIG_OVERRIDE_ALIAS,
+  CONFIG_PRIMARY_ALIAS,
+} from "../config/limits.js";
 
 export const AUTH_TOKEN_PREFIX = "cg1.";
 /** Hard bound on decoded token payload bytes (preview capsule is small). */
@@ -56,7 +69,13 @@ const OPERATION_KEYS = [
   "expected_pattern_count",
   "operation_digest",
   "expected_result_sha256",
+  "config_key",
+  "old_value_type",
+  "old_value_summary",
+  "new_value",
 ] as const;
+
+const PP_CAPSULE_ID = "protected-process-shim-experimental-v1";
 
 export type AuthTokenErrorCode =
   | "AUTH_INVALID"
@@ -101,6 +120,7 @@ function requireBool(v: unknown): boolean | null {
 /**
  * Strict capsule validation: reject unknown/extra/mismatched fields.
  * Mutation-relevant paths and digests must match registered constants.
+ * Supports protected-process (Ticket 02) and config set/remove (Ticket 07).
  */
 export function strictValidateCapsule(raw: unknown): RepairCapsule {
   if (!isPlainObject(raw)) {
@@ -117,6 +137,11 @@ export function strictValidateCapsule(raw: unknown): RepairCapsule {
   if (!capsule_id || !CAPSULE_ID_RE.test(capsule_id)) {
     throw new AuthTokenError("AUTH_MALFORMED", "Capsule id refused.");
   }
+  const isConfig = isConfigCapsuleId(capsule_id);
+  const isPP = capsule_id === PP_CAPSULE_ID;
+  if (!isConfig && !isPP) {
+    throw new AuthTokenError("AUTH_MALFORMED", "Capsule id refused.");
+  }
   if (raw.trust_tier !== "T1_community") {
     throw new AuthTokenError("AUTH_MALFORMED", "Trust tier refused.");
   }
@@ -129,48 +154,152 @@ export function strictValidateCapsule(raw: unknown): RepairCapsule {
   if (raw.risk !== "moderate") {
     throw new AuthTokenError("AUTH_MALFORMED", "Risk refused.");
   }
-  if (raw.target_path_alias !== PROTECTED_PROCESS_OP.target_path_alias) {
+
+  const target_path_alias = requireString(raw.target_path_alias, 128);
+  if (!target_path_alias) {
     throw new AuthTokenError("AUTH_MALFORMED", "Target path alias refused.");
   }
+  if (isPP && target_path_alias !== PROTECTED_PROCESS_OP.target_path_alias) {
+    throw new AuthTokenError("AUTH_MALFORMED", "Target path alias refused.");
+  }
+  if (isConfig && !registeredConfigAliases().includes(target_path_alias)) {
+    throw new AuthTokenError("AUTH_MALFORMED", "Target path alias refused.");
+  }
+
   const scope_digest = requireSha256(raw.scope_digest);
   const original_sha256 = requireSha256(raw.original_sha256);
   if (!scope_digest || !original_sha256) {
     throw new AuthTokenError("AUTH_MALFORMED", "Digest fields refused.");
   }
-  if (raw.expected_pattern_count !== PROTECTED_PROCESS_OP.expected_pattern_count) {
+  const expected_pattern_count = isPP
+    ? PROTECTED_PROCESS_OP.expected_pattern_count
+    : 1;
+  if (raw.expected_pattern_count !== expected_pattern_count) {
     throw new AuthTokenError("AUTH_MALFORMED", "Pattern count refused.");
   }
 
-  if (!isPlainObject(raw.operation) || !exactKeys(raw.operation, OPERATION_KEYS as unknown as string[])) {
+  if (
+    !isPlainObject(raw.operation) ||
+    !exactKeys(raw.operation, OPERATION_KEYS as unknown as string[])
+  ) {
     throw new AuthTokenError("AUTH_MALFORMED", "Operation fields refused.");
   }
   const op = raw.operation;
-  if (op.kind !== "exact_block_removal") {
-    throw new AuthTokenError("AUTH_MALFORMED", "Operation kind refused.");
+  const kind = op.kind as RepairOperationKind;
+  if (isPP) {
+    if (kind !== "exact_block_removal") {
+      throw new AuthTokenError("AUTH_MALFORMED", "Operation kind refused.");
+    }
+  } else {
+    if (kind !== "config_set" && kind !== "config_remove") {
+      throw new AuthTokenError("AUTH_MALFORMED", "Operation kind refused.");
+    }
+    if (capsule_id === CONFIG_WRONG_TYPE_CAPSULE_ID && kind !== "config_set") {
+      throw new AuthTokenError("AUTH_MALFORMED", "Operation kind refused.");
+    }
+    if (
+      (capsule_id === CONFIG_OBSOLETE_CAPSULE_ID ||
+        capsule_id === CONFIG_SOURCE_CONFLICT_CAPSULE_ID) &&
+      kind !== "config_remove"
+    ) {
+      throw new AuthTokenError("AUTH_MALFORMED", "Operation kind refused.");
+    }
   }
-  if (op.target_path_alias !== PROTECTED_PROCESS_OP.target_path_alias) {
+  if (op.target_path_alias !== target_path_alias) {
     throw new AuthTokenError("AUTH_MALFORMED", "Operation alias refused.");
   }
-  if (op.expected_pattern_count !== PROTECTED_PROCESS_OP.expected_pattern_count) {
+  if (op.expected_pattern_count !== expected_pattern_count) {
     throw new AuthTokenError("AUTH_MALFORMED", "Operation pattern count refused.");
   }
   const operation_digest = requireSha256(op.operation_digest);
-  // expected_result_sha256 is required (non-null); null/removal fails closed.
   const expected_result_sha256 = requireSha256(op.expected_result_sha256);
   if (!operation_digest || !expected_result_sha256) {
     throw new AuthTokenError("AUTH_MALFORMED", "Operation digests refused.");
   }
-  const registeredOp = operationDigest();
-  if (operation_digest !== registeredOp) {
-    throw new AuthTokenError("AUTH_MALFORMED", "Operation digest mismatch.");
+
+  // Config operation fields (null for protected-process).
+  let config_key: string | null = null;
+  let old_value_type: string | null = null;
+  let old_value_summary: string | null = null;
+  let new_value: string | null = null;
+
+  if (isPP) {
+    if (
+      op.config_key !== null ||
+      op.old_value_type !== null ||
+      op.old_value_summary !== null ||
+      op.new_value !== null
+    ) {
+      throw new AuthTokenError("AUTH_MALFORMED", "Config fields refused.");
+    }
+    const registeredOp = operationDigest();
+    if (operation_digest !== registeredOp) {
+      throw new AuthTokenError("AUTH_MALFORMED", "Operation digest mismatch.");
+    }
+  } else {
+    config_key = requireString(op.config_key, 256);
+    old_value_type = requireString(op.old_value_type, 64);
+    old_value_summary = requireString(op.old_value_summary, 256);
+    if (!config_key || !old_value_type || !old_value_summary) {
+      throw new AuthTokenError("AUTH_MALFORMED", "Config op fields refused.");
+    }
+    if (op.new_value !== null && typeof op.new_value !== "string") {
+      throw new AuthTokenError("AUTH_MALFORMED", "New value refused.");
+    }
+    if (typeof op.new_value === "string") {
+      if (op.new_value.length === 0 || op.new_value.length > 512) {
+        throw new AuthTokenError("AUTH_MALFORMED", "New value refused.");
+      }
+      // Secrets never appear as exportable new_value content beyond redaction token.
+      if (/sk-|Bearer\s|password\s*=/i.test(op.new_value)) {
+        throw new AuthTokenError("AUTH_MALFORMED", "Secret new value refused.");
+      }
+      new_value = op.new_value;
+    }
+    if (kind === "config_set") {
+      if (config_key !== REGISTERED_TYPE_FIX.config_key) {
+        throw new AuthTokenError("AUTH_MALFORMED", "Config key refused.");
+      }
+      if (new_value !== REGISTERED_TYPE_FIX.new_value_toml) {
+        throw new AuthTokenError("AUTH_MALFORMED", "New value refused.");
+      }
+    }
+    if (kind === "config_remove" && new_value !== null) {
+      throw new AuthTokenError("AUTH_MALFORMED", "Remove must have null new_value.");
+    }
+    if (
+      capsule_id === CONFIG_SOURCE_CONFLICT_CAPSULE_ID &&
+      target_path_alias !== CONFIG_OVERRIDE_ALIAS
+    ) {
+      throw new AuthTokenError("AUTH_MALFORMED", "Conflict target alias refused.");
+    }
+    if (
+      capsule_id === CONFIG_WRONG_TYPE_CAPSULE_ID &&
+      target_path_alias !== CONFIG_PRIMARY_ALIAS
+    ) {
+      throw new AuthTokenError("AUTH_MALFORMED", "Type-fix target alias refused.");
+    }
+    const registeredOp = configOperationDigest({
+      kind,
+      capsule_id,
+      target_path_alias,
+      config_key,
+      new_value,
+    });
+    if (operation_digest !== registeredOp) {
+      throw new AuthTokenError("AUTH_MALFORMED", "Operation digest mismatch.");
+    }
   }
 
-  if (!isPlainObject(raw.applicability) || !exactKeys(raw.applicability, [
-    "version_match",
-    "platform_match",
-    "target_hash_match",
-    "pattern_count_match",
-  ])) {
+  if (
+    !isPlainObject(raw.applicability) ||
+    !exactKeys(raw.applicability, [
+      "version_match",
+      "platform_match",
+      "target_hash_match",
+      "pattern_count_match",
+    ])
+  ) {
     throw new AuthTokenError("AUTH_MALFORMED", "Applicability fields refused.");
   }
   const version_match = requireBool(raw.applicability.version_match);
@@ -186,13 +315,16 @@ export function strictValidateCapsule(raw: unknown): RepairCapsule {
     throw new AuthTokenError("AUTH_MALFORMED", "Applicability values refused.");
   }
 
-  if (!isPlainObject(raw.backup) || !exactKeys(raw.backup, [
-    "required",
-    "original_sha256",
-    "backup_rel",
-    "verified",
-    "receipt_id",
-  ])) {
+  if (
+    !isPlainObject(raw.backup) ||
+    !exactKeys(raw.backup, [
+      "required",
+      "original_sha256",
+      "backup_rel",
+      "verified",
+      "receipt_id",
+    ])
+  ) {
     throw new AuthTokenError("AUTH_MALFORMED", "Backup fields refused.");
   }
   if (raw.backup.required !== true) {
@@ -202,13 +334,11 @@ export function strictValidateCapsule(raw: unknown): RepairCapsule {
   if (!backup_original || backup_original !== original_sha256) {
     throw new AuthTokenError("AUTH_MALFORMED", "Backup original hash refused.");
   }
-  const registered_backup = registeredBackupRel();
+  const registered_backup = registeredBackupRel(target_path_alias);
   const backup_rel = requireString(raw.backup.backup_rel, 256);
-  // Must match registered constant — never trust a redirectable path.
   if (!backup_rel || backup_rel !== registered_backup) {
     throw new AuthTokenError("AUTH_MALFORMED", "Backup path refused.");
   }
-  // Defense-in-depth: backup path must stay under registered recovery backup dir.
   if (
     !backup_rel.startsWith(`${RECOVERY_BACKUP_DIR}/`) ||
     backup_rel.includes("..") ||
@@ -226,11 +356,14 @@ export function strictValidateCapsule(raw: unknown): RepairCapsule {
     throw new AuthTokenError("AUTH_MALFORMED", "Backup receipt refused.");
   }
 
-  if (!isPlainObject(raw.verification) || !exactKeys(raw.verification, [
-    "checks",
-    "original_failure_must_not_reproduce",
-    "core_health_required",
-  ])) {
+  if (
+    !isPlainObject(raw.verification) ||
+    !exactKeys(raw.verification, [
+      "checks",
+      "original_failure_must_not_reproduce",
+      "core_health_required",
+    ])
+  ) {
     throw new AuthTokenError("AUTH_MALFORMED", "Verification fields refused.");
   }
   if (
@@ -250,10 +383,10 @@ export function strictValidateCapsule(raw: unknown): RepairCapsule {
     throw new AuthTokenError("AUTH_MALFORMED", "Verification checks refused.");
   }
 
-  if (!isPlainObject(raw.rollback) || !exactKeys(raw.rollback, [
-    "recipe",
-    "restores_original_sha256",
-  ])) {
+  if (
+    !isPlainObject(raw.rollback) ||
+    !exactKeys(raw.rollback, ["recipe", "restores_original_sha256"])
+  ) {
     throw new AuthTokenError("AUTH_MALFORMED", "Rollback fields refused.");
   }
   const restores = requireSha256(raw.rollback.restores_original_sha256);
@@ -292,11 +425,14 @@ export function strictValidateCapsule(raw: unknown): RepairCapsule {
     throw new AuthTokenError("AUTH_MALFORMED", "Binding digests refused.");
   }
 
-  if (!isPlainObject(raw.disclosure) || !exactKeys(raw.disclosure, [
-    "fields_leaving_device",
-    "includes_source_bytes",
-    "includes_secrets",
-  ])) {
+  if (
+    !isPlainObject(raw.disclosure) ||
+    !exactKeys(raw.disclosure, [
+      "fields_leaving_device",
+      "includes_source_bytes",
+      "includes_secrets",
+    ])
+  ) {
     throw new AuthTokenError("AUTH_MALFORMED", "Disclosure fields refused.");
   }
   if (
@@ -336,12 +472,11 @@ export function strictValidateCapsule(raw: unknown): RepairCapsule {
     throw new AuthTokenError("AUTH_MALFORMED", "Nonce refused.");
   }
 
-  // Recompute invalidation + binding from registered constants + capsule material.
   const expectedInvalidation = invalidationMaterial({
     original_sha256,
-    expected_pattern_count: PROTECTED_PROCESS_OP.expected_pattern_count,
+    expected_pattern_count,
     scope_digest,
-    operation_digest: registeredOp,
+    operation_digest,
     expected_result_sha256,
     backup_rel: registered_backup,
     capsule_id,
@@ -355,15 +490,15 @@ export function strictValidateCapsule(raw: unknown): RepairCapsule {
     capsule_id,
     scope_digest,
     original_sha256,
-    expected_pattern_count: PROTECTED_PROCESS_OP.expected_pattern_count,
-    operation_digest: registeredOp,
+    expected_pattern_count,
+    operation_digest,
     expected_result_sha256,
     backup_rel: registered_backup,
     invalidation_digest: expectedInvalidation,
     trust_tier: "T1_community",
     authorization_tier: "experimental_one_shot",
     mode: "apply_authorized",
-    target_path_alias: PROTECTED_PROCESS_OP.target_path_alias,
+    target_path_alias,
     expires_at,
     nonce,
   });
@@ -378,16 +513,20 @@ export function strictValidateCapsule(raw: unknown): RepairCapsule {
     mode: "apply_authorized",
     authorization_tier: "experimental_one_shot",
     risk: "moderate",
-    target_path_alias: PROTECTED_PROCESS_OP.target_path_alias,
+    target_path_alias,
     scope_digest,
     original_sha256,
-    expected_pattern_count: PROTECTED_PROCESS_OP.expected_pattern_count,
+    expected_pattern_count,
     operation: {
-      kind: "exact_block_removal",
-      target_path_alias: PROTECTED_PROCESS_OP.target_path_alias,
-      expected_pattern_count: PROTECTED_PROCESS_OP.expected_pattern_count,
-      operation_digest: registeredOp,
+      kind,
+      target_path_alias,
+      expected_pattern_count,
+      operation_digest,
       expected_result_sha256,
+      config_key,
+      old_value_type,
+      old_value_summary,
+      new_value,
     },
     applicability: {
       version_match,
