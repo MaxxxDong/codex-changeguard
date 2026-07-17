@@ -61,8 +61,8 @@ function buildPublicReadme(sourceText) {
   const lines = sourceText.split(/\r?\n/);
   const out = [];
   for (const line of lines) {
-    // Drop only the handoff list entry (relative HANDOFF.md link).
-    if (/^\s*-\s*\[[^\]]*\]\(\s*HANDOFF\.md(?:#[^)\s]*)?\s*\)\s*$/i.test(line)) {
+    // Drop any line with a relative HANDOFF.md Markdown link (repo-only).
+    if (/\[[^\]]*\]\(\s*HANDOFF\.md(?:#[^)\s]*)?\s*\)/i.test(line)) {
       continue;
     }
     out.push(line);
