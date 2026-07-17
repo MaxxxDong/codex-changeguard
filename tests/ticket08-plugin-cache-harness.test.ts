@@ -132,6 +132,73 @@ test("Ticket08: negative control (dependency-install-like) is INCONCLUSIVE", () 
   }
 });
 
+/**
+ * P1-B: trusted_verified must compare trusted_entry.measured_sha256 to
+ * manifest.rebuild_source.expected_sha256. Mismatch must not be overstated
+ * as verified; repair remains refused. Path/symlink/digest/provenance gates
+ * stay tight.
+ */
+test("Ticket08 P1-B: trusted rebuild mismatch reports trusted_verified=false and refuses repair", () => {
+  const tmp = makeTempDir("cg-t08-trusted-mm-");
+  const target = copyFixtureToTemp("fixtures/plugin-cache/corruption", tmp);
+  const trustedPath = path.join(target, "plugin-cache/trusted/entry.js");
+  // Mutate trusted rebuild source so measured hash ≠ manifest expectation.
+  fs.writeFileSync(
+    trustedPath,
+    "// untrusted / mismatched rebuild source bytes\nexport const VERSION = 'bad';\n",
+  );
+  const before = hashTargetTree(target);
+  const { exitCode, result, stdout } = runCliDiagnose(target);
+  assert.equal(exitCode, 0, stdout);
+  assert.ok(result);
+  const evidence = result!.evidence as Array<{ kind?: string; detail?: string }>;
+  const manifestEv = evidence.find((e) => e.kind === "plugin_cache_manifest_relation");
+  assert.ok(manifestEv, "plugin_cache_manifest_relation evidence required");
+  assert.match(String(manifestEv!.detail), /trusted_verified=false/);
+  assert.equal(
+    String(manifestEv!.detail).includes("trusted_verified=true"),
+    false,
+    "must not overstate trusted verification on hash mismatch",
+  );
+  // Corruption mechanism requires trusted match — do not claim it.
+  assert.equal(
+    mechanismFromResult(result! as unknown as Record<string, unknown>),
+    null,
+  );
+  assert.notEqual(result!.diagnosis_state, "SOURCE_COMPONENT_LOCATED");
+  assert.equal(result!.repair_applied, false);
+  assert.equal(result!.target_mutated, false);
+  assert.equal(hashTargetTree(target), before, "diagnose must not mutate");
+
+  const preview = runCliRepairPreview(target);
+  assert.notEqual(preview.exitCode, 0);
+  assert.equal(preview.result!.ok, false);
+  assert.ok(
+    preview.result!.error_code === "NOT_APPLICABLE" ||
+      preview.result!.error_code === "TRUSTED_SOURCE_MISMATCH" ||
+      (preview.result!.user_resolution as { status?: string } | null)?.status ===
+        "REPAIR_REFUSED",
+  );
+  assertNoLeakText(stdout);
+  assertNoLeakText(preview.stdout);
+});
+
+test("Ticket08 P1-B: matching trusted rebuild reports trusted_verified=true", () => {
+  const tmp = makeTempDir("cg-t08-trusted-ok-");
+  const target = copyFixtureToTemp("fixtures/plugin-cache/corruption", tmp);
+  const { exitCode, result, stdout } = runCliDiagnose(target);
+  assert.equal(exitCode, 0, stdout);
+  assert.ok(result);
+  const evidence = result!.evidence as Array<{ kind?: string; detail?: string }>;
+  const manifestEv = evidence.find((e) => e.kind === "plugin_cache_manifest_relation");
+  assert.ok(manifestEv);
+  assert.match(String(manifestEv!.detail), /trusted_verified=true/);
+  assert.equal(
+    mechanismFromResult(result! as unknown as Record<string, unknown>),
+    "bundled_file_corruption",
+  );
+});
+
 // ---- Successful repair path ----
 
 test("Ticket08: successful repair preview → apply → RESOLVED_VERIFIED (corruption)", () => {

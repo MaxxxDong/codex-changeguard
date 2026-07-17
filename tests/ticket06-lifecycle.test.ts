@@ -23,6 +23,7 @@ import {
   previewCliVersionRollback,
   isTrustedRollbackProvenance,
   TRUSTED_PROVENANCE_ALLOWLIST,
+  runCanary,
 } from "../src/core/lifecycle/index.js";
 import {
   LedgerError,
@@ -626,6 +627,94 @@ test("Ticket06: canary pass/fail guidance exact enum", () => {
   ]);
   assert.equal(avail.exitCode, 0);
   assert.equal(avail.result!.version_guidance, "UPGRADE_CANARY_AVAILABLE");
+});
+
+/**
+ * P1-A: canary_executed must fail closed. Only exact true means executed;
+ * omitted/false must yield UPGRADE_CANARY_AVAILABLE even when result
+ * booleans are true. Caller-declared booleans are not independently measured.
+ */
+test("Ticket06 P1-A: omitted canary_executed fails closed to UPGRADE_CANARY_AVAILABLE", () => {
+  const tmp = makeTempDir("cg-t06-can-omit-");
+  const target = copyFixtureToTemp("fixtures/lifecycle", tmp);
+
+  // Core seam: omit canary_executed entirely.
+  const core = runCanary({
+    targetPath: target,
+    candidate_version: "0.60.0",
+    original_fault_absent: true,
+    core_regressions_passed: true,
+  });
+  assert.equal(core.ok, true);
+  assert.equal(core.version_guidance, "UPGRADE_CANARY_AVAILABLE");
+  assert.equal(core.canary?.version_guidance, "UPGRADE_CANARY_AVAILABLE");
+  // Public CanaryResult booleans remain caller-supplied values.
+  assert.equal(core.canary?.original_fault_absent, true);
+  assert.equal(core.canary?.core_regressions_passed, true);
+  const coreEvidence = core.evidence.find((e) => e.kind === "canary_result");
+  assert.ok(coreEvidence);
+  assert.equal(
+    coreEvidence!.measured,
+    false,
+    "caller-declared canary outcomes must not be labeled independently measured",
+  );
+
+  // CLI seam: omit --canary-executed (result booleans true).
+  const tmpCli = makeTempDir("cg-t06-can-omit-cli-");
+  const targetCli = copyFixtureToTemp("fixtures/lifecycle", tmpCli);
+  const cli = runLifecycle(targetCli, "canary", [
+    "--candidate-version=0.60.1",
+    "--original-fault-absent=true",
+    "--core-regressions-passed=true",
+  ]);
+  assert.equal(cli.exitCode, 0, cli.stdout);
+  assert.equal(cli.result!.version_guidance, "UPGRADE_CANARY_AVAILABLE");
+  assert.notEqual(cli.result!.version_guidance, "RECOMMEND_UPGRADE");
+  const cliEvidence = (
+    cli.result!.evidence as Array<{ kind?: string; measured?: boolean }>
+  ).find((e) => e.kind === "canary_result");
+  assert.ok(cliEvidence);
+  assert.equal(cliEvidence!.measured, false);
+});
+
+test("Ticket06 P1-A: CLI/MCP omitted canary_executed equivalence", async () => {
+  const tmp = makeTempDir("cg-t06-can-omit-eq-");
+  const target = copyFixtureToTemp("fixtures/lifecycle", tmp);
+  const cli = runLifecycle(target, "canary", [
+    "--candidate-version=0.61.0",
+    "--original-fault-absent=true",
+    "--core-regressions-passed=true",
+  ]);
+  assert.equal(cli.exitCode, 0, cli.stdout);
+  assert.equal(cli.result!.version_guidance, "UPGRADE_CANARY_AVAILABLE");
+
+  const tmp2 = makeTempDir("cg-t06-can-omit-eq2-");
+  const target2 = copyFixtureToTemp("fixtures/lifecycle", tmp2);
+  const client = new McpTestClient({ serverEntry: mcpServerEntry() });
+  try {
+    client.start();
+    // Omit canary_executed from MCP args entirely.
+    const mcpResult = await client.callTool("changeguard_lifecycle", {
+      target: target2,
+      operation: "canary",
+      candidate_version: "0.61.0",
+      original_fault_absent: true,
+      core_regressions_passed: true,
+    });
+    assert.equal(mcpResult.ok, true);
+    assert.equal(mcpResult.version_guidance, "UPGRADE_CANARY_AVAILABLE");
+    assert.equal(mcpResult.version_guidance, cli.result!.version_guidance);
+    assert.equal(mcpResult.operation, "canary");
+    assert.equal(mcpResult.network_used, false);
+    const mcpEvidence = (
+      mcpResult.evidence as Array<{ kind?: string; measured?: boolean }>
+    ).find((e) => e.kind === "canary_result");
+    assert.ok(mcpEvidence);
+    assert.equal(mcpEvidence!.measured, false);
+    assertNoLeakText(JSON.stringify(mcpResult));
+  } finally {
+    await client.close();
+  }
 });
 
 test("Ticket06: upstream supersession marks recipe SUPERSEDED_BY_UPSTREAM_FIX", () => {

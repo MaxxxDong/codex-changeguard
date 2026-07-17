@@ -418,7 +418,10 @@ export interface CanaryInput {
   original_fault_absent: boolean;
   /** Measured: core regression suite passed. */
   core_regressions_passed: boolean;
-  /** When false, canary was not executed — guidance is availability only. */
+  /**
+   * Fail closed: only exact `true` means the canary was executed.
+   * Omitted/false → UPGRADE_CANARY_AVAILABLE (availability only).
+   */
   canary_executed?: boolean;
   nowMs?: number;
 }

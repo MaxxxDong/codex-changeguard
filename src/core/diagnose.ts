@@ -198,9 +198,12 @@ export function diagnose(
         detail: `PLUGIN_CACHE_ENTRY sha256=${obs.cache_entry.measured_sha256}`,
         measured: true,
       });
+      const trusted_verified =
+        obs.trusted_entry.measured_sha256 ===
+        obs.manifest.rebuild_source.expected_sha256;
       evidence.push({
         kind: "plugin_cache_manifest_relation",
-        detail: `required_version=${obs.manifest.required_version} required_generation=${obs.manifest.required_generation} trusted_verified=true`,
+        detail: `required_version=${obs.manifest.required_version} required_generation=${obs.manifest.required_generation} trusted_verified=${trusted_verified}`,
         measured: true,
       });
       evidence.push({

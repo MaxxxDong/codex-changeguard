@@ -992,7 +992,8 @@ export function runCanary(input: CanaryInput): LifecycleResult {
       return fail(op, "INVALID_VERSION", "Invalid candidate_version.");
     }
     const nowMs = nowOf(input.nowMs);
-    const executed = input.canary_executed !== false;
+    // Fail closed: only exact true means executed. Omitted/false → availability only.
+    const executed = input.canary_executed === true;
     let guidance: VersionGuidance;
     let detail: string;
     if (!executed) {
@@ -1065,8 +1066,9 @@ export function runCanary(input: CanaryInput): LifecycleResult {
       evidence: [
         {
           kind: "canary_result",
-          detail: `guidance=${guidance};fault_absent=${canary.original_fault_absent};core_ok=${canary.core_regressions_passed}`,
-          measured: true,
+          detail: `guidance=${guidance};executed=${executed};fault_absent=${canary.original_fault_absent};core_ok=${canary.core_regressions_passed};caller_declared=true`,
+          // Caller-supplied outcome flags are not independently measured here.
+          measured: false,
         },
       ],
       target_mutated: true,
