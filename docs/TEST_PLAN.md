@@ -35,6 +35,21 @@ This document owns the ChangeGuard verification matrix. Passing a model-generate
 - protected-process and invalid-TOML Issues cannot reach high confidence
 - expected terminal state is `INCONCLUSIVE` or low-confidence `ISSUE_CANDIDATE`
 
+### Windows in-app Browser crash family
+
+- the same phrase “Codex crashes when Browser opens” cannot collapse distinct exception, process, timing, page-capability, and concurrency signatures
+- `0xC0000005` / `CrBrowserMain` / `chrome.dll+0x2e08f46`, `0xc06d007f`, and GPU `101457950 -> 18` fixtures rank different candidates
+- a no-Browser control and a neutral-page Browser probe remain separate observations
+- “disable Browser”, “move to SSD”, and “disable SecureLink” remain hypotheses or mitigations until their own controlled A/B tests pass
+- an open GitHub Issue without verified Issue/PR/commit/release linkage cannot reach `FIX_COMMIT_LINKED`
+
+### Session-expired evidence boundary
+
+- a symptom-only report returns `INCONCLUSIVE`, not an invented IP-change root cause
+- status, surface, app/browser version, sign-in method, and network A/B results may be collected without credential values
+- tokens, cookies, account identifiers, passwords, one-time codes, and full browser storage never enter the fingerprint or disclosure manifest
+- the resolver distinguishes service incident, network/security control, authentication-method mismatch, local session state, and unresolved account-side failure
+
 ## Kill criteria
 
 Stop or downscope the current implementation if any condition remains after the first implementation day:

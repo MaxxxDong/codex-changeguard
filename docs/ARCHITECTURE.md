@@ -230,6 +230,29 @@ Synthetic repo containing tracked, ignored, and nonignored untracked Skill files
 
 A superficially similar startup error from macOS with a different module, configurable `process`, and no matching AST block. The matcher must refuse the Windows TOML and protected-process Issues and return `INCONCLUSIVE` or a low-confidence candidate.
 
+### Fixture E — Windows in-app Browser crash family
+
+A sanitized Windows fixture models a full desktop exit after the in-app Browser is attached. The same user-visible symptom has multiple upstream candidates and must fork on deterministic evidence instead of title similarity:
+
+- `0xC0000005`, `CrBrowserMain`, and `chrome.dll+0x2e08f46` after a neutral page reaches DOM-ready point toward openai/codex#32683.
+- `0xc06d007f` after a link or button interaction points toward openai/codex#33710.
+- GPU child exit `101457950` followed by relaunch failure `18` on media/canvas-capable pages points toward openai/codex#32094.
+- a crash only under several concurrent side chats, immediately after Browser WebView attachment, points toward openai/codex#33202.
+
+The fixture may rank these as Issue candidates. It reaches `LOCAL_REPRO_CONFIRMED` only when a safe neutral-page probe reproduces the same local signature and a no-Browser control does not. Disabling the in-app Browser or using external Chrome is a mitigation, not proof of the native root cause. Security software, storage pressure, and GPU hypotheses remain separate until controlled A/B evidence supports them.
+
+### Fixture F — underspecified session-expired boundary
+
+A ChatGPT report containing only “session expired” plus an unverified claim about changing IP addresses must not be mapped to a Codex source component. ChangeGuard may run an adjacent authentication/network playbook using status, surface, version, sign-in method, redacted response status, and controlled network comparisons. It must return `INCONCLUSIVE` until one of these branches is supported:
+
+- active service incident;
+- VPN/proxy/firewall/SSL-inspection path failure;
+- authentication-method or SSO mismatch;
+- app/browser-local storage or session-state failure;
+- unresolved account-side invalidation requiring OpenAI Support.
+
+The playbook never reads or exports cookie values, tokens, passwords, one-time codes, or full browser storage. A changed public IP is a hypothesis, not a permitted root-cause claim.
+
 ## 11. Competition MVP
 
 ### Must
@@ -242,6 +265,7 @@ A superficially similar startup error from macOS with a different module, config
 - Impact Contract schema
 - allowlisted probe registry
 - Fixtures A and D, including negative control
+- Fixture E crash-family classifier and Fixture F evidence-boundary case
 - disclosure manifest and repro-pack export
 - English README, install/platform/judge instructions, live fixture path, tests
 

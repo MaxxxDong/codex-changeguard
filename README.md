@@ -21,6 +21,7 @@ ChangeGuard is not a generic changelog summarizer, Issue chatbot, environment do
 - [Architecture and evidence contracts](docs/ARCHITECTURE.md)
 - [Security and privacy boundary](docs/SECURITY.md)
 - [Verification and adversarial test plan](docs/TEST_PLAN.md)
+- [Real-world diagnosis case studies](docs/CASE_STUDIES.md)
 - [Current handoff](HANDOFF.md)
 - [Plugin manifest](.codex-plugin/plugin.json)
 - [Schemas](schemas/)
