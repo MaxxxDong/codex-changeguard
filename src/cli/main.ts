@@ -3,6 +3,7 @@
  * Commands:
  *   changeguard diagnose <isolated-target>
  *   changeguard impact <isolated-target> [--disclose-approved|--disclose-refused]
+ *   changeguard analyze-page <isolated-target> --envelope=<page.json> [--disclose-approved|--disclose-refused]
  *   changeguard repair-preview <isolated-target>
  *   changeguard repair-apply <isolated-target> <authorization-token>
  *   changeguard verify <isolated-target>
@@ -11,6 +12,7 @@
  *   changeguard scan-system                    (production registered system adapter)
  *   changeguard session-start <inventory-root> [--hook-trust=…]  (manual fixture path)
  */
+import fs from "node:fs";
 import { diagnose } from "../core/diagnose.js";
 import {
   applyRepair,
@@ -27,6 +29,12 @@ import type { ImpactAssessmentResult } from "../impact/types.js";
 import { scanInstances } from "../instances/scan.js";
 import type { HookTrustState, ScanResult } from "../instances/types.js";
 import { runSessionStart } from "../hooks/session-start.js";
+import { analyzePage } from "../page/analyze.js";
+import type {
+  PageAnalysisResult,
+  PageDisclosureDecision,
+} from "../page/types.js";
+import { MAX_PAGE_ENVELOPE_BYTES } from "../page/limits.js";
 
 function printJson(value: unknown, exitCode: number): never {
   const text = assertNoLeakPaths(redactText(JSON.stringify(value, null, 2)));
@@ -54,11 +62,41 @@ function usageDiagnosis(): DiagnosisResult {
     evidence: [],
     error_code: "USAGE",
     error_message:
-      "Usage: changeguard diagnose|impact|repair-preview|repair-apply|verify|rollback|scan|scan-system|session-start …",
+      "Usage: changeguard diagnose|impact|analyze-page|repair-preview|repair-apply|verify|rollback|scan|scan-system|session-start …",
     network_used: false,
     target_mutated: false,
     repair_applied: false,
   };
+}
+
+function pageUsageError(): never {
+  const result: PageAnalysisResult = {
+    schema_version: 1,
+    ok: false,
+    page_evidence: null,
+    comparison: null,
+    disclosure_decision: "not_requested",
+    disclosure_manifest: {
+      schema_version: 1,
+      manifest_id: "cli_usage",
+      fields: [],
+      purpose: "usage",
+      destinations: [],
+    },
+    transport_calls: 0,
+    observed_facts: [],
+    user_reports: [],
+    hypotheses: [],
+    local_incident: null,
+    network_used: false,
+    target_mutated: false,
+    repair_applied: false,
+    repair_authorized: false,
+    error_code: "USAGE",
+    error_message:
+      "Usage: changeguard analyze-page <isolated-target> --envelope=<page-envelope.json> [--disclose-approved|--disclose-refused]",
+  };
+  printJson(result, 2);
 }
 
 function scanUsageError(
@@ -267,6 +305,108 @@ function runImpact(
   }
 }
 
+function parseAnalyzePageArgs(rest: string[]): {
+  target: string;
+  envelopePath: string;
+  disclosure_decision: PageDisclosureDecision;
+} | null {
+  if (rest.length === 0) return null;
+  let disclosure_decision: PageDisclosureDecision = "not_requested";
+  let envelopePath: string | null = null;
+  const positional: string[] = [];
+  for (const a of rest) {
+    if (a === "--disclose-approved") {
+      disclosure_decision = "approved";
+      continue;
+    }
+    if (a === "--disclose-refused") {
+      disclosure_decision = "refused";
+      continue;
+    }
+    if (a.startsWith("--envelope=")) {
+      const v = a.slice("--envelope=".length);
+      if (v.length === 0) return null;
+      envelopePath = v;
+      continue;
+    }
+    if (a.startsWith("-")) {
+      return null;
+    }
+    positional.push(a);
+  }
+  if (positional.length !== 1 || !envelopePath) return null;
+  return { target: positional[0]!, envelopePath, disclosure_decision };
+}
+
+function runAnalyzePage(
+  target: string,
+  envelopePath: string,
+  disclosure_decision: PageDisclosureDecision,
+): void {
+  try {
+    // Read orchestrator-supplied envelope only; never scrape browser state.
+    let raw: string;
+    try {
+      const st = fs.statSync(envelopePath);
+      if (!st.isFile() || st.size > MAX_PAGE_ENVELOPE_BYTES) {
+        printJson(
+          {
+            schema_version: 1,
+            ok: false,
+            error_code: "ENVELOPE_SIZE",
+            error_message: "Page envelope file missing or exceeds size limit.",
+            network_used: false,
+            target_mutated: false,
+            repair_applied: false,
+            repair_authorized: false,
+            transport_calls: 0,
+          },
+          1,
+        );
+      }
+      raw = fs.readFileSync(envelopePath, "utf8");
+    } catch {
+      printJson(
+        {
+          schema_version: 1,
+          ok: false,
+          error_code: "ENVELOPE_READ",
+          error_message: "Could not read page envelope file.",
+          network_used: false,
+          target_mutated: false,
+          repair_applied: false,
+          repair_authorized: false,
+          transport_calls: 0,
+        },
+        1,
+      );
+    }
+    // CLI never injects a live page transport — no hidden network.
+    const result: PageAnalysisResult = analyzePage({
+      targetPath: target,
+      envelope: raw,
+      disclosure_decision,
+      transport: null,
+    });
+    printJson(result, result.ok ? 0 : 1);
+  } catch {
+    printJson(
+      {
+        schema_version: 1,
+        ok: false,
+        error_code: "INTERNAL",
+        error_message: "Page analysis failed.",
+        network_used: false,
+        target_mutated: false,
+        repair_applied: false,
+        repair_authorized: false,
+        transport_calls: 0,
+      },
+      1,
+    );
+  }
+}
+
 export function runCli(argv: string[]): void {
   const args = argv.slice(2);
   if (args.length === 0) {
@@ -289,6 +429,19 @@ export function runCli(argv: string[]): void {
         printJson(usageDiagnosis(), 2);
       }
       runImpact(parsed.target, parsed.disclosure_decision);
+      return;
+    }
+
+    if (cmd === "analyze-page") {
+      const parsed = parseAnalyzePageArgs(rest);
+      if (!parsed) {
+        pageUsageError();
+      }
+      runAnalyzePage(
+        parsed.target,
+        parsed.envelopePath,
+        parsed.disclosure_decision,
+      );
       return;
     }
 

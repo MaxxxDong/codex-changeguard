@@ -48,14 +48,15 @@ Evidence-locked verdict + Recovery Capsule preview
 ### 2.1 Plugin surfaces
 
 - `skills/changeguard/`: user-facing orchestration instructions
-- `.mcp.json`: MCP server (`changeguard_diagnose`, `changeguard_impact`, recovery tools, `changeguard_scan`, `changeguard_scan_system`, `changeguard_session_start` → shared core)
-- `bin/changeguard.js` / `dist/cli/main.js`: Rescue CLI (`diagnose|impact|repair-*|verify|rollback|scan|scan-system|session-start`)
+- `.mcp.json`: MCP server (`changeguard_diagnose`, `changeguard_impact`, `changeguard_analyze_page`, recovery tools, `changeguard_scan`, `changeguard_scan_system`, `changeguard_session_start` → shared core)
+- `bin/changeguard.js` / `dist/cli/main.js`: Rescue CLI (`diagnose|impact|analyze-page|repair-*|verify|rollback|scan|scan-system|session-start`)
 - `src/core/diagnose.ts`: single shared diagnosis core used by CLI and MCP
 - `src/core/crash-family.ts`: Ticket 09 Desktop Browser crash-family classifier (deterministic gates; Fixture E)
 - `src/core/recovery/`: Ticket 02 isolated protected-process repair + Ticket 07 config set/remove + Ticket 08 plugin-cache recovery (preview/apply/verify/rollback; one engine)
 - `src/core/plugin-cache/`: Ticket 08 bounded plugin-cache inventory/manifest observation and mechanism classification (read-only)
 - `src/core/config/`: Ticket 07 bounded Codex control TOML parser/validator and fault probe (read-only)
 - `src/evidence/*` + `src/impact/*`: official evidence refresh/snapshot, Change-to-Local Graph, Impact Card (Ticket 04)
+- `src/page/*`: untrusted page-evidence envelope, extraction, comparison, and candidate-only Repair DSL (Ticket 05)
 - `src/instances/`: multi-instance enumeration, version-fingerprint state, affected-instance resolution, repair-target binding contract
 - `src/instances/system-adapter.ts`: production registered system enumeration (capability-injectable)
 - `src/hooks/`: trusted SessionStart core, packaged SessionStart entrypoint, bounded read-only health check
@@ -224,6 +225,24 @@ Contracts:
 - **Untrusted prose:** release notes, Issue/PR/comment/commit text are data. Instruction-like content is quarantined (`quarantine` record + placeholder); never executed, interpolated as instructions, or accepted as code/commands/patches. `maintainer_status` stays separate from quarantine.
 - **Change-to-Local Graph:** edges only from registered matchers (`version_tag_to_installed`, `config_key_intersection`, `component_to_feature`, `component_to_plugin_skill_mcp_hook`, `artifact_alias_intersection`, `surface_runtime_intersection`, `platform_intersection`). Version-range null endpoints are non-participating (not wildcards); both-null never creates a version edge. Model payloads cannot add/modify edges, provenance, confidence, or evidence state (`refuseModelGraphMutation`).
 - **Impact Card:** only changes with a deterministic intersection to the observed instance/config key/Plugin/Skill/MCP/Hook/runtime/artifact surface. Wrong intersections → `REJECTED_WRONG_INTERSECTION`. Changes without a registered mapper → `UNMAPPED_CHANGE` (does not mark the whole version unsupported). Public outputs separate `observed_facts`, `user_reports`, and `hypotheses`. Markers: `network_used: false`, `target_mutated: false`, `repair_applied: false`.
+
+### 6.2 Ticket 05 untrusted page / URL diagnosis
+
+Public seams (shared core `src/page/analyze.ts`):
+
+1. `changeguard analyze-page <isolated-target> --envelope=<page-envelope.json> [--disclose-approved|--disclose-refused]`
+2. MCP tool `changeguard_analyze_page` with `{ target, envelope, disclosure_decision? }`
+
+Contracts:
+
+- **Page-evidence envelope:** bounded JSON (`schema_version`, `url`, `page_mode` `public|logged_visible`, `visible_title`, `visible_text`, allowlisted `metadata` only). Extra keys fail closed. Forbidden privacy fields (`cookie`/`storage`/`token`/`authorization`/`request_body`/session material and variants) are rejected — logged-page mode never reads Cookie, Storage, tokens, auth headers, request bodies, or complete browser requests.
+- **Orchestrator-supplied content first:** production CLI/MCP accept sanitized visible document content from the orchestrator. Optional public retrieval requires explicit displayed disclosure **and** an injected bounded `PageTransport`; production seams never inject transport (`transport_calls: 0`, no hidden network). `logged_visible` never uses transport.
+- **Extraction labels:** separately record `observed_facts`, `author_claims`, `commands_workarounds`, and `inferences`, plus structured symptoms/platform/surface/versions/errors/stack symbols/failure phase/operations/cited sources/conclusions. All page-derived values carry `trust: untrusted_page`.
+- **Quarantine:** all page text—including prompt injection, agent instructions, encoded/full-width variants, data-exfiltration requests, and shell fences—is untrusted data. Instruction-like content is quarantined. Page text cannot alter policy, provenance, local facts, deterministic graph edges, authorization, paths, disclosure decisions, or tool selection (`policy_mutations_blocked: true`).
+- **Repair DSL candidates only:** page commands convert to bounded untrusted Repair DSL candidates (`status: candidate_only`, `trust: untrusted_page`). Never execute, authorize, or upgrade them. Ticket 02 experimental repair gates remain the only apply path. `repair_authorized: false` always on this seam.
+- **Comparison:** compare page claims with the local Incident Fingerprint (via shared diagnose). Output applicability, missing evidence, refuting evidence, risk, safe isolation experiment, and whether a candidate is eligible to enter later Repair Capsule **validation** (not apply). Confidence is hard-capped (`none|low|medium`); wrong platform/surface/mechanism cannot gain high confidence from lexical similarity.
+- **ChatGPT hard gate:** generic ChatGPT/account/session pages (`chatgpt.com`, `chat.openai.com`, session-expired/account language without Codex surface signals) map to `chatgpt_out_of_scope` and cannot become Codex component defects.
+- Markers: `network_used: false`, `target_mutated: false`, `repair_applied: false`, `repair_authorized: false`.
 
 ## 7. Probe contract
 

@@ -504,6 +504,176 @@ if (
   fail("CLI/MCP impact disclosure_decision must match");
 }
 
+// Ticket 05: page-evidence analyze-page CLI/MCP equivalence (disclose-refused).
+// Require all page fixtures in the package, especially the adversarial injection case
+// (must be present and not skipped by packaging filters).
+const requiredPageFixtures = [
+  "valid-protected-process.json",
+  "prompt-injection.json",
+  "wrong-platform.json",
+  "unsupported-assertion.json",
+  "logged-page-clean.json",
+  "chatgpt-session.json",
+];
+for (const name of requiredPageFixtures) {
+  const p = path.join(packageDir, "fixtures", "page-evidence", name);
+  if (!fs.existsSync(p)) {
+    fail(`Package missing fixtures/page-evidence/${name}`);
+  }
+}
+const pageEnvelopeSrc = path.join(
+  packageDir,
+  "fixtures",
+  "page-evidence",
+  "valid-protected-process.json",
+);
+if (!fs.existsSync(pageEnvelopeSrc)) {
+  fail("Package missing fixtures/page-evidence/valid-protected-process.json");
+}
+const pageTargetSrc = path.join(packageDir, "fixtures", "protected-process");
+const pageTargetDest = path.join(outside, "page-protected-process");
+fs.cpSync(pageTargetSrc, pageTargetDest, { recursive: true });
+const pageEnvelopeDest = path.join(outside, "page-envelope.json");
+fs.copyFileSync(pageEnvelopeSrc, pageEnvelopeDest);
+
+const cliPage = spawnSync(
+  process.execPath,
+  [
+    path.join(packageDir, "bin/changeguard.js"),
+    "analyze-page",
+    pageTargetDest,
+    `--envelope=${pageEnvelopeDest}`,
+    "--disclose-refused",
+  ],
+  {
+    cwd: outside,
+    encoding: "utf8",
+    env: { ...process.env, NO_COLOR: "1" },
+  },
+);
+if (cliPage.status !== 0) {
+  fail(
+    `CLI analyze-page smoke failed status=${cliPage.status}\n${cliPage.stdout}\n${cliPage.stderr}`,
+  );
+}
+const cliPageResult = JSON.parse(cliPage.stdout);
+if (!cliPageResult.ok || !cliPageResult.page_evidence || !cliPageResult.comparison) {
+  fail(`CLI analyze-page unexpected: ${cliPage.stdout.slice(0, 400)}`);
+}
+if (cliPageResult.transport_calls !== 0) {
+  fail("CLI analyze-page disclose-refused must set transport_calls: 0");
+}
+if (cliPageResult.network_used !== false) {
+  fail("CLI analyze-page network_used must be false");
+}
+if (cliPageResult.repair_authorized !== false) {
+  fail("CLI analyze-page repair_authorized must be false");
+}
+if (cliPageResult.target_mutated !== false) {
+  fail("CLI analyze-page target_mutated must be false");
+}
+if (cliPageResult.comparison.applicability !== "applicable_candidate") {
+  fail(
+    `CLI analyze-page expected applicable_candidate; got ${cliPageResult.comparison.applicability}`,
+  );
+}
+
+const pageEnvelopeObj = JSON.parse(fs.readFileSync(pageEnvelopeDest, "utf8"));
+const mcpPageResult = await new Promise((resolve, reject) => {
+  const child = spawn(mcpCommand, mcpArgs, {
+    cwd: mcpCwd,
+    stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, NO_COLOR: "1" },
+  });
+  let buf = "";
+  const timer = setTimeout(() => {
+    child.kill();
+    reject(new Error("MCP analyze-page smoke timeout"));
+  }, 10000);
+  timer.unref?.();
+
+  child.stdout.on("data", (chunk) => {
+    buf += chunk.toString("utf8");
+    let idx;
+    while ((idx = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+      if (!line.trim()) continue;
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (msg.id === 1 && msg.result) {
+        child.stdin.write(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 2,
+            method: "tools/call",
+            params: {
+              name: "changeguard_analyze_page",
+              arguments: {
+                target: pageTargetDest,
+                envelope: pageEnvelopeObj,
+                disclosure_decision: "refused",
+              },
+            },
+          }) + "\n",
+        );
+      }
+      if (msg.id === 2) {
+        clearTimeout(timer);
+        child.kill();
+        if (msg.error) {
+          reject(new Error(JSON.stringify(msg.error)));
+          return;
+        }
+        resolve(
+          msg.result?.structuredContent ??
+            JSON.parse(msg.result?.content?.[0]?.text ?? "null"),
+        );
+      }
+    }
+  });
+  child.on("error", reject);
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "package-smoke-page", version: "0.1.0" },
+      },
+    }) + "\n",
+  );
+  child.stdin.write(
+    JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) +
+      "\n",
+  );
+});
+
+if (!mcpPageResult || !mcpPageResult.ok || !mcpPageResult.comparison) {
+  fail(`MCP analyze-page unexpected: ${JSON.stringify(mcpPageResult)}`);
+}
+if (mcpPageResult.transport_calls !== 0) {
+  fail("MCP analyze-page refuse must set transport_calls: 0");
+}
+if (
+  mcpPageResult.comparison.applicability !==
+  cliPageResult.comparison.applicability
+) {
+  fail("CLI/MCP analyze-page applicability must match");
+}
+if (
+  mcpPageResult.page_evidence?.content_sha256 !==
+  cliPageResult.page_evidence?.content_sha256
+) {
+  fail("CLI/MCP analyze-page content_sha256 must match");
+}
+
 // Hook manifest discovery + entrypoint existence (packaged SessionStart contract).
 const hooksManifestPath = path.join(packageDir, "hooks", "hooks.json");
 if (!fs.existsSync(hooksManifestPath)) {

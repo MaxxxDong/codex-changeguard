@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "url": "https://github.com/openai/codex/issues/99901",
+  "page_mode": "public",
+  "visible_title": "Windows Codex crash with chrome.dll",
+  "visible_text": "On Windows 11 Codex Desktop crashes with 0xC0000005 CrBrowserMain chrome.dll+0x2e08f46 after DOM-ready.\nTypeError is not involved. Platform is Windows.\nWorkaround: disable SecureLink and move install to SSD.\n",
+  "metadata": {
+    "host": "github.com",
+    "content_type": "text/html"
+  }
+}

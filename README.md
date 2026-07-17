@@ -29,7 +29,7 @@ ChangeGuard is not a generic changelog summarizer, Issue chatbot, environment do
 - [Schemas](schemas/)
 - [Synthetic fixtures](fixtures/)
 
-## Public surfaces (Tickets 01–04)
+## Public surfaces (Tickets 01–05, plus integrated 07–09)
 
 Rescue CLI and MCP share the same cores. A clean source checkout is not runnable
 until dependencies are installed and the project is built (or packaged):
@@ -44,6 +44,7 @@ npm run package:smoke
 node bin/changeguard.js diagnose fixtures/protected-process
 node bin/changeguard.js diagnose fixtures/negative-control
 node bin/changeguard.js diagnose fixtures/crash-family/access-violation-crbrowser
+node bin/changeguard.js analyze-page fixtures/protected-process --envelope=fixtures/page-evidence/valid-protected-process.json --disclose-refused
 ```
 
 Implemented public commands (repository wrapper: `node bin/changeguard.js …`):
@@ -52,10 +53,11 @@ Implemented public commands (repository wrapper: `node bin/changeguard.js …`):
 | --- | --- | --- |
 | Diagnose (Ticket 01) | `changeguard diagnose <target>` | `changeguard_diagnose` |
 | Impact Card (Ticket 04) | `changeguard impact <target> [--disclose-approved\|--disclose-refused]` | `changeguard_impact` |
+| Page analysis (Ticket 05) | `changeguard analyze-page <target> --envelope=<page.json> [--disclose-…]` | `changeguard_analyze_page` |
 | Repair (Ticket 02) | `repair-preview` / `repair-apply` / `verify` / `rollback` | `changeguard_repair_*` / `changeguard_verify` / `changeguard_rollback` |
 | Instances (Ticket 03) | `scan` / `scan-system` / `session-start` | `changeguard_scan` / `changeguard_scan_system` / `changeguard_session_start` |
 
-- Skill: `/changeguard diagnose`, `/changeguard impact`, `/changeguard scan`, and repair-preview orchestration use the same seams (`skills/changeguard/SKILL.md`)
+- Skill: `/changeguard diagnose`, `/changeguard diagnose <URL>` (analyze-page), `/changeguard impact`, `/changeguard scan`, and repair-preview orchestration use the same seams (`skills/changeguard/SKILL.md`)
 - Package: `npm run package` writes `release/codex-changeguard-plugin/` with the exact public top-level surface (compiled JS + manifest + MCP + Skill + hooks + fixtures + public docs + schemas; no `node_modules`, `AGENTS.md`, `HANDOFF.md`, or `docs/agents`); packaged README drops the repository-only handoff link; `package:smoke` launches MCP via packaged `.mcp.json` and checks local Markdown links
 
 ### Read-only diagnosis (Ticket 01)
@@ -98,6 +100,14 @@ allows local snapshot Impact Cards. Production CLI/MCP do not open network socke
 default; Change-to-Local Graph edges are deterministic only; unmapped changes are
 labeled `UNMAPPED_CHANGE` without declaring an entire version unsupported.
 
+### Untrusted page / URL diagnosis (Ticket 05)
+
+Orchestrator-supplied page envelopes (URL + sanitized visible content) are analyzed
+against the local incident fingerprint. Page text is quarantined untrusted data;
+commands become candidate-only Repair DSL and never authorize apply. Logged-page mode
+never reads cookies, storage, tokens, or full browser requests. Generic ChatGPT or
+account/session pages are hard-gated away from Codex component defects.
+
 ### Desktop Browser crash-family classifier (Ticket 09)
 
 Sanitized Windows crash fixtures under `fixtures/crash-family/` fork distinct
@@ -116,8 +126,8 @@ rollback; managed policy targets return `ADMIN_ACTION_REQUIRED` without bypass g
 
 ## Plugin surfaces
 
-- Skill commands for update scanning, incident diagnosis, Impact Card, and recovery preview
-- A local-facts MCP server with explicit tool approval (`changeguard_diagnose`, `changeguard_impact`, repair/scan tools)
+- Skill commands for update scanning, incident diagnosis, page analysis, Impact Card, and recovery preview
+- A local-facts MCP server with explicit tool approval (`changeguard_diagnose`, `changeguard_impact`, `changeguard_analyze_page`, repair/scan tools)
 - An optional trusted `SessionStart` hook that notices version-fingerprint changes (Ticket 03)
 - A manual scan path that always works when hooks are disabled or untrusted
 

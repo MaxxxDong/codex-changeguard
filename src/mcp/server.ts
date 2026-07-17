@@ -2,7 +2,8 @@
  * ChangeGuard MCP server — shared core with Rescue CLI.
  * Tools: diagnose (read-only) + Ticket 02 recovery tools (authorized mutation
  * only under an isolated target via registered recovery operations) + Ticket 03
- * multi-instance scan / SessionStart tools (state writes only under PLUGIN_DATA).
+ * multi-instance scan / SessionStart tools (state writes only under PLUGIN_DATA)
+ * + Ticket 05 untrusted page-evidence analysis (orchestrator-supplied envelope).
  *
  * Wire protocol: newline-delimited JSON-RPC 2.0 over stdio.
  * Request frames are accumulated as bounded bytes (not unbounded readline).
@@ -24,9 +25,16 @@ import type { DisclosureDecision } from "../evidence/types.js";
 import { scanInstances } from "../instances/scan.js";
 import type { HookTrustState, ScanResult } from "../instances/types.js";
 import { runSessionStart } from "../hooks/session-start.js";
+import { analyzePage } from "../page/analyze.js";
+import type {
+  PageAnalysisResult,
+  PageDisclosureDecision,
+} from "../page/types.js";
+import { MAX_PAGE_ENVELOPE_BYTES } from "../page/limits.js";
 
 const TOOL_DIAGNOSE = "changeguard_diagnose";
 const TOOL_IMPACT = "changeguard_impact";
+const TOOL_ANALYZE_PAGE = "changeguard_analyze_page";
 const TOOL_REPAIR_PREVIEW = "changeguard_repair_preview";
 const TOOL_REPAIR_APPLY = "changeguard_repair_apply";
 const TOOL_VERIFY = "changeguard_verify";
@@ -38,6 +46,7 @@ const TOOL_SESSION = "changeguard_session_start";
 const KNOWN_TOOLS = new Set([
   TOOL_DIAGNOSE,
   TOOL_IMPACT,
+  TOOL_ANALYZE_PAGE,
   TOOL_REPAIR_PREVIEW,
   TOOL_REPAIR_APPLY,
   TOOL_VERIFY,
@@ -116,6 +125,30 @@ function toolSchemas() {
             enum: ["approved", "refused", "not_requested"],
             description:
               "Disclosure authorization. Default not_requested. Approved without an injected transport uses the stale snapshot fallback.",
+          },
+        },
+      },
+    },
+    {
+      name: TOOL_ANALYZE_PAGE,
+      description:
+        "Analyze an orchestrator-supplied untrusted page-evidence envelope against a local isolated target fingerprint. Quarantines prompt injection; converts page commands only to candidate-only Repair DSL (never authorize/apply). Never reads cookies/storage/tokens. Production never injects page transport.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["target", "envelope"],
+        properties: {
+          target: targetProp,
+          envelope: {
+            type: "object",
+            description:
+              "Bounded page-evidence envelope: schema_version, url, page_mode, visible_title?, visible_text, metadata?. No cookies/tokens/storage/request fields.",
+          },
+          disclosure_decision: {
+            type: "string",
+            enum: ["approved", "refused", "not_requested"],
+            description:
+              "Disclosure for optional public page transport. Default not_requested. Production MCP never injects transport (transport_calls: 0).",
           },
         },
       },
@@ -246,7 +279,12 @@ function requireTarget(a: Record<string, unknown>): string {
 }
 
 function handleToolsCall(params: unknown): {
-  payload: DiagnosisResult | ImpactAssessmentResult | RepairResult | ScanResult;
+  payload:
+    | DiagnosisResult
+    | ImpactAssessmentResult
+    | PageAnalysisResult
+    | RepairResult
+    | ScanResult;
   ok: boolean;
 } {
   if (!params || typeof params !== "object" || Array.isArray(params)) {
@@ -304,6 +342,58 @@ function handleToolsCall(params: unknown): {
     // MCP never injects a live transport — snapshot/stale path only.
     const payload = assessImpact({
       targetPath: target,
+      disclosure_decision,
+      transport: null,
+    });
+    return { payload, ok: payload.ok };
+  }
+
+  if (p.name === TOOL_ANALYZE_PAGE) {
+    const allowed = new Set(["target", "envelope", "disclosure_decision"]);
+    for (const k of Object.keys(a)) {
+      if (!allowed.has(k)) {
+        throw Object.assign(new Error("Unknown or extra arguments."), {
+          code: "EXTRA_ARGS",
+        });
+      }
+    }
+    const target = requireTarget(a);
+    if (a.envelope === undefined || a.envelope === null) {
+      throw Object.assign(new Error("Invalid envelope."), {
+        code: "INVALID_ARGS",
+      });
+    }
+    // Bound serialized envelope size before analysis.
+    let envelopeSerialized: string;
+    try {
+      envelopeSerialized = JSON.stringify(a.envelope);
+    } catch {
+      throw Object.assign(new Error("Invalid envelope."), {
+        code: "INVALID_ARGS",
+      });
+    }
+    if (Buffer.byteLength(envelopeSerialized, "utf8") > MAX_PAGE_ENVELOPE_BYTES) {
+      throw Object.assign(new Error("Page envelope exceeds size limit."), {
+        code: "SIZE_LIMIT",
+      });
+    }
+    let disclosure_decision: PageDisclosureDecision = "not_requested";
+    if (a.disclosure_decision !== undefined) {
+      if (
+        a.disclosure_decision !== "approved" &&
+        a.disclosure_decision !== "refused" &&
+        a.disclosure_decision !== "not_requested"
+      ) {
+        throw Object.assign(new Error("Invalid disclosure_decision."), {
+          code: "INVALID_ARGS",
+        });
+      }
+      disclosure_decision = a.disclosure_decision;
+    }
+    // MCP never injects a live page transport — no hidden network.
+    const payload = analyzePage({
+      targetPath: target,
+      envelope: a.envelope,
       disclosure_decision,
       transport: null,
     });

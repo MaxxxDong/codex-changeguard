@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "url": "https://github.com/openai/codex/issues/32925",
+  "page_mode": "public",
+  "visible_title": "Codex browser-control protected process binding failure",
+  "visible_text": "On macOS Codex Desktop browser_control fails before extension handshake with TypeError: protected global process binding rejected assignment.\nStack: browser-client.mjs module_initialization js.global-process-shim-redefinition.v1\nWorkaround: remove the protected-process shim from browser-client.mjs\n```bash\n# remove globalThis.process shim block\n```\nConclusion: this is caused by the global process shim redefinition.\n",
+  "metadata": {
+    "host": "github.com",
+    "content_type": "text/html",
+    "source_label": "official_issue_page"
+  }
+}

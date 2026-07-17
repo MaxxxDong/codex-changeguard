@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "url": "https://chatgpt.com/",
+  "page_mode": "logged_visible",
+  "visible_title": "ChatGPT session expired",
+  "visible_text": "Your ChatGPT session expired. Please log in again.\nMaybe related to changing IP addresses or VPN.\nAccount subscription page shows billing notice.\n",
+  "metadata": {
+    "host": "chatgpt.com",
+    "content_type": "text/html"
+  }
+}

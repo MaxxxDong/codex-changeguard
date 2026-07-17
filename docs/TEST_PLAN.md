@@ -191,6 +191,21 @@ Black-box and contract coverage in `tests/ticket04-evidence-impact.test.ts`:
 - observed_facts / user_reports / hypotheses separated on public outputs
 - adversarial integrity matrix: missing/mismatched snapshot hash; item title/structured/state tamper with old hash; forged origin/allowlist; null version endpoints and wrong version; ancient/future `fetched_at`; API/raw URL forms; refusal zero transport
 
+## Ticket 05 Scenario Harness (untrusted page / URL diagnosis)
+
+Black-box and contract coverage in `tests/ticket05-page-analysis.test.ts`:
+
+- valid candidate page vs protected-process local fingerprint → `applicable_candidate` with confidence cap; DSL candidates only
+- wrong platform hard gate → `wrong_platform`, confidence `none`, not eligible for repair validation
+- prompt injection / agent instructions / exfil commands quarantined; `policy_mutations_blocked`; no repair authorization
+- unsupported/no-evidence assertion → `unsupported_assertion`
+- logged-page privacy boundary: clean `logged_visible` works; cookie/storage/token/auth/request fields refused
+- ChatGPT / session / account page → `chatgpt_out_of_scope`
+- malformed JSON, oversized visible_text, extra keys, URL userinfo fail closed
+- CLI/MCP `analyze-page` / `changeguard_analyze_page` stable-field equivalence; target tree hash unchanged
+- disclosure refused/not_requested → zero page transport calls; logged_visible never transports; approved requires injection
+- wrong mechanism (non-matching stack) → `wrong_mechanism`; destructive shell DSL not eligible for validation
+
 ## Initial commands
 
 ```bash
@@ -207,6 +222,8 @@ node bin/changeguard.js diagnose fixtures/protected-process
 node bin/changeguard.js diagnose fixtures/negative-control
 node bin/changeguard.js diagnose fixtures/crash-family/access-violation-crbrowser
 node bin/changeguard.js impact fixtures/impact-local --disclose-refused
+# Ticket 05 (orchestrator-supplied page envelope; no hidden network):
+# node bin/changeguard.js analyze-page fixtures/protected-process --envelope=fixtures/page-evidence/valid-protected-process.json --disclose-refused
 # Ticket 02 (isolated disposable copy only):
 # node bin/changeguard.js repair-preview <isolated-target>
 # node bin/changeguard.js repair-apply <isolated-target> <authorization_binding>

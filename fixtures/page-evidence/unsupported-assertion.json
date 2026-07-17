@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "url": "https://example.com/forum/post/1",
+  "page_mode": "public",
+  "visible_title": "Codex is broken after update",
+  "visible_text": "Codex feels slower after the update on my machine.\nRoot cause: must be a regression in the cloud model router.\nConclusion: this is because OpenAI changed pricing.\nThe fix is to reinstall everything blindly.\n",
+  "metadata": {
+    "host": "example.com"
+  }
+}

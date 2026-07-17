@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "url": "https://github.com/openai/codex/issues/32925",
+  "page_mode": "logged_visible",
+  "visible_title": "Logged-in visible issue body only",
+  "visible_text": "macOS browser_control TypeError protected global process binding rejected assignment before extension handshake. js.global-process-shim-redefinition.v1 browser-client.mjs\nWorkaround: remove the protected-process shim\n",
+  "metadata": {
+    "host": "github.com",
+    "source_label": "orchestrator_visible_dom"
+  }
+}
