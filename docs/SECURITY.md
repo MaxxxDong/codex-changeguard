@@ -36,7 +36,7 @@ These values are not sent to GPT-5.6, included in an exported repro pack, or wri
 
 ## Disclosure manifest
 
-Before any model request or repro export, ChangeGuard presents a manifest containing:
+Before any model request, official evidence refresh, or repro export, ChangeGuard presents a manifest containing:
 
 - exact field names leaving the device
 - source and trust class for each field
@@ -44,7 +44,17 @@ Before any model request or repro export, ChangeGuard presents a manifest contai
 - destination and purpose
 - whether the operation is optional
 
-Refusal must not block local deterministic probes. The result becomes `INSUFFICIENT_LOCAL_FACTS` only when a declined field is genuinely required for a requested model hypothesis.
+Refusal must not block local deterministic probes or local snapshot Impact Card diagnosis. Official evidence transport is never called when disclosure is `refused` or `not_requested` (`transport_calls: 0`). Absolute paths, tokens/secrets, and raw logs/sessions are listed as `device_only` / `never_sent`. The result becomes `INSUFFICIENT_LOCAL_FACTS` only when a declined field is genuinely required for a requested model hypothesis.
+
+### Ticket 04 official-evidence transport boundary
+
+- Production core exposes an injectable `OfficialTransport` interface only; it does not import `http`/`https`/`fetch` or open sockets.
+- Live refresh requires disclosure `approved` **and** an orchestration-injected transport. CLI/MCP never inject a network transport; approved-without-transport uses the timestamped immutable snapshot with stale age/risk labels.
+- Disclosure manifest non-`device_only` fields exactly match the sanitized outbound request key set. Request is built only from populated sendable local context (version, surface, platform/arch, config key names, feature ids, error class) plus fixed official allowlist metadata. Absolute paths, tokens/secrets, raw logs/sessions, and project source are device-only exclusions and never appear on the request. Refusal/`not_requested` keeps zero transport calls.
+- Snapshot and item `content_sha256` use a single canonical persisted hash contract and fail closed on missing/malformed/mismatch. Item origin is always derived from the validated canonical URL; forged origin and foreign `origin_allowlist` values fail closed.
+- Upstream allowlists enforce official hosts (`github.com`, `api.github.com`, `raw.githubusercontent.com`) and `openai/codex` only, including the three official URL forms. Userinfo and non-default ports are rejected; fragments and query strings are stripped from the canonical resource URL (no query-secret retention). Non-allowlisted URLs fail closed (refresh falls back to stale snapshot rather than accepting foreign evidence).
+- Transport `fetched_at` must be valid ISO-8601 UTC with bounded future skew; ancient/high-stale responses cannot be labeled `fresh`/`live_refresh`.
+- Release prose, Issue/PR/comment/commit bodies are untrusted: quarantine instruction-like content; never execute or interpolate as instructions; never accept code/commands/patches from them; preserve `maintainer_status` separately.
 
 ## Untrusted upstream content
 

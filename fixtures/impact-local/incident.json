@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "codex_version": "0.50.0",
+  "build_sha": null,
+  "surface": "browser_control",
+  "platform": {
+    "os": "macos",
+    "arch": "arm64",
+    "sandbox_class": null
+  },
+  "failure_phase": "extension_handshake",
+  "error": {
+    "class": "TypeError",
+    "normalized_message": "Cannot assign to read only property process",
+    "message_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "stack_frames": [
+    {
+      "module": null,
+      "file": "browser-client.mjs",
+      "symbol": null,
+      "line_bucket": 10
+    }
+  ],
+  "config_keys": [
+    "shell_environment_policy.set",
+    "model"
+  ],
+  "feature_ids": [
+    "browser_control",
+    "plugin:cache-manager",
+    "skill:changeguard",
+    "mcp:changeguard",
+    "hook:session-start"
+  ],
+  "artifact_hashes": [
+    {
+      "path_alias": "BROWSER_CLIENT_COPY_A",
+      "sha256": "33af4a7ad7a4ec2d18cb928a2ef69922e69031007dd07672334c5fe45faec48f"
+    }
+  ],
+  "ast_signature_ids": [],
+  "local_facts_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+}

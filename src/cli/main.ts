@@ -2,6 +2,7 @@
  * ChangeGuard Rescue CLI — public seams share one core with MCP.
  * Commands:
  *   changeguard diagnose <isolated-target>
+ *   changeguard impact <isolated-target> [--disclose-approved|--disclose-refused]
  *   changeguard repair-preview <isolated-target>
  *   changeguard repair-apply <isolated-target> <authorization-token>
  *   changeguard verify <isolated-target>
@@ -18,8 +19,11 @@ import {
   verifyRepair,
 } from "../core/recovery/index.js";
 import { assertNoLeakPaths, redactText } from "../core/redact.js";
+import { assessImpact } from "../impact/assess.js";
 import type { DiagnosisResult } from "../core/types.js";
 import type { RepairResult } from "../core/recovery/types.js";
+import type { DisclosureDecision } from "../evidence/types.js";
+import type { ImpactAssessmentResult } from "../impact/types.js";
 import { scanInstances } from "../instances/scan.js";
 import type { HookTrustState, ScanResult } from "../instances/types.js";
 import { runSessionStart } from "../hooks/session-start.js";
@@ -50,7 +54,7 @@ function usageDiagnosis(): DiagnosisResult {
     evidence: [],
     error_code: "USAGE",
     error_message:
-      "Usage: changeguard diagnose|repair-preview|repair-apply|verify|rollback|scan|scan-system|session-start …",
+      "Usage: changeguard diagnose|impact|repair-preview|repair-apply|verify|rollback|scan|scan-system|session-start …",
     network_used: false,
     target_mutated: false,
     repair_applied: false,
@@ -209,6 +213,60 @@ function runSession(inventoryRoot: string, hookTrust: HookTrustState): void {
   }
 }
 
+function parseImpactArgs(rest: string[]): {
+  target: string;
+  disclosure_decision: DisclosureDecision;
+} | null {
+  if (rest.length === 0) return null;
+  let disclosure_decision: DisclosureDecision = "not_requested";
+  const positional: string[] = [];
+  for (const a of rest) {
+    if (a === "--disclose-approved") {
+      disclosure_decision = "approved";
+      continue;
+    }
+    if (a === "--disclose-refused") {
+      disclosure_decision = "refused";
+      continue;
+    }
+    if (a.startsWith("-")) {
+      return null;
+    }
+    positional.push(a);
+  }
+  if (positional.length !== 1) return null;
+  return { target: positional[0]!, disclosure_decision };
+}
+
+function runImpact(
+  target: string,
+  disclosure_decision: DisclosureDecision,
+): void {
+  try {
+    // CLI never injects a live network transport. Approved without transport
+    // falls back to the timestamped immutable snapshot with stale labels.
+    const result: ImpactAssessmentResult = assessImpact({
+      targetPath: target,
+      disclosure_decision,
+      transport: null,
+    });
+    printJson(result, result.ok ? 0 : 1);
+  } catch {
+    printJson(
+      {
+        schema_version: 1,
+        ok: false,
+        error_code: "INTERNAL",
+        error_message: "Impact assessment failed.",
+        network_used: false,
+        target_mutated: false,
+        repair_applied: false,
+      },
+      1,
+    );
+  }
+}
+
 export function runCli(argv: string[]): void {
   const args = argv.slice(2);
   if (args.length === 0) {
@@ -223,6 +281,15 @@ export function runCli(argv: string[]): void {
       }
       const result = diagnose(rest[0]!);
       printJson(result, result.ok ? 0 : 1);
+    }
+
+    if (cmd === "impact") {
+      const parsed = parseImpactArgs(rest);
+      if (!parsed) {
+        printJson(usageDiagnosis(), 2);
+      }
+      runImpact(parsed.target, parsed.disclosure_decision);
+      return;
     }
 
     if (cmd === "repair-preview") {

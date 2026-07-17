@@ -1,0 +1,377 @@
+{
+  "schema_version": 1,
+  "snapshot_id": "bundled_official_2026-07-01",
+  "fetched_at": "2026-07-01T00:00:00.000Z",
+  "origin_allowlist": [
+    "https://github.com/openai/codex",
+    "https://api.github.com/repos/openai/codex",
+    "https://raw.githubusercontent.com/openai/codex"
+  ],
+  "items": [
+    {
+      "schema_version": 1,
+      "kind": "release",
+      "canonical_url": "https://github.com/openai/codex/releases/tag/rust-v0.50.0",
+      "origin": "https://github.com/openai/codex",
+      "fetched_at": "2026-07-01T00:00:00.000Z",
+      "version_range": {
+        "from": "0.49.0",
+        "to": "0.50.0"
+      },
+      "evidence_state": "snapshot",
+      "snapshot_id": "bundled_official_2026-07-01",
+      "title": "rust-v0.50.0",
+      "structured": {
+        "config_keys": [],
+        "component_ids": [],
+        "surfaces": [
+          "cli",
+          "desktop"
+        ],
+        "artifact_aliases": [],
+        "platforms": [],
+        "summary_tokens": [
+          "release",
+          "0.50.0"
+        ],
+        "has_registered_mapper": true
+      },
+      "maintainer_status": "official",
+      "quarantine": null,
+      "evidence_id": "ev_release_0.50.0",
+      "content_sha256": "d6baa84959e55d2ff20e36a9ea3d0ecee77b1f430c0505a54ef5909f82adb9ef"
+    },
+    {
+      "schema_version": 1,
+      "kind": "tag",
+      "canonical_url": "https://github.com/openai/codex/releases/tag/rust-v0.50.0",
+      "origin": "https://github.com/openai/codex",
+      "fetched_at": "2026-07-01T00:00:00.000Z",
+      "version_range": {
+        "from": null,
+        "to": "0.50.0"
+      },
+      "evidence_state": "snapshot",
+      "snapshot_id": "bundled_official_2026-07-01",
+      "title": "tag rust-v0.50.0",
+      "structured": {
+        "config_keys": [],
+        "component_ids": [],
+        "surfaces": [],
+        "artifact_aliases": [],
+        "platforms": [],
+        "summary_tokens": [
+          "tag"
+        ],
+        "has_registered_mapper": true
+      },
+      "maintainer_status": "official",
+      "quarantine": null,
+      "evidence_id": "ev_tag_0.50.0",
+      "content_sha256": "cd24d83a56fff9cb4c78824e8f24c9e29dcc9587cc2320d03f35d9e3807af74f"
+    },
+    {
+      "schema_version": 1,
+      "kind": "commit",
+      "canonical_url": "https://github.com/openai/codex/commit/abc123def4567890abc123def4567890abc123de",
+      "origin": "https://github.com/openai/codex",
+      "fetched_at": "2026-07-01T00:00:00.000Z",
+      "version_range": {
+        "from": "0.49.0",
+        "to": "0.50.0"
+      },
+      "evidence_state": "snapshot",
+      "snapshot_id": "bundled_official_2026-07-01",
+      "title": "adjust shell_environment_policy schema",
+      "structured": {
+        "config_keys": [
+          "shell_environment_policy.set",
+          "model_provider"
+        ],
+        "component_ids": [],
+        "surfaces": [
+          "cli"
+        ],
+        "artifact_aliases": [],
+        "platforms": [],
+        "summary_tokens": [
+          "config",
+          "schema"
+        ],
+        "has_registered_mapper": true
+      },
+      "maintainer_status": "official",
+      "quarantine": null,
+      "evidence_id": "ev_commit_config_shell",
+      "content_sha256": "e5c910be6ae7984b3802f6207ff5a32fc72053a598df03edc1860dde7abec9c0"
+    },
+    {
+      "schema_version": 1,
+      "kind": "diff",
+      "canonical_url": "https://github.com/openai/codex/compare/rust-v0.49.0...rust-v0.50.0",
+      "origin": "https://github.com/openai/codex",
+      "fetched_at": "2026-07-01T00:00:00.000Z",
+      "version_range": {
+        "from": "0.49.0",
+        "to": "0.50.0"
+      },
+      "evidence_state": "snapshot",
+      "snapshot_id": "bundled_official_2026-07-01",
+      "title": "browser-client protected process surface",
+      "structured": {
+        "config_keys": [],
+        "component_ids": [
+          "browser_control"
+        ],
+        "surfaces": [
+          "browser_control"
+        ],
+        "artifact_aliases": [
+          "BROWSER_CLIENT_COPY_A"
+        ],
+        "platforms": [],
+        "summary_tokens": [
+          "browser",
+          "shim"
+        ],
+        "has_registered_mapper": true
+      },
+      "maintainer_status": "official",
+      "quarantine": null,
+      "evidence_id": "ev_diff_browser_client",
+      "content_sha256": "eeb1ccc7913c4a8489c1e1de3919c4cc93bdd0de2eec87dc680c80a67aeed7d7"
+    },
+    {
+      "schema_version": 1,
+      "kind": "pr",
+      "canonical_url": "https://github.com/openai/codex/pull/33001",
+      "origin": "https://github.com/openai/codex",
+      "fetched_at": "2026-07-01T00:00:00.000Z",
+      "version_range": {
+        "from": "0.49.0",
+        "to": "0.50.0"
+      },
+      "evidence_state": "snapshot",
+      "snapshot_id": "bundled_official_2026-07-01",
+      "title": "plugin cache reconciliation",
+      "structured": {
+        "config_keys": [],
+        "component_ids": [
+          "plugin:cache-manager",
+          "skill:changeguard"
+        ],
+        "surfaces": [
+          "plugin"
+        ],
+        "artifact_aliases": [],
+        "platforms": [],
+        "summary_tokens": [
+          "plugin",
+          "cache"
+        ],
+        "has_registered_mapper": true
+      },
+      "maintainer_status": "maintainer",
+      "quarantine": null,
+      "evidence_id": "ev_pr_plugin_cache",
+      "content_sha256": "e0af6d24c43b9dd9f5e71600521d3414fc6e266492780d1a32a50a6cd3e968c3"
+    },
+    {
+      "schema_version": 1,
+      "kind": "issue",
+      "canonical_url": "https://github.com/openai/codex/issues/32925",
+      "origin": "https://github.com/openai/codex",
+      "fetched_at": "2026-07-01T00:00:00.000Z",
+      "version_range": {
+        "from": null,
+        "to": null
+      },
+      "evidence_state": "snapshot",
+      "snapshot_id": "bundled_official_2026-07-01",
+      "title": "protected process TypeError in browser-client",
+      "structured": {
+        "config_keys": [],
+        "component_ids": [
+          "browser_control"
+        ],
+        "surfaces": [
+          "browser_control"
+        ],
+        "artifact_aliases": [
+          "BROWSER_CLIENT_COPY_A"
+        ],
+        "platforms": [],
+        "summary_tokens": [
+          "TypeError",
+          "process"
+        ],
+        "has_registered_mapper": true
+      },
+      "maintainer_status": "user_reported",
+      "quarantine": null,
+      "evidence_id": "ev_issue_32925",
+      "content_sha256": "1ecfc4694106202a809de97f869196cd60ed47632d12afcaa3a7c1ddc664b0a7"
+    },
+    {
+      "schema_version": 1,
+      "kind": "doc",
+      "canonical_url": "https://github.com/openai/codex/blob/main/docs/hooks.md",
+      "origin": "https://github.com/openai/codex",
+      "fetched_at": "2026-07-01T00:00:00.000Z",
+      "version_range": {
+        "from": null,
+        "to": null
+      },
+      "evidence_state": "snapshot",
+      "snapshot_id": "bundled_official_2026-07-01",
+      "title": "hooks documentation update",
+      "structured": {
+        "config_keys": [],
+        "component_ids": [
+          "hook:session-start"
+        ],
+        "surfaces": [
+          "desktop"
+        ],
+        "artifact_aliases": [],
+        "platforms": [],
+        "summary_tokens": [
+          "hooks"
+        ],
+        "has_registered_mapper": true
+      },
+      "maintainer_status": "official",
+      "quarantine": null,
+      "evidence_id": "ev_doc_hooks",
+      "content_sha256": "eb3ee2ec93f27f6f77d5a1a873d052e9a1ee416828a4d3c7fdbdfd587e9b2d42"
+    },
+    {
+      "schema_version": 1,
+      "kind": "release",
+      "canonical_url": "https://github.com/openai/codex/releases/tag/desktop-win-0.50.0",
+      "origin": "https://github.com/openai/codex",
+      "fetched_at": "2026-07-01T00:00:00.000Z",
+      "version_range": {
+        "from": null,
+        "to": "0.50.0"
+      },
+      "evidence_state": "snapshot",
+      "snapshot_id": "bundled_official_2026-07-01",
+      "title": "Windows MSIX-only packaging change",
+      "structured": {
+        "config_keys": [],
+        "component_ids": [],
+        "surfaces": [
+          "desktop"
+        ],
+        "artifact_aliases": [],
+        "platforms": [
+          "windows"
+        ],
+        "summary_tokens": [
+          "msix",
+          "windows"
+        ],
+        "has_registered_mapper": true
+      },
+      "maintainer_status": "official",
+      "quarantine": null,
+      "evidence_id": "ev_release_windows_msix",
+      "content_sha256": "ac31692ab78c37bd217cec647a5625ad7c253057076ed2180faefc95453dd0da"
+    },
+    {
+      "schema_version": 1,
+      "kind": "commit",
+      "canonical_url": "https://github.com/openai/codex/commit/ffffffffffffffffffffffffffffffffffffffff",
+      "origin": "https://github.com/openai/codex",
+      "fetched_at": "2026-07-01T00:00:00.000Z",
+      "version_range": {
+        "from": null,
+        "to": null
+      },
+      "evidence_state": "snapshot",
+      "snapshot_id": "bundled_official_2026-07-01",
+      "title": "app-server exclusive protocol tweak",
+      "structured": {
+        "config_keys": [],
+        "component_ids": [],
+        "surfaces": [
+          "app_server"
+        ],
+        "artifact_aliases": [],
+        "platforms": [],
+        "summary_tokens": [
+          "app_server"
+        ],
+        "has_registered_mapper": true
+      },
+      "maintainer_status": "official",
+      "quarantine": null,
+      "evidence_id": "ev_commit_app_server_only",
+      "content_sha256": "05b6a7d5dca9cbd9a310e3d87e389e4aeb3da4067c6e592dc0166b721bb4cf21"
+    },
+    {
+      "schema_version": 1,
+      "kind": "release",
+      "canonical_url": "https://github.com/openai/codex/releases/tag/notes-unmapped-0.50.0",
+      "origin": "https://github.com/openai/codex",
+      "fetched_at": "2026-07-01T00:00:00.000Z",
+      "version_range": {
+        "from": null,
+        "to": "0.50.0"
+      },
+      "evidence_state": "snapshot",
+      "snapshot_id": "bundled_official_2026-07-01",
+      "title": "unmapped marketing note without local mapper",
+      "structured": {
+        "config_keys": [],
+        "component_ids": [],
+        "surfaces": [],
+        "artifact_aliases": [],
+        "platforms": [],
+        "summary_tokens": [
+          "marketing"
+        ],
+        "has_registered_mapper": false
+      },
+      "maintainer_status": "official",
+      "quarantine": null,
+      "evidence_id": "ev_release_marketing_blurb",
+      "content_sha256": "5e16690f0e3c89fcfc14ce68d9bea1c38eedce150b9b52a350f9dedd19e2145c"
+    },
+    {
+      "schema_version": 1,
+      "kind": "issue",
+      "canonical_url": "https://github.com/openai/codex/issues/39999",
+      "origin": "https://github.com/openai/codex",
+      "fetched_at": "2026-07-01T00:00:00.000Z",
+      "version_range": {
+        "from": null,
+        "to": null
+      },
+      "evidence_state": "snapshot",
+      "snapshot_id": "bundled_official_2026-07-01",
+      "title": "<quarantined:title:ignore_instructions>",
+      "structured": {
+        "config_keys": [],
+        "component_ids": [],
+        "surfaces": [],
+        "artifact_aliases": [],
+        "platforms": [],
+        "summary_tokens": [],
+        "has_registered_mapper": false
+      },
+      "maintainer_status": "user_reported",
+      "quarantine": {
+        "quarantined": true,
+        "reason": "ignore_instructions",
+        "original_sha256": "914a4252697f7d0d818a9c1be9907e8ac4a72d4cbad10016a5f61bb9bc74a5eb",
+        "placeholder": "<quarantined:title:ignore_instructions>"
+      },
+      "evidence_id": "ev_issue_injection",
+      "content_sha256": "4c50bfdd89fe57adb900d6f6ef9cb3ed705c54a9185eb32356a9f0402d89c86c"
+    }
+  ],
+  "content_sha256": "11565768b91c9e9717225926e3df1d588473f05557ef1e26a214abade75d8a9a",
+  "immutable": true
+}

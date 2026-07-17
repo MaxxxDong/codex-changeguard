@@ -342,6 +342,168 @@ if (path.resolve(outside) === path.resolve(packageDir)) {
   fail("Smoke cwd must be outside package dir.");
 }
 
+// Ticket 04: packaged official-evidence snapshot asset must exist and parse.
+const snapshotPath = path.join(packageDir, "fixtures", "official-evidence", "snapshot.json");
+if (!fs.existsSync(snapshotPath)) {
+  fail("Package missing fixtures/official-evidence/snapshot.json");
+}
+let snapshot;
+try {
+  snapshot = JSON.parse(fs.readFileSync(snapshotPath, "utf8"));
+} catch {
+  fail("Packaged official-evidence snapshot is not valid JSON.");
+}
+if (snapshot.schema_version !== 1 || typeof snapshot.content_sha256 !== "string") {
+  fail("Packaged official-evidence snapshot missing schema_version/content_sha256.");
+}
+if (!Array.isArray(snapshot.items) || snapshot.items.length < 1) {
+  fail("Packaged official-evidence snapshot must contain items.");
+}
+if (typeof snapshot.fetched_at !== "string" || !snapshot.immutable) {
+  fail("Packaged official-evidence snapshot must be immutable with fetched_at.");
+}
+
+// Ticket 04: impact-local fixture + CLI/MCP impact equivalence (disclose-refused).
+const impactSrc = path.join(packageDir, "fixtures", "impact-local");
+if (!fs.existsSync(path.join(impactSrc, "incident.json"))) {
+  fail("Package missing fixtures/impact-local/incident.json");
+}
+const impactDest = path.join(outside, "impact-local");
+fs.cpSync(impactSrc, impactDest, { recursive: true });
+
+const cliImpact = spawnSync(
+  process.execPath,
+  [
+    path.join(packageDir, "bin/changeguard.js"),
+    "impact",
+    impactDest,
+    "--disclose-refused",
+  ],
+  {
+    cwd: outside,
+    encoding: "utf8",
+    env: { ...process.env, NO_COLOR: "1" },
+  },
+);
+if (cliImpact.status !== 0) {
+  fail(
+    `CLI impact smoke failed status=${cliImpact.status}\n${cliImpact.stdout}\n${cliImpact.stderr}`,
+  );
+}
+const cliImpactResult = JSON.parse(cliImpact.stdout);
+if (!cliImpactResult.ok || !cliImpactResult.impact_card) {
+  fail(`CLI impact unexpected: ${cliImpact.stdout.slice(0, 400)}`);
+}
+if (cliImpactResult.impact_card.transport_calls !== 0) {
+  fail("CLI impact disclose-refused must set transport_calls: 0");
+}
+if (cliImpactResult.impact_card.network_used !== false) {
+  fail("CLI impact network_used must be false");
+}
+if (cliImpactResult.impact_card.disclosure_decision !== "refused") {
+  fail("CLI impact disclosure_decision must be refused");
+}
+if (
+  typeof cliImpactResult.impact_card.snapshot_content_sha256 !== "string" ||
+  cliImpactResult.impact_card.snapshot_content_sha256.length !== 64
+) {
+  fail("CLI impact must return snapshot_content_sha256");
+}
+
+const mcpImpactResult = await new Promise((resolve, reject) => {
+  const child = spawn(mcpCommand, mcpArgs, {
+    cwd: mcpCwd,
+    stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, NO_COLOR: "1" },
+  });
+  let buf = "";
+  const timer = setTimeout(() => {
+    child.kill();
+    reject(new Error("MCP impact smoke timeout"));
+  }, 10000);
+  timer.unref?.();
+
+  child.stdout.on("data", (chunk) => {
+    buf += chunk.toString("utf8");
+    let idx;
+    while ((idx = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+      if (!line.trim()) continue;
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (msg.id === 1 && msg.result) {
+        child.stdin.write(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 2,
+            method: "tools/call",
+            params: {
+              name: "changeguard_impact",
+              arguments: {
+                target: impactDest,
+                disclosure_decision: "refused",
+              },
+            },
+          }) + "\n",
+        );
+      }
+      if (msg.id === 2) {
+        clearTimeout(timer);
+        child.kill();
+        if (msg.error) {
+          reject(new Error(JSON.stringify(msg.error)));
+          return;
+        }
+        resolve(
+          msg.result?.structuredContent ??
+            JSON.parse(msg.result?.content?.[0]?.text ?? "null"),
+        );
+      }
+    }
+  });
+  child.on("error", reject);
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "package-smoke-impact", version: "0.1.0" },
+      },
+    }) + "\n",
+  );
+  child.stdin.write(
+    JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) +
+      "\n",
+  );
+});
+
+if (!mcpImpactResult || !mcpImpactResult.ok || !mcpImpactResult.impact_card) {
+  fail(`MCP impact unexpected: ${JSON.stringify(mcpImpactResult)}`);
+}
+if (mcpImpactResult.impact_card.transport_calls !== 0) {
+  fail("MCP impact disclose-refused must set transport_calls: 0");
+}
+if (
+  mcpImpactResult.impact_card.snapshot_content_sha256 !==
+  cliImpactResult.impact_card.snapshot_content_sha256
+) {
+  fail("CLI/MCP impact snapshot_content_sha256 must match");
+}
+if (
+  mcpImpactResult.impact_card.disclosure_decision !==
+  cliImpactResult.impact_card.disclosure_decision
+) {
+  fail("CLI/MCP impact disclosure_decision must match");
+}
+
 // Hook manifest discovery + entrypoint existence (packaged SessionStart contract).
 const hooksManifestPath = path.join(packageDir, "hooks", "hooks.json");
 if (!fs.existsSync(hooksManifestPath)) {

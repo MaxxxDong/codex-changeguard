@@ -18,11 +18,15 @@ import {
 import { assertNoLeakPaths, redactText } from "../core/redact.js";
 import type { DiagnosisResult } from "../core/types.js";
 import type { RepairResult } from "../core/recovery/types.js";
+import { assessImpact } from "../impact/assess.js";
+import type { ImpactAssessmentResult } from "../impact/types.js";
+import type { DisclosureDecision } from "../evidence/types.js";
 import { scanInstances } from "../instances/scan.js";
 import type { HookTrustState, ScanResult } from "../instances/types.js";
 import { runSessionStart } from "../hooks/session-start.js";
 
 const TOOL_DIAGNOSE = "changeguard_diagnose";
+const TOOL_IMPACT = "changeguard_impact";
 const TOOL_REPAIR_PREVIEW = "changeguard_repair_preview";
 const TOOL_REPAIR_APPLY = "changeguard_repair_apply";
 const TOOL_VERIFY = "changeguard_verify";
@@ -33,6 +37,7 @@ const TOOL_SESSION = "changeguard_session_start";
 
 const KNOWN_TOOLS = new Set([
   TOOL_DIAGNOSE,
+  TOOL_IMPACT,
   TOOL_REPAIR_PREVIEW,
   TOOL_REPAIR_APPLY,
   TOOL_VERIFY,
@@ -94,6 +99,25 @@ function toolSchemas() {
         additionalProperties: false,
         required: ["target"],
         properties: { target: targetProp },
+      },
+    },
+    {
+      name: TOOL_IMPACT,
+      description:
+        "Read-only official-evidence Impact Card for an isolated target. Builds a disclosure manifest first; refused disclosure uses the local snapshot and never calls transport. No network sockets in-process.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["target"],
+        properties: {
+          target: targetProp,
+          disclosure_decision: {
+            type: "string",
+            enum: ["approved", "refused", "not_requested"],
+            description:
+              "Disclosure authorization. Default not_requested. Approved without an injected transport uses the stale snapshot fallback.",
+          },
+        },
       },
     },
     {
@@ -222,7 +246,7 @@ function requireTarget(a: Record<string, unknown>): string {
 }
 
 function handleToolsCall(params: unknown): {
-  payload: DiagnosisResult | RepairResult | ScanResult;
+  payload: DiagnosisResult | ImpactAssessmentResult | RepairResult | ScanResult;
   ok: boolean;
 } {
   if (!params || typeof params !== "object" || Array.isArray(params)) {
@@ -251,6 +275,38 @@ function handleToolsCall(params: unknown): {
       });
     }
     const payload = diagnose(requireTarget(a));
+    return { payload, ok: payload.ok };
+  }
+
+  if (p.name === TOOL_IMPACT) {
+    const allowed = new Set(["target", "disclosure_decision"]);
+    for (const k of Object.keys(a)) {
+      if (!allowed.has(k)) {
+        throw Object.assign(new Error("Unknown or extra arguments."), {
+          code: "EXTRA_ARGS",
+        });
+      }
+    }
+    const target = requireTarget(a);
+    let disclosure_decision: DisclosureDecision = "not_requested";
+    if (a.disclosure_decision !== undefined) {
+      if (
+        a.disclosure_decision !== "approved" &&
+        a.disclosure_decision !== "refused" &&
+        a.disclosure_decision !== "not_requested"
+      ) {
+        throw Object.assign(new Error("Invalid disclosure_decision."), {
+          code: "INVALID_ARGS",
+        });
+      }
+      disclosure_decision = a.disclosure_decision;
+    }
+    // MCP never injects a live transport — snapshot/stale path only.
+    const payload = assessImpact({
+      targetPath: target,
+      disclosure_decision,
+      transport: null,
+    });
     return { payload, ok: payload.ok };
   }
 

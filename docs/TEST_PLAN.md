@@ -118,6 +118,24 @@ Implemented in `tests/instance-scan.test.ts` (public CLI/MCP + shared core):
 - ambiguous multi-instance refuses repair binding; broadcast refused
 - CLI/MCP scan stable-field consistency; raw-path non-disclosure; symlink state refused
 
+## Ticket 04 Scenario Harness (official evidence + Impact Card)
+
+Black-box and contract coverage in `tests/ticket04-evidence-impact.test.ts`:
+
+- disclosure manifest exact fields before any transport; non-device_only field set equals sanitized outbound request keys
+- disclosure refusal / not_requested → zero transport calls + bundled snapshot (snapshot hash + stale age/risk); `transport_request: null`
+- approved online refresh via deterministic **fake** transport (live snapshot, one call) with exact disclosed payload only
+- transport failure → stale immutable snapshot fallback with elevated stale risk
+- malicious upstream injection → quarantine; maintainer_status preserved; no execution
+- official host/repo allowlist rejection (userinfo, non-default port, github/api/raw forms, query secret strip)
+- Impact Card deterministic intersections only (config/plugin/skill/hook/artifact/version)
+- wrong local intersection → `REJECTED_WRONG_INTERSECTION`
+- no-mapper official change → `UNMAPPED_CHANGE` (not whole-version unsupported)
+- model edge-escalation payload refused; graph SHA unchanged
+- CLI `impact --disclose-refused` public seam; target tree hash unchanged; no path leaks
+- observed_facts / user_reports / hypotheses separated on public outputs
+- adversarial integrity matrix: missing/mismatched snapshot hash; item title/structured/state tamper with old hash; forged origin/allowlist; null version endpoints and wrong version; ancient/future `fetched_at`; API/raw URL forms; refusal zero transport
+
 ## Initial commands
 
 ```bash
@@ -132,6 +150,7 @@ node scripts/cli-hash-proof.mjs
 node scripts/check-production-boundary.mjs --self-test
 node bin/changeguard.js diagnose fixtures/protected-process
 node bin/changeguard.js diagnose fixtures/negative-control
+node bin/changeguard.js impact fixtures/impact-local --disclose-refused
 # Ticket 02 (isolated disposable copy only):
 # node bin/changeguard.js repair-preview <isolated-target>
 # node bin/changeguard.js repair-apply <isolated-target> <authorization_binding>

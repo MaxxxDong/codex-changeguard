@@ -48,10 +48,11 @@ Evidence-locked verdict + Recovery Capsule preview
 ### 2.1 Plugin surfaces
 
 - `skills/changeguard/`: user-facing orchestration instructions
-- `.mcp.json`: MCP server (`changeguard_diagnose`, recovery tools, `changeguard_scan`, `changeguard_scan_system`, `changeguard_session_start` → shared core)
-- `bin/changeguard.js` / `dist/cli/main.js`: Rescue CLI (`diagnose|repair-*|verify|rollback|scan|scan-system|session-start`)
+- `.mcp.json`: MCP server (`changeguard_diagnose`, `changeguard_impact`, recovery tools, `changeguard_scan`, `changeguard_scan_system`, `changeguard_session_start` → shared core)
+- `bin/changeguard.js` / `dist/cli/main.js`: Rescue CLI (`diagnose|impact|repair-*|verify|rollback|scan|scan-system|session-start`)
 - `src/core/diagnose.ts`: single shared diagnosis core used by CLI and MCP
 - `src/core/recovery/`: Ticket 02 isolated protected-process repair (preview/apply/verify/rollback)
+- `src/evidence/*` + `src/impact/*`: official evidence refresh/snapshot, Change-to-Local Graph, Impact Card (Ticket 04)
 - `src/instances/`: multi-instance enumeration, version-fingerprint state, affected-instance resolution, repair-target binding contract
 - `src/instances/system-adapter.ts`: production registered system enumeration (capability-injectable)
 - `src/hooks/`: trusted SessionStart core, packaged SessionStart entrypoint, bounded read-only health check
@@ -201,6 +202,25 @@ Allowed deterministic edge types:
 - probe -> observed local evidence
 
 GPT-5.6 can explain existing edges and compile hypotheses from them. It cannot call `add_edge`, change an evidence source's provenance, or upgrade a user report to an official statement.
+
+### 6.1 Ticket 04 official evidence refresh and Impact Card
+
+Public seams (in addition to Ticket 01 diagnose):
+
+1. `changeguard impact <isolated-target> [--disclose-approved|--disclose-refused]`
+2. MCP tool `changeguard_impact` with `{ target, disclosure_decision? }`
+
+Shared core: `src/impact/assess.ts` → `src/evidence/*` + deterministic matchers in `src/impact/*`.
+
+Contracts:
+
+- **Disclosure first:** `buildDisclosureManifest(local_context)` always runs before any transport use. Each field records `field_name`, `trust_class`, `source_class`, `transformation`, `destination`, `purpose`, and `optional`. The manifest's non-`device_only` field set is exactly the sanitized outbound `OfficialTransportRequest` key set (fixed allowlist metadata + only populated sendable local fields: version/surface/platform/config key names/feature ids/error class). Explicit device-only exclusions document paths/secrets/logs/sessions/source as never sent. `refused` / `not_requested` still load the bundled timestamped snapshot and set `transport_calls: 0` with `transport_request: null` (never invoke transport).
+- **Official evidence items** cover kinds `doc | release | tag | diff | issue | pr | commit` with `canonical_url`, derived `origin`, `fetched_at`, `version_range`, `evidence_state`, `content_sha256`, and `snapshot_id`. Item `content_sha256` is over canonical persisted material (kind/url/origin/title/structured/version_range/maintainer_status/evidence_state/quarantine) and is fail-closed on missing/malformed/mismatch. Snapshot `content_sha256` is over full validated items + metadata and is fail-closed (never silently recomputed). Serialized `origin` is never trusted; origin is derived from the validated URL and mismatches fail closed. `origin_allowlist` must be the exact official allowlist or an exact validated subset. Hosts/repos are allowlisted (`github.com` / `api.github.com` / `raw.githubusercontent.com` + `openai/codex` only); userinfo and non-default ports are rejected; fragments and query strings are stripped from the canonical resource URL. Schemas and sizes are bounded.
+- **Transport interface** (`OfficialTransport`) is injectable only by trusted orchestration after disclosure approval. The approved transport receives exactly the disclosed payload and nothing else. Production CLI/MCP never open sockets; they accept at most a disclosure decision and use the local snapshot (or stale fallback when approved without a transport). Scenario Harness proves online refresh with a deterministic **fake** transport and zero calls on refusal. Transport `fetched_at` is syntax- and future-skew-validated; ancient/high-stale responses cannot be labeled `fresh`/`live_refresh` (stale fallback; no fresh+high contradiction).
+- **Offline / transport failure:** immutable snapshot with `evidence_state: stale|snapshot`, `stale_age_seconds`, and `stale_risk` (`none|low|medium|high|unavailable`).
+- **Untrusted prose:** release notes, Issue/PR/comment/commit text are data. Instruction-like content is quarantined (`quarantine` record + placeholder); never executed, interpolated as instructions, or accepted as code/commands/patches. `maintainer_status` stays separate from quarantine.
+- **Change-to-Local Graph:** edges only from registered matchers (`version_tag_to_installed`, `config_key_intersection`, `component_to_feature`, `component_to_plugin_skill_mcp_hook`, `artifact_alias_intersection`, `surface_runtime_intersection`, `platform_intersection`). Version-range null endpoints are non-participating (not wildcards); both-null never creates a version edge. Model payloads cannot add/modify edges, provenance, confidence, or evidence state (`refuseModelGraphMutation`).
+- **Impact Card:** only changes with a deterministic intersection to the observed instance/config key/Plugin/Skill/MCP/Hook/runtime/artifact surface. Wrong intersections → `REJECTED_WRONG_INTERSECTION`. Changes without a registered mapper → `UNMAPPED_CHANGE` (does not mark the whole version unsupported). Public outputs separate `observed_facts`, `user_reports`, and `hypotheses`. Markers: `network_used: false`, `target_mutated: false`, `repair_applied: false`.
 
 ## 7. Probe contract
 
