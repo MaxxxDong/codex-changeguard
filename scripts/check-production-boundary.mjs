@@ -26,6 +26,19 @@
  * - network global capability references: fetch / WebSocket / XMLHttpRequest
  *   (alias, pass, bind, Reflect.apply, sequence, construct through alias — not only
  *   direct invocation; globalThis/global/window member and static-string element forms)
+ * - loader host surfaces: CommonJS `module` and `process.mainModule` as host
+ *   capabilities (alias/pass/return/computed); any statically named property or
+ *   element access whose terminal name is `require` (any receiver); `Reflect` as
+ *   a global meta capability (direct/member/alias/pass/construct) rather than
+ *   chasing Reflect.get/apply data flow
+ * - proven `node:fs` / `node:fs/promises` namespace values may not escape (alias,
+ *   pass, return, spread, Proxy/Object.create/assign argument, container store,
+ *   destructure source). Allowed only as the immediate root/receiver of a direct
+ *   static member chain under the read-only allowlist / conditional-open policy
+ *   (e.g. fs.readFileSync, fs.promises.readFile). Nested `fs.promises` may not
+ *   escape as a value either. Simple namespace aliasing is rejected even when a
+ *   later use would be read-only; named static imports of explicit read-only
+ *   methods remain the safe form.
  *
  * open/openSync are allowed only as a direct call through a proven `node:fs`
  * namespace (or simple namespace alias) with statically proven read-only flags.
@@ -173,6 +186,13 @@ const FORBIDDEN_CODE_EXEC_GLOBALS = new Set(["eval", "Function"]);
 /** Loader APIs forbidden even as named identifiers / imports. */
 const FORBIDDEN_LOADER_APIS = new Set(["createRequire", "require"]);
 
+/**
+ * Additional host/meta globals forbidden as capabilities in Ticket 01 production.
+ * `module` is the CommonJS module object (loader host); `Reflect` is forbidden
+ * wholesale so reflective get/apply loaders need not be tracked as data flow.
+ */
+const FORBIDDEN_HOST_META_GLOBALS = new Set(["module", "Reflect"]);
+
 /** String modes that open a path for reading only (Node.js). */
 const READ_ONLY_STRING_MODES = new Set(["r", "rs", "sr"]);
 
@@ -223,6 +243,8 @@ const FORBIDDEN_PROCESS_METHODS = new Set([
   "binding",
   "getBuiltinModule",
   "_linkedBinding",
+  // CommonJS main-module loader host; may not escape or chain to .require.
+  "mainModule",
 ]);
 
 function normalizeModuleSpec(spec) {
@@ -1105,7 +1127,8 @@ function isForbiddenGlobalCapabilityName(name) {
   return (
     FORBIDDEN_GLOBALS.has(name) ||
     FORBIDDEN_CODE_EXEC_GLOBALS.has(name) ||
-    FORBIDDEN_LOADER_APIS.has(name)
+    FORBIDDEN_LOADER_APIS.has(name) ||
+    FORBIDDEN_HOST_META_GLOBALS.has(name)
   );
 }
 
@@ -1220,6 +1243,68 @@ function isProcessObjectValueEscape(id) {
 }
 
 /**
+ * True when `expr` is a proven `fs` / `fs.promises` namespace used as a value
+ * (alias, pass, return, spread, Proxy/Object argument, container store), not as
+ * the immediate root/receiver of a direct static member chain
+ * (`fs.readFileSync`, `fs.promises.readFile`, `fs.constants.O_RDONLY`).
+ *
+ * Covers bare import locals, simple aliases, and nested namespace access such as
+ * `fs.promises` when that access itself escapes rather than continuing the chain.
+ *
+ * @param {ts.Expression} expr
+ * @param {Map<string, ts.Expression>} bindings
+ * @param {{ fsConstantsLocals: Set<string>, fsNsAliases: Set<string> }} provenance
+ * @param {Map<string, "fs" | "fs.promises" | "child_process">} nsAliases
+ * @returns {boolean}
+ */
+function isFsNamespaceValueEscape(expr, bindings, provenance, nsAliases) {
+  const cur = unwrapStaticExpr(expr);
+  // Direct static member roots remain the only allowed use of a proven namespace.
+  if (isMemberAccessReceiverRoot(cur) || isMemberAccessReceiverRoot(expr)) {
+    return false;
+  }
+  // Direct call/new callees are not "value escape" of the namespace object
+  // (namespace-as-callee is not a Ticket 01 pattern; method calls use members).
+  if (isDirectCallOrNewCallee(cur) || isDirectCallOrNewCallee(expr)) {
+    return false;
+  }
+
+  if (ts.isIdentifier(cur)) {
+    const p = cur.parent;
+    if (p && ts.isPropertyAccessExpression(p) && p.name === cur) return false;
+    const kind = resolveTrustedFsNsKind(cur, bindings, provenance, nsAliases);
+    if (kind !== "fs" && kind !== "fs.promises") return false;
+    return isForbiddenCapabilityIdentifierUse(cur);
+  }
+
+  // Nested namespace access used as a value: `const p = fs.promises`,
+  // `Object.create(fs.promises)`, etc. Member-continued forms
+  // (`fs.promises.readFile`) are excluded by isMemberAccessReceiverRoot above.
+  if (ts.isPropertyAccessExpression(cur) || ts.isElementAccessExpression(cur)) {
+    const kind = resolveTrustedFsNsKind(cur, bindings, provenance, nsAliases);
+    return kind === "fs" || kind === "fs.promises";
+  }
+
+  // require("fs") expression used as a value (require call itself is also forbidden).
+  if (ts.isCallExpression(cur)) {
+    const kind = resolveTrustedFsNsKind(cur, bindings, provenance, nsAliases);
+    return kind === "fs" || kind === "fs.promises";
+  }
+
+  return false;
+}
+
+/**
+ * True when a property/element access has a statically known terminal name
+ * `require` (any receiver). Ticket 01 forbids this loader surface conservatively.
+ * @param {ts.Expression} expr
+ * @returns {boolean}
+ */
+function isStaticTerminalRequireAccess(expr) {
+  return staticTerminalName(expr) === "require";
+}
+
+/**
  * Terminal process method on a proven process root, if any.
  * Returns method name, `"\0computed"` for dynamic keys, or null when the
  * access is not a process capability surface of interest.
@@ -1272,6 +1357,13 @@ function isForbiddenCapabilityIdentifierUse(id) {
   const p = id.parent;
   if (!p) return false;
 
+  // Property access *name* (`obj.fetch`, `frame.module`) is not the global value.
+  // Shorthand property assignment (`{ fetch }`, `{ fs }`) *is* a value use and
+  // must not be treated as a declaration-like name here.
+  if (ts.isPropertyAccessExpression(p) && p.name === id) {
+    return false;
+  }
+
   // Declaration / binding names are not value acquisitions of the global.
   if ("name" in p && /** @type {{ name?: ts.Node }} */ (p).name === id) {
     if (
@@ -1285,7 +1377,6 @@ function isForbiddenCapabilityIdentifierUse(id) {
       ts.isBindingElement(p) ||
       ts.isVariableDeclaration(p) ||
       ts.isPropertyAssignment(p) ||
-      ts.isShorthandPropertyAssignment(p) ||
       ts.isPropertySignature(p) ||
       ts.isMethodSignature(p) ||
       ts.isEnumMember(p) ||
@@ -2178,7 +2269,12 @@ function scanSourceText(file, text, rel) {
     // checkCallOrNew.
     // Also: host-rooted process object (`globalThis.process`) may not escape as
     // a value — only as the immediate static member-access receiver.
+    // Terminal static name `require` is forbidden on any receiver (computed
+    // loaders: module["require"], process.mainModule["require"], …).
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      if (isStaticTerminalRequireAccess(node)) {
+        violations.push(`${rel}: forbidden require capability access`);
+      }
       checkFsCapabilityReference(node);
       checkGlobalObjectCapabilityReference(node);
       checkProcessCapabilityReference(node);
@@ -2189,14 +2285,20 @@ function scanSourceText(file, text, rel) {
       ) {
         violations.push(`${rel}: forbidden process object capability escape`);
       }
+      // Nested proven fs namespace used as a value (`const p = fs.promises`).
+      const nsEscBindings = bindingsForNode(node, sf);
+      if (isFsNamespaceValueEscape(node, nsEscBindings, flagProvenance, nsAliases)) {
+        violations.push(`${rel}: forbidden fs namespace capability escape`);
+      }
     }
 
-    // eval / Function / createRequire / fetch / WebSocket / XMLHttpRequest as
-    // value capabilities (alias, pass, sequence). Conservative: any
-    // value-position identifier with these names is forbidden.
+    // eval / Function / createRequire / fetch / WebSocket / XMLHttpRequest /
+    // Reflect / module as value capabilities (alias, pass, sequence).
+    // Conservative: any value-position identifier with these names is forbidden.
     // Global `process` is a host capability: value-level use (alias/pass/return/
     // spread/argument/store) is forbidden; direct static member roots remain
-    // allowed (isProcessObjectValueEscape).
+    // allowed (isProcessObjectValueEscape). Proven fs namespaces follow the same
+    // value-escape rule (isFsNamespaceValueEscape).
     if (ts.isIdentifier(node)) {
       const name = node.text;
       if (isForbiddenGlobalCapabilityName(name)) {
@@ -2210,6 +2312,10 @@ function scanSourceText(file, text, rel) {
       }
       if (isProcessObjectValueEscape(node)) {
         violations.push(`${rel}: forbidden process object capability escape`);
+      }
+      const idBindings = bindingsForNode(node, sf);
+      if (isFsNamespaceValueEscape(node, idBindings, flagProvenance, nsAliases)) {
+        violations.push(`${rel}: forbidden fs namespace capability escape`);
       }
     }
 
@@ -2459,8 +2565,8 @@ function runSelfTests() {
       source: `import fs from "node:fs";\nconst f = fs;\nconst { writeFileSync } = f;\nwriteFileSync("x", "y");\n`,
     },
     {
-      name: "fs namespace alias re-shadowed does not grant mutation provenance",
-      expectViolation: false,
+      name: "fs namespace alias re-shadowed still rejects namespace value escape",
+      expectViolation: true,
       source: `import fs from "node:fs";\nconst f = fs;\nfunction outer() {\n  const f = { writeFileSync(_a: string, _b: string) {} };\n  f.writeFileSync("x", "y");\n}\n`,
     },
     {
@@ -2474,8 +2580,8 @@ function runSelfTests() {
       source: `function outer(writeFileSync: (a: string, b: string) => void) {\n  writeFileSync("x", "y");\n}\n`,
     },
     {
-      name: "safe openSync via fs namespace alias O_RDONLY",
-      expectViolation: false,
+      name: "fs namespace alias even for read-only open is value escape",
+      expectViolation: true,
       source: `import fs from "node:fs";\nconst f = fs;\nconst fd = f.openSync("x", f.constants.O_RDONLY);\nf.closeSync(fd);\n`,
     },
     {
@@ -2539,8 +2645,8 @@ function runSelfTests() {
       source: `import fs from "node:fs";\nconst r = fs.readFileSync;\nconst c = fs.closeSync;\nvoid r; void c;\n`,
     },
     {
-      name: "safe openSync via fs namespace alias string mode r",
-      expectViolation: false,
+      name: "fs namespace alias even for string mode r open is value escape",
+      expectViolation: true,
       source: `import fs from "node:fs";\nconst f = fs;\nconst fd = f.openSync("x", "r");\nf.closeSync(fd);\n`,
     },
     {
@@ -3049,6 +3155,142 @@ fs.closeSync(fd);
       name: "safe global process.argv control (no node:process import)",
       expectViolation: false,
       source: `const a = process.argv; void a;\nconst c = process.cwd(); void c;\nconst n = process.env.NODE_ENV; void n;\nconst g = globalThis.process.argv; void g;\n`,
+    },
+    // --- R18: computed/reflective require loader + fs namespace value escape ---
+    {
+      name: "module computed require element access",
+      expectViolation: true,
+      source: `module["require"]("fs");\n`,
+    },
+    {
+      name: "module computed require member chain writeFileSync",
+      expectViolation: true,
+      source: `module["require"]("node:fs").writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "process computed mainModule computed require",
+      expectViolation: true,
+      source: `process["mainModule"]["require"]("fs");\n`,
+    },
+    {
+      name: "process.mainModule alias then computed require",
+      expectViolation: true,
+      source: `const m = process.mainModule; m["require"]("fs");\n`,
+    },
+    {
+      name: "Reflect.get module require",
+      expectViolation: true,
+      source: `Reflect.get(module, "require")("fs");\n`,
+    },
+    {
+      name: "Reflect.get process.mainModule require",
+      expectViolation: true,
+      source: `Reflect.get(process.mainModule, "require")("fs");\n`,
+    },
+    {
+      name: "module value alias escape",
+      expectViolation: true,
+      source: `const m = module; void m;\n`,
+    },
+    {
+      name: "process.mainModule value escape",
+      expectViolation: true,
+      source: `const mm = process.mainModule; void mm;\n`,
+    },
+    {
+      name: "Reflect alias acquisition",
+      expectViolation: true,
+      source: `const R = Reflect; void R;\n`,
+    },
+    {
+      name: "Reflect.apply still forbidden via Reflect capability",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nReflect.apply(fs.writeFileSync, fs, ["x", "y"]);\n`,
+    },
+    {
+      name: "any receiver static require property access",
+      expectViolation: true,
+      source: `const loader: any = {};\nloader.require("fs");\n`,
+    },
+    {
+      name: "any receiver static require element access",
+      expectViolation: true,
+      source: `const loader: any = {};\nloader["require"]("fs");\n`,
+    },
+    {
+      name: "fs Proxy wrap value escape",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst p1 = new Proxy(fs, {});\np1.writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "fs object spread value escape",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst p2 = { ...fs };\np2.writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "fs Object.create prototype escape",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst p3 = Object.create(fs);\np3.writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "fs Object.assign value escape",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst p4 = Object.assign({}, fs);\np4.writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "fs shorthand container value escape",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst box = { fs };\nbox.fs.writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "fs returned as value escape",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfunction q() { return fs; }\nq().writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "fs simple alias value escape alone",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst f = fs; void f;\n`,
+    },
+    {
+      name: "fs.promises nested namespace value escape",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nconst p = fs.promises; void p;\n`,
+    },
+    {
+      name: "fs.promises passed as value escape",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfunction consume(_x: unknown) {}\nconsume(fs.promises);\n`,
+    },
+    {
+      name: "named fs.promises import alias value escape",
+      expectViolation: true,
+      source: `import { promises as fsp } from "node:fs";\nconst p = fsp; void p;\n`,
+    },
+    {
+      name: "safe direct fs.promises.readFile remains allowed",
+      expectViolation: false,
+      source: `import fs from "node:fs";\nexport const read = (p: string) => fs.promises.readFile(p);\n`,
+    },
+    {
+      name: "safe named static read-only fs method import",
+      expectViolation: false,
+      source: `import { readFileSync, lstatSync, closeSync } from "node:fs";\nexport const s = readFileSync("x");\nexport const st = lstatSync("x");\nvoid closeSync;\n`,
+    },
+    {
+      name: "safe direct fs.readFileSync without alias",
+      expectViolation: false,
+      source: `import fs from "node:fs";\nconst s = fs.readFileSync("x");\nvoid s;\n`,
+    },
+    {
+      name: "safe frame.module property name is not loader host",
+      expectViolation: false,
+      source: `const f = { module: "x" as string | null };\nconst m = f.module; void m;\n`,
+    },
+    {
+      name: "safe process.argv still allowed with mainModule forbidden",
+      expectViolation: false,
+      source: `const a = process.argv; void a;\n`,
     },
   ];
 
