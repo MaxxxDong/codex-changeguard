@@ -50,7 +50,7 @@ node bin/changeguard.js diagnose fixtures/negative-control
 - CLI: `changeguard diagnose <isolated-target-directory>`
 - MCP tool: `changeguard_diagnose` with `{ "target": "<isolated-target-directory>" }` only
 - Skill: `/changeguard diagnose` orchestrates the same seams (see `skills/changeguard/SKILL.md`)
-- Package: `npm run package` writes `release/codex-changeguard-plugin/` with the exact public top-level surface (compiled JS + manifest + MCP + Skill + fixtures/docs/schemas; no `node_modules` or `AGENTS.md`); `package:smoke` launches MCP via packaged `.mcp.json`
+- Package: `npm run package` writes `release/codex-changeguard-plugin/` with the exact public top-level surface (compiled JS + manifest + MCP + Skill + fixtures + public docs + schemas; no `node_modules`, `AGENTS.md`, `HANDOFF.md`, or `docs/agents`); packaged README drops the repository-only handoff link; `package:smoke` launches MCP via packaged `.mcp.json` and checks local Markdown links
 
 Positive protected-process fixture may reach `SOURCE_COMPONENT_LOCATED` only when
 artifact bytes are independently hashed and the protected-process structural

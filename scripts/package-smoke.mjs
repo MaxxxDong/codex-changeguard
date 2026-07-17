@@ -6,6 +6,9 @@
  * Launches the MCP server via the packaged `.mcp.json` surface (same contract
  * a plugin host would use): validate allowed server config, resolve `cwd: "."`
  * relative to the package root, and spawn `command` + `args`.
+ *
+ * Also enforces the public package surface: exact top-level allowlist, forbidden
+ * repository-only paths, exact public docs set, and no broken local Markdown links.
  */
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -30,17 +33,37 @@ const ALLOWED_TOP_LEVEL = new Set([
   "skills",
 ]);
 
-const FORBIDDEN_TOP_LEVEL = [
+/** Paths that must never appear in the packaged tree (repo-only / build-only). */
+const FORBIDDEN_PACKAGED_PATHS = [
   "AGENTS.md",
+  "HANDOFF.md",
+  "docs/agents",
   ".scratch",
   "src",
   "scripts",
   "node_modules",
 ];
 
+/** Exact public docs Markdown set for the package. */
+const PUBLIC_DOCS = [
+  "ARCHITECTURE.md",
+  "CASE_STUDIES.md",
+  "SECURITY.md",
+  "TEST_PLAN.md",
+];
+
 function fail(msg) {
   console.error(msg);
   process.exit(1);
+}
+
+function walkPackageRel(dir, relBase, onEntry) {
+  for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+    const rel = relBase ? `${relBase}/${ent.name}` : ent.name;
+    const abs = path.join(dir, ent.name);
+    onEntry(rel, abs, ent);
+    if (ent.isDirectory()) walkPackageRel(abs, rel, onEntry);
+  }
 }
 
 if (!fs.existsSync(path.join(packageDir, "bin/changeguard.js"))) {
@@ -57,16 +80,98 @@ for (const name of top) {
     fail(`Package must not contain clone/lifecycle path: ${name}`);
   }
 }
-for (const name of FORBIDDEN_TOP_LEVEL) {
-  if (fs.existsSync(path.join(packageDir, name))) {
-    fail(`Package must not contain ${name}`);
+if (JSON.stringify(top) !== JSON.stringify([...ALLOWED_TOP_LEVEL].sort())) {
+  fail(
+    `Package top-level contract mismatch.\nExpected: ${[...ALLOWED_TOP_LEVEL].sort().join(", ")}\nGot: ${top.join(", ")}`,
+  );
+}
+
+// Forbidden repository-only / build-only paths must not appear anywhere
+const packagedRels = [];
+walkPackageRel(packageDir, "", (rel) => {
+  packagedRels.push(rel);
+  for (const forbidden of FORBIDDEN_PACKAGED_PATHS) {
+    if (rel === forbidden || rel.startsWith(`${forbidden}/`)) {
+      fail(`Package must not contain ${forbidden} (found ${rel})`);
+    }
+  }
+});
+for (const forbidden of FORBIDDEN_PACKAGED_PATHS) {
+  if (fs.existsSync(path.join(packageDir, forbidden))) {
+    fail(`Package must not contain ${forbidden}.`);
   }
 }
-if (fs.existsSync(path.join(packageDir, "node_modules"))) {
-  fail("Package must not contain node_modules.");
+
+// Exact public docs tree (four Markdown files only; no docs/agents)
+const docsDir = path.join(packageDir, "docs");
+if (!fs.existsSync(docsDir) || !fs.statSync(docsDir).isDirectory()) {
+  fail("Packaged docs/ directory missing.");
 }
-if (fs.existsSync(path.join(packageDir, "AGENTS.md"))) {
-  fail("Package must not contain AGENTS.md.");
+const docsEntries = fs.readdirSync(docsDir).sort();
+const expectedDocs = [...PUBLIC_DOCS].sort();
+if (JSON.stringify(docsEntries) !== JSON.stringify(expectedDocs)) {
+  fail(
+    `Packaged docs must be exactly ${expectedDocs.join(", ")}; got ${docsEntries.join(", ")}`,
+  );
+}
+for (const name of docsEntries) {
+  const st = fs.statSync(path.join(docsDir, name));
+  if (!st.isFile() || !name.endsWith(".md")) {
+    fail(`Packaged docs entry must be a Markdown file: ${name}`);
+  }
+}
+
+// Packaged README must not keep a local relative link to repository-only HANDOFF.md.
+// Prose may mention the name as an excluded surface; broken/missing link targets are
+// caught by the general Markdown link walk below.
+const packagedReadme = fs.readFileSync(path.join(packageDir, "README.md"), "utf8");
+if (/\[[^\]]*\]\(\s*HANDOFF\.md(?:#[^)\s]*)?\s*\)/i.test(packagedReadme)) {
+  fail("Packaged README must not contain a local link to HANDOFF.md.");
+}
+
+// Source repo README must still keep the handoff link (package transform only).
+const sourceReadme = fs.readFileSync(path.join(repoRoot, "README.md"), "utf8");
+if (!/\[Current handoff\]\(HANDOFF\.md\)/.test(sourceReadme)) {
+  fail("Source README must retain the Current handoff -> HANDOFF.md link.");
+}
+
+// Local relative Markdown links in packaged .md files must resolve to existing targets.
+const MD_LINK_RE = /\[([^\]]*)\]\(([^)]+)\)/g;
+const brokenLinks = [];
+walkPackageRel(packageDir, "", (rel, abs, ent) => {
+  if (!ent.isFile() || !rel.endsWith(".md")) return;
+  const text = fs.readFileSync(abs, "utf8");
+  let m;
+  while ((m = MD_LINK_RE.exec(text)) !== null) {
+    const hrefRaw = m[2].trim();
+    // Strip optional title: url "title" or url 'title'
+    const href = hrefRaw.replace(/\s+["'][^"']*["']\s*$/, "").trim();
+    if (!href) continue;
+    if (href.startsWith("#")) continue;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(href)) continue; // scheme (http, https, mailto, ...)
+    if (href.startsWith("/")) continue; // absolute path (not a package-local relative link)
+    const bare = href.split("#")[0];
+    if (!bare) continue;
+    const target = path.resolve(path.dirname(abs), bare);
+    const packageRootResolved = path.resolve(packageDir);
+    if (
+      target !== packageRootResolved &&
+      !target.startsWith(packageRootResolved + path.sep)
+    ) {
+      brokenLinks.push({ file: rel, href, reason: "escapes package root" });
+      continue;
+    }
+    if (!fs.existsSync(target)) {
+      brokenLinks.push({ file: rel, href, reason: "missing target" });
+    }
+  }
+});
+if (brokenLinks.length > 0) {
+  fail(
+    `Packaged Markdown has broken local relative links:\n${brokenLinks
+      .map((b) => `  ${b.file}: (${b.href}) — ${b.reason}`)
+      .join("\n")}`,
+  );
 }
 
 // Read and validate packaged .mcp.json (plugin host surface)
@@ -249,8 +354,13 @@ console.log(
       mcp_state: mcpResult.diagnosis_state,
       package_dir: packageDir,
       package_top_level: top,
+      public_docs: docsEntries,
       no_node_modules: true,
       no_agents_md: true,
+      no_handoff_md: true,
+      no_docs_agents: true,
+      local_markdown_links_ok: true,
+      forbidden_paths_absent: FORBIDDEN_PACKAGED_PATHS,
     },
     null,
     2,

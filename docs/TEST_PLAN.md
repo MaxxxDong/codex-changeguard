@@ -84,7 +84,7 @@ Mandatory cases (implemented in `tests/scenario-harness.test.ts`):
 - fixture metadata: artifact bytes, `.hash.txt`, incident declared hash, recovery original hash agree; incident `local_facts_digest` equals core recomputation
 - no absolute disposable path or raw exception leak on public stdout
 - production-boundary guard self-tests on synthetic snippets (default/fs.promises mutations, dynamic import/require, WebSocket/fetch/computed, eval/Function/process.dlopen) plus production graph scan
-- package smoke: `npm run package` then `npm run package:smoke` from a non-repo cwd; smoke reads packaged `.mcp.json`, enforces exact top-level allowlist (no `AGENTS.md`/`src`/`scripts`/`node_modules`)
+- package smoke: `npm run package` then `npm run package:smoke` from a non-repo cwd; smoke reads packaged `.mcp.json`, enforces exact top-level allowlist, exact public docs set (`ARCHITECTURE.md`/`SECURITY.md`/`TEST_PLAN.md`/`CASE_STUDIES.md` only), no broken local Markdown links, and no repository-only paths (`AGENTS.md`/`HANDOFF.md`/`docs/agents`/`src`/`scripts`/`node_modules`/`.scratch`)
 
 ## Initial commands
 
