@@ -3,7 +3,8 @@
  * Tools: diagnose (read-only) + Ticket 02 recovery tools (authorized mutation
  * only under an isolated target via registered recovery operations) + Ticket 03
  * multi-instance scan / SessionStart tools (state writes only under PLUGIN_DATA)
- * + Ticket 05 untrusted page-evidence analysis (orchestrator-supplied envelope).
+ * + Ticket 05 untrusted page-evidence analysis (orchestrator-supplied envelope)
+ * + Ticket 06 lifecycle (KNOWN_GOOD / retention / A-B / canary / supersession).
  *
  * Wire protocol: newline-delimited JSON-RPC 2.0 over stdio.
  * Request frames are accumulated as bounded bytes (not unbounded readline).
@@ -16,6 +17,11 @@ import {
   rollbackRepair,
   verifyRepair,
 } from "../core/recovery/index.js";
+import {
+  dispatchLifecycle,
+  type LifecycleDispatchArgs,
+} from "../core/lifecycle/index.js";
+import type { LifecycleResult } from "../core/lifecycle/types.js";
 import { assertNoLeakPaths, redactText } from "../core/redact.js";
 import type { DiagnosisResult } from "../core/types.js";
 import type { RepairResult } from "../core/recovery/types.js";
@@ -42,6 +48,7 @@ const TOOL_ROLLBACK = "changeguard_rollback";
 const TOOL_SCAN = "changeguard_scan";
 const TOOL_SCAN_SYSTEM = "changeguard_scan_system";
 const TOOL_SESSION = "changeguard_session_start";
+const TOOL_LIFECYCLE = "changeguard_lifecycle";
 
 const KNOWN_TOOLS = new Set([
   TOOL_DIAGNOSE,
@@ -54,6 +61,7 @@ const KNOWN_TOOLS = new Set([
   TOOL_SCAN,
   TOOL_SCAN_SYSTEM,
   TOOL_SESSION,
+  TOOL_LIFECYCLE,
 ]);
 
 /** Extra top-level tools/call params beyond name/arguments are refused. */
@@ -259,6 +267,57 @@ function toolSchemas() {
         },
       },
     },
+    {
+      name: TOOL_LIFECYCLE,
+      description:
+        "Ticket 06 KNOWN_GOOD / retention / A/B update-regression / exact-instance surface rollback / CLI-Desktop version preview / canary / supersession. Mutations only under the isolated target ChangeGuard lifecycle state.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["target", "operation"],
+        properties: {
+          target: targetProp,
+          operation: {
+            type: "string",
+            description:
+              "status|record_repair_backup|record_successful_start|record_known_good|apply_retention|assess_update_regression|rollback_surface|cli_version_rollback_preview|desktop_version_rollback_preview|canary|supersede_recipe",
+          },
+          instance_id: { type: "string" },
+          surface: { type: "string" },
+          source_rel: { type: "string" },
+          checkpoint_id: { type: "string" },
+          now_ms: { type: "number" },
+          timestamp_only: { type: "boolean" },
+          control: { type: "object" },
+          treatment: { type: "object" },
+          official_source: {
+            type: "string",
+            enum: [
+              "official_npm",
+              "official_installer",
+              "homebrew_cask_official",
+              "untrusted",
+              "absent",
+            ],
+          },
+          version_pin: { type: "string" },
+          provenance: {
+            type: "string",
+            enum: ["trusted_official", "untrusted", "absent"],
+          },
+          signed_history_available: { type: "boolean" },
+          lawful_media_available: { type: "boolean" },
+          candidate_version: { type: "string" },
+          original_fault_absent: { type: "boolean" },
+          core_regressions_passed: { type: "boolean" },
+          canary_executed: { type: "boolean" },
+          recipe_id: { type: "string" },
+          upstream_ref: { type: "string" },
+          upstream_evidence_digest: { type: "string" },
+          upstream_verified: { type: "boolean" },
+        },
+      },
+    },
   ];
 }
 
@@ -284,7 +343,8 @@ function handleToolsCall(params: unknown): {
     | ImpactAssessmentResult
     | PageAnalysisResult
     | RepairResult
-    | ScanResult;
+    | ScanResult
+    | LifecycleResult;
   ok: boolean;
 } {
   if (!params || typeof params !== "object" || Array.isArray(params)) {
@@ -525,6 +585,102 @@ function handleToolsCall(params: unknown): {
     // SessionStart silent no-change is a successful empty outcome.
     const ok = payload.ok || payload.silent === true;
     return { payload, ok };
+  }
+
+  if (p.name === TOOL_LIFECYCLE) {
+    const allowed = new Set([
+      "target",
+      "operation",
+      "instance_id",
+      "surface",
+      "source_rel",
+      "checkpoint_id",
+      "now_ms",
+      "timestamp_only",
+      "control",
+      "treatment",
+      "official_source",
+      "version_pin",
+      "provenance",
+      "signed_history_available",
+      "lawful_media_available",
+      "candidate_version",
+      "original_fault_absent",
+      "core_regressions_passed",
+      "canary_executed",
+      "recipe_id",
+      "upstream_ref",
+      "upstream_evidence_digest",
+      "upstream_verified",
+    ]);
+    for (const k of Object.keys(a)) {
+      if (!allowed.has(k)) {
+        throw Object.assign(new Error("Unknown or extra arguments."), {
+          code: "EXTRA_ARGS",
+        });
+      }
+    }
+    if (typeof a.target !== "string" || a.target.length === 0) {
+      throw Object.assign(new Error("Invalid target."), {
+        code: "INVALID_TARGET",
+      });
+    }
+    if (typeof a.operation !== "string" || a.operation.length === 0) {
+      throw Object.assign(new Error("Invalid operation."), {
+        code: "INVALID_ARGS",
+      });
+    }
+    const dispatchArgs: LifecycleDispatchArgs = {
+      target: a.target,
+      operation: a.operation,
+    };
+    if (typeof a.instance_id === "string") dispatchArgs.instance_id = a.instance_id;
+    if (typeof a.surface === "string") dispatchArgs.surface = a.surface;
+    if (typeof a.source_rel === "string") dispatchArgs.source_rel = a.source_rel;
+    if (typeof a.checkpoint_id === "string") {
+      dispatchArgs.checkpoint_id = a.checkpoint_id;
+    }
+    if (typeof a.now_ms === "number") dispatchArgs.now_ms = a.now_ms;
+    if (typeof a.timestamp_only === "boolean") {
+      dispatchArgs.timestamp_only = a.timestamp_only;
+    }
+    if (a.control !== undefined) dispatchArgs.control = a.control;
+    if (a.treatment !== undefined) dispatchArgs.treatment = a.treatment;
+    if (typeof a.official_source === "string") {
+      dispatchArgs.official_source = a.official_source;
+    }
+    if (typeof a.version_pin === "string") dispatchArgs.version_pin = a.version_pin;
+    if (typeof a.provenance === "string") dispatchArgs.provenance = a.provenance;
+    if (typeof a.signed_history_available === "boolean") {
+      dispatchArgs.signed_history_available = a.signed_history_available;
+    }
+    if (typeof a.lawful_media_available === "boolean") {
+      dispatchArgs.lawful_media_available = a.lawful_media_available;
+    }
+    if (typeof a.candidate_version === "string") {
+      dispatchArgs.candidate_version = a.candidate_version;
+    }
+    if (typeof a.original_fault_absent === "boolean") {
+      dispatchArgs.original_fault_absent = a.original_fault_absent;
+    }
+    if (typeof a.core_regressions_passed === "boolean") {
+      dispatchArgs.core_regressions_passed = a.core_regressions_passed;
+    }
+    if (typeof a.canary_executed === "boolean") {
+      dispatchArgs.canary_executed = a.canary_executed;
+    }
+    if (typeof a.recipe_id === "string") dispatchArgs.recipe_id = a.recipe_id;
+    if (typeof a.upstream_ref === "string") {
+      dispatchArgs.upstream_ref = a.upstream_ref;
+    }
+    if (typeof a.upstream_evidence_digest === "string") {
+      dispatchArgs.upstream_evidence_digest = a.upstream_evidence_digest;
+    }
+    if (typeof a.upstream_verified === "boolean") {
+      dispatchArgs.upstream_verified = a.upstream_verified;
+    }
+    const payload = dispatchLifecycle(dispatchArgs);
+    return { payload, ok: payload.ok };
   }
 
   throw Object.assign(new Error("Unknown tool."), { code: "UNKNOWN_TOOL" });

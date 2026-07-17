@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "surface": "plugin",
+  "healthy": true,
+  "plugin_id": "demo-plugin",
+  "version": "1.0.0"
+}

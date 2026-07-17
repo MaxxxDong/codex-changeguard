@@ -11,6 +11,7 @@
  *   changeguard scan <inventory-root>          (fixture inventory adapter)
  *   changeguard scan-system                    (production registered system adapter)
  *   changeguard session-start <inventory-root> [--hook-trust=…]  (manual fixture path)
+ *   changeguard lifecycle <operation> <isolated-target> [--key=value …]
  */
 import fs from "node:fs";
 import { diagnose } from "../core/diagnose.js";
@@ -20,6 +21,11 @@ import {
   rollbackRepair,
   verifyRepair,
 } from "../core/recovery/index.js";
+import {
+  dispatchLifecycle,
+  type LifecycleDispatchArgs,
+} from "../core/lifecycle/index.js";
+import type { LifecycleResult } from "../core/lifecycle/types.js";
 import { assertNoLeakPaths, redactText } from "../core/redact.js";
 import { assessImpact } from "../impact/assess.js";
 import type { DiagnosisResult } from "../core/types.js";
@@ -62,7 +68,7 @@ function usageDiagnosis(): DiagnosisResult {
     evidence: [],
     error_code: "USAGE",
     error_message:
-      "Usage: changeguard diagnose|impact|analyze-page|repair-preview|repair-apply|verify|rollback|scan|scan-system|session-start …",
+      "Usage: changeguard diagnose|impact|analyze-page|repair-preview|repair-apply|verify|rollback|scan|scan-system|session-start|lifecycle …",
     network_used: false,
     target_mutated: false,
     repair_applied: false,
@@ -407,6 +413,108 @@ function runAnalyzePage(
   }
 }
 
+/**
+ * Parse `lifecycle <operation> <target> [--key=value]`.
+ * Nested A/B observations use `--control-json=` / `--treatment-json=`.
+ */
+function runLifecycleCli(rest: string[]): void {
+  const positional = rest.filter((a) => !a.startsWith("-"));
+  const flags = rest.filter((a) => a.startsWith("-"));
+  if (positional.length !== 2) {
+    printJson(usageDiagnosis(), 2);
+  }
+  const [operation, target] = positional;
+  const args: LifecycleDispatchArgs = {
+    target: target!,
+    operation: operation!,
+  };
+  for (const f of flags) {
+    const eq = f.indexOf("=");
+    if (!f.startsWith("--") || eq < 0) {
+      printJson(usageDiagnosis(), 2);
+    }
+    const key = f.slice(2, eq);
+    const raw = f.slice(eq + 1);
+    switch (key) {
+      case "instance-id":
+        args.instance_id = raw;
+        break;
+      case "surface":
+        args.surface = raw;
+        break;
+      case "source-rel":
+        args.source_rel = raw;
+        break;
+      case "checkpoint-id":
+        args.checkpoint_id = raw;
+        break;
+      case "now-ms":
+        args.now_ms = Number(raw);
+        break;
+      case "timestamp-only":
+        args.timestamp_only = raw === "true" || raw === "1";
+        break;
+      case "control-json":
+        try {
+          args.control = JSON.parse(raw) as unknown;
+        } catch {
+          printJson(usageDiagnosis(), 2);
+        }
+        break;
+      case "treatment-json":
+        try {
+          args.treatment = JSON.parse(raw) as unknown;
+        } catch {
+          printJson(usageDiagnosis(), 2);
+        }
+        break;
+      case "official-source":
+        args.official_source = raw;
+        break;
+      case "version-pin":
+        args.version_pin = raw;
+        break;
+      case "provenance":
+        args.provenance = raw;
+        break;
+      case "signed-history":
+        args.signed_history_available = raw === "true" || raw === "1";
+        break;
+      case "lawful-media":
+        args.lawful_media_available = raw === "true" || raw === "1";
+        break;
+      case "candidate-version":
+        args.candidate_version = raw;
+        break;
+      case "original-fault-absent":
+        args.original_fault_absent = raw === "true" || raw === "1";
+        break;
+      case "core-regressions-passed":
+        args.core_regressions_passed = raw === "true" || raw === "1";
+        break;
+      case "canary-executed":
+        args.canary_executed = raw === "true" || raw === "1";
+        break;
+      case "recipe-id":
+        args.recipe_id = raw;
+        break;
+      case "upstream-ref":
+        args.upstream_ref = raw;
+        break;
+      case "upstream-evidence-digest":
+        args.upstream_evidence_digest = raw;
+        break;
+      case "upstream-verified":
+        args.upstream_verified = raw === "true" || raw === "1";
+        break;
+      default:
+        printJson(usageDiagnosis(), 2);
+    }
+  }
+  const result: LifecycleResult = dispatchLifecycle(args);
+  printJson(result, result.ok ? 0 : 1);
+}
+
 export function runCli(argv: string[]): void {
   const args = argv.slice(2);
   if (args.length === 0) {
@@ -505,6 +613,11 @@ export function runCli(argv: string[]): void {
       }
       const trust = parseHookTrust(flags);
       runSession(positional[0]!, trust);
+      return;
+    }
+
+    if (cmd === "lifecycle") {
+      runLifecycleCli(rest);
       return;
     }
 
