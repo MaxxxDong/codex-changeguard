@@ -206,6 +206,25 @@ Black-box and contract coverage in `tests/ticket05-page-analysis.test.ts`:
 - disclosure refused/not_requested → zero page transport calls; logged_visible never transports; approved requires injection
 - wrong mechanism (non-matching stack) → `wrong_mechanism`; destructive shell DSL not eligible for validation
 
+## Ticket 10 Scenario Harness (upstream draft routing — preview only)
+
+Black-box and contract coverage in `tests/ticket10-upstream-preview.test.ts`:
+
+- four routes: `GITHUB_ISSUE`, `GITHUB_DISCUSSIONS`, `BUGCROWD`, `OPENAI_SUPPORT`
+- four Issue forms: APP / CLI / EXTENSION / OTHER (`1-codex-app.yml`, `3-cli.yml`, `2-extension.yml`, `4-bug-report.yml`)
+- security → Bugcrowd private-only (no public Issue draft body)
+- exact duplicate zero Evidence Delta → `subscribe_or_upvote`, null body/comment
+- exact duplicate material Evidence Delta → structured comment preview
+- related-not-same → separate body + cross-links
+- new incident → `open_new` with maintainer-value body; facts/reports/hypotheses separated
+- maintainer-value gate fails when technical signals or privacy review missing
+- doctor sanitization + inclusion manifest; forbidden doctor keys fail closed; secrets/paths redacted
+- immutable form snapshot integrity (main commit + blob SHAs + `integrity_sha256`); stale vs fresh labels
+- approved fake form transport (one call, official allowlist only); refused / zero transport (`transport_calls: 0`)
+- prompt injection quarantine (`PREVIEW_BLOCKED`); malformed/oversized/extra fields fail closed
+- CLI/MCP `upstream-preview` / `changeguard_upstream_preview` stable-field equivalence; target tree hash unchanged
+- capsule never `SUBMITTED`/`POSTED`; `external_write: false`; schema `preview_only`
+
 ## Initial commands
 
 ```bash
@@ -224,6 +243,8 @@ node bin/changeguard.js diagnose fixtures/crash-family/access-violation-crbrowse
 node bin/changeguard.js impact fixtures/impact-local --disclose-refused
 # Ticket 05 (orchestrator-supplied page envelope; no hidden network):
 # node bin/changeguard.js analyze-page fixtures/protected-process --envelope=fixtures/page-evidence/valid-protected-process.json --disclose-refused
+# Ticket 10 (upstream draft preview only; no external write):
+# node bin/changeguard.js upstream-preview fixtures/protected-process --request=fixtures/upstream/request-new-incident-cli.json --disclose-refused
 # Ticket 02 (isolated disposable copy only):
 # node bin/changeguard.js repair-preview <isolated-target>
 # node bin/changeguard.js repair-apply <isolated-target> <authorization_binding>

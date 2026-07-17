@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "case_kind": "validated_security_vulnerability",
+  "surface": "cli",
+  "platform": { "os": "macos", "arch": "arm64", "unknown_reason": null },
+  "codex_version": "0.50.0",
+  "version_unknown_reason": null,
+  "actual_behavior": "Validated path traversal allows reading outside workspace under specific sandbox misconfiguration",
+  "technical_signals": [
+    "path_traversal_confirmed",
+    "sandbox_bypass_class:workspace_root"
+  ],
+  "reproduction": {
+    "quality": "reliable",
+    "steps": ["Isolated repro in disposable profile"],
+    "intermittent_marker": null
+  },
+  "observed_facts": [
+    "Deterministic repro with allowlisted probe only"
+  ],
+  "user_reports": [],
+  "hypotheses": [],
+  "duplicate_search": {
+    "searched": true,
+    "candidates": []
+  },
+  "evidence_delta": { "items": [] },
+  "doctor_json": {
+    "schema_version": 1,
+    "codex_version": "0.50.0",
+    "os": "macos",
+    "arch": "arm64",
+    "status": "ok",
+    "summary": "baseline"
+  },
+  "privacy_review": {
+    "secrets_redacted": true,
+    "paths_redacted": true,
+    "session_excluded": true
+  },
+  "error_strings": [],
+  "command_strings": []
+}

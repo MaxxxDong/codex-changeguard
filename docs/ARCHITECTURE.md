@@ -447,6 +447,52 @@ A ChatGPT report containing only “session expired” plus an unverified claim 
 - app/browser-local storage or session-state failure;
 - unresolved account-side invalidation requiring OpenAI Support.
 
+## 10b. Upstream Submission Capsule (Ticket 10 — preview only)
+
+Shared core: `src/upstream/` (`previewUpstream`). Public seams:
+
+- Rescue CLI: `changeguard upstream-preview <target> --request=<request.json> [--disclose-approved|--disclose-refused]`
+- MCP: `changeguard_upstream_preview` with `{ target, request, disclosure_decision? }`
+
+Both return the same `UpstreamPreviewResult` / `UpstreamSubmissionCapsule` JSON. Capsule invariants:
+
+- `mode: preview_only`, `locality: local_only`, `repair_authorized: false`, `external_write: false`
+- `requires_ticket11_confirmation: true` — Ticket 11 owns any real write after separate preview+confirmation
+- `submission_status` on the result is always `none`; capsule `status` is never `SUBMITTED` / `POSTED`
+
+### Channel routing
+
+| Case kind | Route |
+| --- | --- |
+| `validated_security_vulnerability` | `BUGCROWD` (private; never public Issue draft) |
+| `account_billing_private` | `OPENAI_SUPPORT` |
+| `product_support_question` | `GITHUB_DISCUSSIONS` |
+| `codex_product_bug` | `GITHUB_ISSUE` → form map |
+
+GitHub Issue form map (current official templates): `APP` → `1-codex-app.yml`, `CLI` → `3-cli.yml` (includes `codex doctor --json`), `EXTENSION` → `2-extension.yml`, `OTHER` → `4-bug-report.yml`.
+
+### Duplicate states
+
+Exact enums: `EXACT_DUPLICATE`, `RELATED_NOT_SAME`, `NEW_INCIDENT`.
+
+- Exact duplicate with **zero** material Evidence Delta → recommend `subscribe_or_upvote` only; `draft_body` and `draft_comment` are null (follows official “search first / react only” guidance).
+- Exact duplicate with **material** Evidence Delta → `comment_with_delta` structured comment preview only.
+- Related mechanisms remain separate (`RELATED_NOT_SAME`) with cross-links; symptom similarity alone cannot merge incidents.
+
+### Maintainer-value gate
+
+Requires: route, duplicate search (Issue path), surface, platform/version or explicit unknown reason, actual behavior, ≥1 technical signal, sanitized baseline diagnostics (doctor inclusion or explicit refusal), privacy review flags, reproduction quality or intermittent marker, and material value over an existing Issue. Separates `observed_facts`, `user_reports`, and `hypotheses`. Exact technical error/command strings are preserved except required secret/path redaction.
+
+### Doctor envelope
+
+Orchestrator may supply a bounded `codex doctor --json` object. ChangeGuard sanitizes allowlisted keys, shows an inclusion manifest, and never executes `codex` or arbitrary shell.
+
+### Official form snapshot
+
+Bundled immutable snapshot (`fixtures/upstream/form-snapshot-2026-07-18.json`) records main commit `3a067484584861606ad842de5bc4ac735a865ddf` and form blob SHAs verified 2026-07-18. Snapshot carries exact `integrity_sha256` and is labeled `fresh` / `stale` by age. Optional form refresh requires disclosure `approved` **and** an injected official-only transport; production CLI/MCP inject null (`transport_calls: 0`). The snapshot is testable immutable evidence, not a claim of perpetual currency.
+
+Schema: `schemas/upstream-submission-capsule.schema.json`. Synthetic fixtures: `fixtures/upstream/*`.
+
 The playbook never reads or exports cookie values, tokens, passwords, one-time codes, or full browser storage. A changed public IP is a hypothesis, not a permitted root-cause claim.
 
 ## 11. Competition MVP

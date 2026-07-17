@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "case_kind": "codex_product_bug",
+  "surface": "other",
+  "platform": { "os": "linux", "arch": "x64", "unknown_reason": null },
+  "codex_version": null,
+  "version_unknown_reason": "version metadata unavailable on custom install",
+  "actual_behavior": "Custom surface fails config load with schema type error",
+  "technical_signals": ["ConfigSchemaTypeError", "surface:other"],
+  "reproduction": {
+    "quality": "reliable",
+    "steps": ["Load invalid typed config key"],
+    "intermittent_marker": null
+  },
+  "observed_facts": ["Schema type mismatch on known key"],
+  "user_reports": [],
+  "hypotheses": [],
+  "duplicate_search": { "searched": true, "candidates": [] },
+  "evidence_delta": { "items": [] },
+  "doctor_json": {
+    "schema_version": 1,
+    "codex_version": "unknown",
+    "os": "linux",
+    "arch": "x64",
+    "status": "degraded",
+    "summary": "baseline"
+  },
+  "privacy_review": {
+    "secrets_redacted": true,
+    "paths_redacted": true,
+    "session_excluded": true
+  },
+  "error_strings": ["ConfigSchemaTypeError: expected string"],
+  "command_strings": []
+}

@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "case_kind": "codex_product_bug",
+  "surface": "extension",
+  "platform": { "os": "macos", "arch": "arm64", "unknown_reason": null },
+  "codex_version": "0.50.0",
+  "version_unknown_reason": null,
+  "actual_behavior": "IDE extension fails handshake with TypeError on process binding",
+  "technical_signals": [
+    "TypeError: protected global process binding rejected assignment",
+    "surface:extension"
+  ],
+  "reproduction": {
+    "quality": "reliable",
+    "steps": ["Open IDE with Codex extension"],
+    "intermittent_marker": null
+  },
+  "observed_facts": ["Handshake fails before discovery"],
+  "user_reports": [],
+  "hypotheses": [],
+  "duplicate_search": { "searched": true, "candidates": [] },
+  "evidence_delta": { "items": [] },
+  "doctor_json": {
+    "schema_version": 1,
+    "codex_version": "0.50.0",
+    "os": "macos",
+    "arch": "arm64",
+    "status": "ok",
+    "summary": "baseline"
+  },
+  "privacy_review": {
+    "secrets_redacted": true,
+    "paths_redacted": true,
+    "session_excluded": true
+  },
+  "error_strings": [
+    "TypeError: protected global process binding rejected assignment"
+  ],
+  "command_strings": []
+}

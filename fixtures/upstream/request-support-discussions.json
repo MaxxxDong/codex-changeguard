@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "case_kind": "product_support_question",
+  "surface": "cli",
+  "platform": { "os": "macos", "arch": "arm64", "unknown_reason": null },
+  "codex_version": "0.50.0",
+  "version_unknown_reason": null,
+  "actual_behavior": "User asks how to configure MCP server allowlists for local development",
+  "technical_signals": [
+    "support_question:mcp_allowlist_howto"
+  ],
+  "reproduction": {
+    "quality": "once",
+    "steps": [],
+    "intermittent_marker": null
+  },
+  "observed_facts": [
+    "No local fault signature measured"
+  ],
+  "user_reports": [
+    "How do I allow a local MCP server?"
+  ],
+  "hypotheses": [],
+  "duplicate_search": {
+    "searched": true,
+    "candidates": []
+  },
+  "evidence_delta": { "items": [] },
+  "doctor_json": {
+    "schema_version": 1,
+    "codex_version": "0.50.0",
+    "os": "macos",
+    "arch": "arm64",
+    "status": "ok",
+    "summary": "baseline"
+  },
+  "privacy_review": {
+    "secrets_redacted": true,
+    "paths_redacted": true,
+    "session_excluded": true
+  },
+  "error_strings": [],
+  "command_strings": []
+}

@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "case_kind": "codex_product_bug",
+  "surface": "desktop",
+  "platform": { "os": "windows", "arch": "x64", "unknown_reason": null },
+  "codex_version": "0.50.0",
+  "version_unknown_reason": null,
+  "actual_behavior": "Desktop exits after in-app Browser attach with GPU child code 13 (distinct mechanism from access-violation family)",
+  "technical_signals": [
+    "gpu_child_exit_code:13",
+    "interaction_phase:webview_attach",
+    "exception_code:none"
+  ],
+  "reproduction": {
+    "quality": "intermittent",
+    "steps": ["Open Desktop", "Attach Browser", "Observe exit"],
+    "intermittent_marker": "reproduces ~1 in 3 cold starts"
+  },
+  "observed_facts": [
+    "GPU child exit 13 observed",
+    "No 0xC0000005 access violation"
+  ],
+  "user_reports": ["Looks like the same browser crash people mention"],
+  "hypotheses": ["May share UI symptoms with other browser crashes"],
+  "duplicate_search": {
+    "searched": true,
+    "candidates": [
+      {
+        "issue_id": "openai/codex#8800",
+        "title": "Browser opens then crash",
+        "state": "open",
+        "similarity": "related",
+        "mechanism_match": false,
+        "url": "https://github.com/openai/codex/issues/8800"
+      }
+    ]
+  },
+  "evidence_delta": {
+    "items": [
+      {
+        "kind": "crash_signature",
+        "summary": "GPU exit 13 / webview_attach — distinct from AV family",
+        "material": true
+      }
+    ]
+  },
+  "doctor_json": {
+    "schema_version": 1,
+    "codex_version": "0.50.0",
+    "os": "windows",
+    "arch": "x64",
+    "status": "ok",
+    "summary": "baseline"
+  },
+  "privacy_review": {
+    "secrets_redacted": true,
+    "paths_redacted": true,
+    "session_excluded": true
+  },
+  "error_strings": ["gpu child exited with code 13"],
+  "command_strings": []
+}

@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "case_kind": "codex_product_bug",
+  "surface": "app",
+  "platform": { "os": "macos", "arch": "arm64", "unknown_reason": null },
+  "codex_version": "0.50.0",
+  "version_unknown_reason": null,
+  "actual_behavior": "Codex App window freezes on cold start after update",
+  "technical_signals": ["app_freeze_cold_start", "surface:app"],
+  "reproduction": {
+    "quality": "reliable",
+    "steps": ["Launch App after update"],
+    "intermittent_marker": null
+  },
+  "observed_facts": ["UI unresponsive for >30s"],
+  "user_reports": [],
+  "hypotheses": [],
+  "duplicate_search": { "searched": true, "candidates": [] },
+  "evidence_delta": { "items": [] },
+  "doctor_json": {
+    "schema_version": 1,
+    "codex_version": "0.50.0",
+    "os": "macos",
+    "arch": "arm64",
+    "status": "ok",
+    "summary": "baseline"
+  },
+  "privacy_review": {
+    "secrets_redacted": true,
+    "paths_redacted": true,
+    "session_excluded": true
+  },
+  "error_strings": ["App freeze timeout"],
+  "command_strings": []
+}

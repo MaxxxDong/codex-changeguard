@@ -4,6 +4,7 @@
  *   changeguard diagnose <isolated-target>
  *   changeguard impact <isolated-target> [--disclose-approved|--disclose-refused]
  *   changeguard analyze-page <isolated-target> --envelope=<page.json> [--disclose-approved|--disclose-refused]
+ *   changeguard upstream-preview <isolated-target> --request=<request.json> [--disclose-approved|--disclose-refused]
  *   changeguard repair-preview <isolated-target>
  *   changeguard repair-apply <isolated-target> <authorization-token>
  *   changeguard verify <isolated-target>
@@ -41,6 +42,12 @@ import type {
   PageDisclosureDecision,
 } from "../page/types.js";
 import { MAX_PAGE_ENVELOPE_BYTES } from "../page/limits.js";
+import { previewUpstream } from "../upstream/preview.js";
+import type {
+  DisclosureDecision as UpstreamDisclosureDecision,
+  UpstreamPreviewResult,
+} from "../upstream/types.js";
+import { MAX_UPSTREAM_REQUEST_BYTES } from "../upstream/limits.js";
 
 function printJson(value: unknown, exitCode: number): never {
   const text = assertNoLeakPaths(redactText(JSON.stringify(value, null, 2)));
@@ -68,11 +75,39 @@ function usageDiagnosis(): DiagnosisResult {
     evidence: [],
     error_code: "USAGE",
     error_message:
-      "Usage: changeguard diagnose|impact|analyze-page|repair-preview|repair-apply|verify|rollback|scan|scan-system|session-start|lifecycle …",
+      "Usage: changeguard diagnose|impact|analyze-page|upstream-preview|repair-preview|repair-apply|verify|rollback|scan|scan-system|session-start|lifecycle …",
     network_used: false,
     target_mutated: false,
     repair_applied: false,
   };
+}
+
+function upstreamUsageError(): never {
+  const result: UpstreamPreviewResult = {
+    schema_version: 1,
+    ok: false,
+    capsule: null,
+    disclosure_decision: "not_requested",
+    disclosure_manifest: {
+      schema_version: 1,
+      manifest_id: "cli_usage",
+      fields: [],
+      purpose: "usage",
+      destinations: [],
+    },
+    transport_calls: 0,
+    local_incident: null,
+    network_used: false,
+    target_mutated: false,
+    repair_applied: false,
+    repair_authorized: false,
+    external_write: false,
+    submission_status: "none",
+    error_code: "USAGE",
+    error_message:
+      "Usage: changeguard upstream-preview <isolated-target> --request=<upstream-request.json> [--disclose-approved|--disclose-refused]",
+  };
+  printJson(result, 2);
 }
 
 function pageUsageError(): never {
@@ -344,6 +379,136 @@ function parseAnalyzePageArgs(rest: string[]): {
   return { target: positional[0]!, envelopePath, disclosure_decision };
 }
 
+function parseUpstreamPreviewArgs(rest: string[]): {
+  target: string;
+  requestPath: string;
+  disclosure_decision: UpstreamDisclosureDecision;
+} | null {
+  if (rest.length === 0) return null;
+  let disclosure_decision: UpstreamDisclosureDecision = "not_requested";
+  let requestPath: string | null = null;
+  const positional: string[] = [];
+  for (const a of rest) {
+    if (a === "--disclose-approved") {
+      disclosure_decision = "approved";
+      continue;
+    }
+    if (a === "--disclose-refused") {
+      disclosure_decision = "refused";
+      continue;
+    }
+    if (a.startsWith("--request=")) {
+      const v = a.slice("--request=".length);
+      if (v.length === 0) return null;
+      requestPath = v;
+      continue;
+    }
+    if (a.startsWith("-")) {
+      return null;
+    }
+    positional.push(a);
+  }
+  if (positional.length !== 1 || !requestPath) return null;
+  return { target: positional[0]!, requestPath, disclosure_decision };
+}
+
+function runUpstreamPreview(
+  target: string,
+  requestPath: string,
+  disclosure_decision: UpstreamDisclosureDecision,
+): void {
+  try {
+    if (!fs.existsSync(requestPath)) {
+      printJson(
+        {
+          schema_version: 1,
+          ok: false,
+          capsule: null,
+          disclosure_decision,
+          transport_calls: 0,
+          network_used: false,
+          target_mutated: false,
+          repair_applied: false,
+          repair_authorized: false,
+          external_write: false,
+          submission_status: "none",
+          error_code: "REQUEST_NOT_FOUND",
+          error_message: "Upstream request file not found.",
+        },
+        1,
+      );
+    }
+    const raw = fs.readFileSync(requestPath, "utf8");
+    if (Buffer.byteLength(raw, "utf8") > MAX_UPSTREAM_REQUEST_BYTES) {
+      printJson(
+        {
+          schema_version: 1,
+          ok: false,
+          capsule: null,
+          disclosure_decision,
+          transport_calls: 0,
+          network_used: false,
+          target_mutated: false,
+          repair_applied: false,
+          repair_authorized: false,
+          external_write: false,
+          submission_status: "none",
+          error_code: "SIZE_LIMIT",
+          error_message: "Upstream request exceeds size limit.",
+        },
+        1,
+      );
+    }
+    let request: unknown;
+    try {
+      request = JSON.parse(raw);
+    } catch {
+      printJson(
+        {
+          schema_version: 1,
+          ok: false,
+          capsule: null,
+          disclosure_decision,
+          transport_calls: 0,
+          network_used: false,
+          target_mutated: false,
+          repair_applied: false,
+          repair_authorized: false,
+          external_write: false,
+          submission_status: "none",
+          error_code: "MALFORMED_JSON",
+          error_message: "Upstream request JSON is malformed.",
+        },
+        1,
+      );
+    }
+    // CLI never injects a live network transport.
+    const result: UpstreamPreviewResult = previewUpstream({
+      targetPath: target,
+      request,
+      disclosure_decision,
+      transport: null,
+    });
+    printJson(result, result.ok ? 0 : 1);
+  } catch {
+    printJson(
+      {
+        schema_version: 1,
+        ok: false,
+        error_code: "INTERNAL",
+        error_message: "Upstream preview failed.",
+        network_used: false,
+        target_mutated: false,
+        repair_applied: false,
+        repair_authorized: false,
+        external_write: false,
+        submission_status: "none",
+      },
+      1,
+    );
+  }
+}
+
 function runAnalyzePage(
   target: string,
   envelopePath: string,
@@ -548,6 +713,19 @@ export function runCli(argv: string[]): void {
       runAnalyzePage(
         parsed.target,
         parsed.envelopePath,
+        parsed.disclosure_decision,
+      );
+      return;
+    }
+
+    if (cmd === "upstream-preview") {
+      const parsed = parseUpstreamPreviewArgs(rest);
+      if (!parsed) {
+        upstreamUsageError();
+      }
+      runUpstreamPreview(
+        parsed.target,
+        parsed.requestPath,
         parsed.disclosure_decision,
       );
       return;

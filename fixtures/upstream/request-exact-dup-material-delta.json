@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "case_kind": "codex_product_bug",
+  "surface": "cli",
+  "platform": { "os": "linux", "arch": "x64", "unknown_reason": null },
+  "codex_version": "0.51.0",
+  "version_unknown_reason": null,
+  "actual_behavior": "Same protected process TypeError on Linux 0.51.0 with minimal repro",
+  "technical_signals": [
+    "TypeError: protected global process binding rejected assignment",
+    "offset_bucket:0x2e08f46"
+  ],
+  "reproduction": {
+    "quality": "reliable",
+    "steps": [
+      "Use disposable profile on Linux x64",
+      "Enable browser control",
+      "Observe TypeError before handshake"
+    ],
+    "intermittent_marker": null
+  },
+  "observed_facts": [
+    "Same mechanism as openai/codex#9001",
+    "New platform/version not listed on the Issue"
+  ],
+  "user_reports": [],
+  "hypotheses": [],
+  "duplicate_search": {
+    "searched": true,
+    "candidates": [
+      {
+        "issue_id": "openai/codex#9001",
+        "title": "protected process binding TypeError",
+        "state": "open",
+        "similarity": "exact",
+        "mechanism_match": true,
+        "url": "https://github.com/openai/codex/issues/9001"
+      }
+    ]
+  },
+  "evidence_delta": {
+    "items": [
+      {
+        "kind": "platform_version",
+        "summary": "Reproduced on Linux x64 Codex 0.51.0 (Issue only lists macOS 0.50)",
+        "material": true
+      },
+      {
+        "kind": "minimal_repro",
+        "summary": "Three-step disposable profile repro without extra plugins",
+        "material": true
+      }
+    ]
+  },
+  "doctor_json": {
+    "schema_version": 1,
+    "codex_version": "0.51.0",
+    "os": "linux",
+    "arch": "x64",
+    "status": "ok",
+    "summary": "baseline"
+  },
+  "privacy_review": {
+    "secrets_redacted": true,
+    "paths_redacted": true,
+    "session_excluded": true
+  },
+  "error_strings": [
+    "TypeError: protected global process binding rejected assignment"
+  ],
+  "command_strings": ["codex --browser-control"]
+}

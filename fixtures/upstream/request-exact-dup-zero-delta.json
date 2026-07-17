@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "case_kind": "codex_product_bug",
+  "surface": "cli",
+  "platform": { "os": "macos", "arch": "arm64", "unknown_reason": null },
+  "codex_version": "0.50.0",
+  "version_unknown_reason": null,
+  "actual_behavior": "Same protected process TypeError as existing Issue",
+  "technical_signals": [
+    "TypeError: protected global process binding rejected assignment"
+  ],
+  "reproduction": {
+    "quality": "reliable",
+    "steps": ["Reproduce known signature"],
+    "intermittent_marker": null
+  },
+  "observed_facts": [
+    "Exact match to openai/codex#9001 mechanism"
+  ],
+  "user_reports": [],
+  "hypotheses": [],
+  "duplicate_search": {
+    "searched": true,
+    "candidates": [
+      {
+        "issue_id": "openai/codex#9001",
+        "title": "protected process binding TypeError on browser-client init",
+        "state": "open",
+        "similarity": "exact",
+        "mechanism_match": true,
+        "url": "https://github.com/openai/codex/issues/9001"
+      }
+    ]
+  },
+  "evidence_delta": { "items": [] },
+  "doctor_json": {
+    "schema_version": 1,
+    "codex_version": "0.50.0",
+    "os": "macos",
+    "arch": "arm64",
+    "status": "ok",
+    "summary": "baseline"
+  },
+  "privacy_review": {
+    "secrets_redacted": true,
+    "paths_redacted": true,
+    "session_excluded": true
+  },
+  "error_strings": [
+    "TypeError: protected global process binding rejected assignment"
+  ],
+  "command_strings": []
+}

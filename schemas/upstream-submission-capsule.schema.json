@@ -1,0 +1,257 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-changeguard/upstream-submission-capsule.schema.json",
+  "title": "UpstreamSubmissionCapsule",
+  "description": "Ticket 10 local-only preview capsule. Never SUBMITTED/POSTED; external_write always false.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "capsule_id",
+    "mode",
+    "locality",
+    "repair_authorized",
+    "external_write",
+    "requires_ticket11_confirmation",
+    "status",
+    "route",
+    "github_issue_form",
+    "form_filename",
+    "duplicate",
+    "maintainer_value_gate",
+    "form_snapshot",
+    "doctor_inclusion",
+    "privacy_review",
+    "observed_facts",
+    "user_reports",
+    "hypotheses",
+    "error_strings",
+    "command_strings",
+    "route_rationale",
+    "draft_title",
+    "draft_labels",
+    "private_report_guidance",
+    "support_guidance",
+    "discussion_guidance",
+    "capsule_content_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "capsule_id": {
+      "type": "string",
+      "pattern": "^usc_[a-f0-9]{24}$"
+    },
+    "mode": { "const": "preview_only" },
+    "locality": { "const": "local_only" },
+    "repair_authorized": { "const": false },
+    "external_write": { "const": false },
+    "requires_ticket11_confirmation": { "const": true },
+    "status": {
+      "enum": [
+        "PREVIEW_READY",
+        "PREVIEW_BLOCKED",
+        "GATE_FAILED",
+        "ROUTED_PRIVATE"
+      ]
+    },
+    "route": {
+      "enum": [
+        "GITHUB_ISSUE",
+        "GITHUB_DISCUSSIONS",
+        "BUGCROWD",
+        "OPENAI_SUPPORT"
+      ]
+    },
+    "github_issue_form": {
+      "type": ["string", "null"],
+      "enum": ["APP", "CLI", "EXTENSION", "OTHER", null]
+    },
+    "form_filename": {
+      "type": ["string", "null"],
+      "maxLength": 128
+    },
+    "duplicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "matched_issue_id",
+        "matched_issue_url",
+        "evidence_delta_material",
+        "evidence_delta_hash",
+        "recommendation",
+        "draft_body",
+        "draft_comment",
+        "cross_link_issue_ids"
+      ],
+      "properties": {
+        "state": {
+          "enum": ["EXACT_DUPLICATE", "RELATED_NOT_SAME", "NEW_INCIDENT"]
+        },
+        "matched_issue_id": { "type": ["string", "null"], "maxLength": 128 },
+        "matched_issue_url": { "type": ["string", "null"], "maxLength": 512 },
+        "evidence_delta_material": { "type": "boolean" },
+        "evidence_delta_hash": {
+          "type": ["string", "null"],
+          "pattern": "^([a-f0-9]{64})?$"
+        },
+        "recommendation": {
+          "enum": [
+            "subscribe_or_upvote",
+            "comment_with_delta",
+            "open_new",
+            "cross_link_related",
+            "private_report",
+            "contact_support",
+            "open_discussion"
+          ]
+        },
+        "draft_body": { "type": ["string", "null"], "maxLength": 16384 },
+        "draft_comment": { "type": ["string", "null"], "maxLength": 8192 },
+        "cross_link_issue_ids": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "type": "string", "maxLength": 128 }
+        }
+      }
+    },
+    "maintainer_value_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["passed", "checks", "failed_ids"],
+      "properties": {
+        "passed": { "type": "boolean" },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "passed", "detail"],
+            "properties": {
+              "id": { "type": "string" },
+              "passed": { "type": "boolean" },
+              "detail": { "type": "string" }
+            }
+          }
+        },
+        "failed_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "form_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "snapshot_id",
+        "fetched_at",
+        "main_commit",
+        "integrity_sha256",
+        "freshness",
+        "stale_reason",
+        "age_ms",
+        "forms",
+        "source"
+      ],
+      "properties": {
+        "snapshot_id": { "type": "string" },
+        "fetched_at": { "type": "string" },
+        "main_commit": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "integrity_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "freshness": { "enum": ["fresh", "stale"] },
+        "stale_reason": { "type": ["string", "null"] },
+        "age_ms": { "type": "integer", "minimum": 0 },
+        "forms": { "type": "array" },
+        "source": {
+          "enum": ["bundled_immutable", "transport_refresh"]
+        }
+      }
+    },
+    "doctor_inclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "included",
+        "inclusion_manifest",
+        "sanitized_summary",
+        "refused_reasons",
+        "secrets_redacted",
+        "paths_redacted"
+      ],
+      "properties": {
+        "included": { "type": "boolean" },
+        "inclusion_manifest": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "sanitized_summary": {
+          "type": ["object", "null"]
+        },
+        "refused_reasons": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "secrets_redacted": { "type": "boolean" },
+        "paths_redacted": { "type": "boolean" }
+      }
+    },
+    "privacy_review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "passed",
+        "secrets_redacted",
+        "paths_redacted",
+        "injection_quarantined",
+        "quarantine"
+      ],
+      "properties": {
+        "passed": { "type": "boolean" },
+        "secrets_redacted": { "type": "boolean" },
+        "paths_redacted": { "type": "boolean" },
+        "injection_quarantined": { "type": "boolean" },
+        "quarantine": { "type": ["object", "null"] }
+      }
+    },
+    "observed_facts": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "user_reports": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "hypotheses": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "error_strings": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "command_strings": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "route_rationale": { "type": "string" },
+    "draft_title": { "type": ["string", "null"] },
+    "draft_labels": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "private_report_guidance": { "type": ["string", "null"] },
+    "support_guidance": { "type": ["string", "null"] },
+    "discussion_guidance": { "type": ["string", "null"] },
+    "capsule_content_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

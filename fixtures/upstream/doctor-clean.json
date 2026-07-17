@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "codex_version": "0.50.0",
+  "cli_version": "0.50.0",
+  "platform": "macos",
+  "os": "macos",
+  "arch": "arm64",
+  "node_version": "v22.14.0",
+  "sandbox_mode": "workspace-write",
+  "features": ["browser_control"],
+  "mcp_servers": ["changeguard"],
+  "plugins": [],
+  "skills": ["changeguard"],
+  "hooks": [],
+  "auth_mode": "chatgpt",
+  "network_mode": "restricted",
+  "status": "ok",
+  "checks": ["cli_present", "config_readable"],
+  "summary": "baseline diagnostics ok"
+}

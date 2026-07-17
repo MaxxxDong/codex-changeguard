@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "case_kind": "codex_product_bug",
+  "surface": "cli",
+  "platform": { "os": "macos", "arch": "arm64", "unknown_reason": null },
+  "codex_version": "0.50.0",
+  "version_unknown_reason": null,
+  "actual_behavior": "CLI exits with TypeError when protected process binding is assigned during browser-client init",
+  "technical_signals": [
+    "TypeError: protected global process binding rejected assignment",
+    "ast:js.global-process-shim-redefinition.v1",
+    "module:browser-client.mjs"
+  ],
+  "reproduction": {
+    "quality": "reliable",
+    "steps": [
+      "Launch isolated Codex CLI with browser control enabled",
+      "Observe handshake failure before discovery completes"
+    ],
+    "intermittent_marker": null
+  },
+  "observed_facts": [
+    "Local artifact hash matches known protected-process signature",
+    "Failure phase is extension_handshake"
+  ],
+  "user_reports": [
+    "User reported CLI hangs after enabling browser"
+  ],
+  "hypotheses": [
+    "Possible interaction with a global process shim"
+  ],
+  "duplicate_search": {
+    "searched": true,
+    "candidates": []
+  },
+  "evidence_delta": { "items": [] },
+  "doctor_json": {
+    "schema_version": 1,
+    "codex_version": "0.50.0",
+    "cli_version": "0.50.0",
+    "platform": "macos",
+    "os": "macos",
+    "arch": "arm64",
+    "status": "ok",
+    "checks": ["cli_present"],
+    "summary": "baseline ok"
+  },
+  "privacy_review": {
+    "secrets_redacted": true,
+    "paths_redacted": true,
+    "session_excluded": true
+  },
+  "error_strings": [
+    "TypeError: protected global process binding rejected assignment"
+  ],
+  "command_strings": [
+    "codex --browser-control"
+  ]
+}

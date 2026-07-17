@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "case_kind": "account_billing_private",
+  "surface": "app",
+  "platform": { "os": "macos", "arch": "arm64", "unknown_reason": null },
+  "codex_version": "0.50.0",
+  "version_unknown_reason": null,
+  "actual_behavior": "User cannot access billing portal for ChatGPT team subscription",
+  "technical_signals": [
+    "account_support:billing_portal"
+  ],
+  "reproduction": {
+    "quality": "once",
+    "steps": [],
+    "intermittent_marker": null
+  },
+  "observed_facts": [
+    "No Codex product fault measured"
+  ],
+  "user_reports": [
+    "Billing page returns account error"
+  ],
+  "hypotheses": [],
+  "duplicate_search": {
+    "searched": false,
+    "candidates": []
+  },
+  "evidence_delta": { "items": [] },
+  "doctor_json": null,
+  "privacy_review": {
+    "secrets_redacted": true,
+    "paths_redacted": true,
+    "session_excluded": true
+  },
+  "error_strings": [],
+  "command_strings": []
+}

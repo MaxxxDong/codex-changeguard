@@ -47,6 +47,7 @@ node bin/changeguard.js diagnose fixtures/protected-process
 node bin/changeguard.js diagnose fixtures/negative-control
 node bin/changeguard.js diagnose fixtures/crash-family/access-violation-crbrowser
 node bin/changeguard.js analyze-page fixtures/protected-process --envelope=fixtures/page-evidence/valid-protected-process.json --disclose-refused
+node bin/changeguard.js upstream-preview fixtures/protected-process --request=fixtures/upstream/request-new-incident-cli.json --disclose-refused
 ```
 
 Implemented public commands (repository wrapper: `node bin/changeguard.js …`):
@@ -56,6 +57,7 @@ Implemented public commands (repository wrapper: `node bin/changeguard.js …`):
 | Diagnose (Ticket 01) | `changeguard diagnose <target>` | `changeguard_diagnose` |
 | Impact Card (Ticket 04) | `changeguard impact <target> [--disclose-approved\|--disclose-refused]` | `changeguard_impact` |
 | Page analysis (Ticket 05) | `changeguard analyze-page <target> --envelope=<page.json> [--disclose-…]` | `changeguard_analyze_page` |
+| Upstream preview (Ticket 10) | `changeguard upstream-preview <target> --request=<request.json> [--disclose-…]` | `changeguard_upstream_preview` |
 | Lifecycle (Ticket 06) | `changeguard lifecycle <operation> <target>` | `changeguard_lifecycle` |
 | Repair (Ticket 02) | `repair-preview` / `repair-apply` / `verify` / `rollback` | `changeguard_repair_*` / `changeguard_verify` / `changeguard_rollback` |
 | Instances (Ticket 03) | `scan` / `scan-system` / `session-start` | `changeguard_scan` / `changeguard_scan_system` / `changeguard_session_start` |
@@ -137,6 +139,19 @@ title similarity alone cannot create high confidence. Without a verified fix,
 diagnosis returns `UPSTREAM_BLOCKED` (or `INCONCLUSIVE`) and never authorizes a
 symptom-level Repair Capsule. Active crash probes require disposable isolation.
 Windows real-machine Full support remains Ticket 14.
+
+### Upstream draft routing (Ticket 10) — preview only
+
+`changeguard upstream-preview` / `changeguard_upstream_preview` builds a local-only
+Upstream Submission Capsule: routes among GitHub Issue, Discussions, Bugcrowd, and
+OpenAI Support; maps Issue surfaces to APP/CLI/EXTENSION/OTHER forms; classifies
+duplicates as `EXACT_DUPLICATE` / `RELATED_NOT_SAME` / `NEW_INCIDENT`; zero Evidence
+Delta exact duplicates recommend subscribe/upvote only (no body); material deltas
+may preview a structured comment. Validated security never becomes a public Issue
+draft. Optional `codex doctor --json` is orchestrator-supplied, sanitized, and shown
+via an inclusion manifest — ChangeGuard never executes codex or opens production
+network sockets. Capsules are `preview_only` / `local_only` with `external_write: false`
+and require separate Ticket 11 confirmation before any real write.
 
 ## Plugin surfaces
 

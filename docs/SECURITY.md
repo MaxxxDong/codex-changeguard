@@ -78,6 +78,17 @@ User-provided public or logged-in-visible problem pages are **untrusted evidence
 - Convert page commands only to `candidate_only` untrusted Repair DSL records for later isolated validation; never execute or authorize them on this seam. Ticket 02 apply gates remain mandatory.
 - Hard-gate generic ChatGPT/account/session pages away from Codex component defects. Wrong platform/surface/mechanism cannot reach high confidence from lexical similarity alone.
 
+## Ticket 10 upstream draft preview (local only)
+
+Upstream Submission Capsules are **preview artifacts**, not submissions.
+
+- Capsule always carries `external_write: false`, `repair_authorized: false`, `mode: preview_only`, `locality: local_only`. No Issue create/comment/reaction/subscribe/upload/token/auth operation runs on this seam.
+- Validated security vulnerabilities route only to Bugcrowd private reporting guidance; public Issue drafts are forbidden for that route.
+- Request and doctor envelopes reject forbidden privacy keys (`token`, `cookie`, `session`, secrets, full env). Full-width / NFKC secret and path shapes are redacted. Prompt injection is quarantined (`PREVIEW_BLOCKED`).
+- Optional form-definition refresh uses the same official host/repo allowlist (`github.com` / `api.github.com` / `raw.githubusercontent.com` + `openai/codex` only) and requires disclosure approved **plus** an injected transport. Production CLI/MCP never inject transport.
+- `codex doctor --json` is orchestrator-supplied only; never collected by executing codex or shell. Inclusion manifest lists sanitized fields before any later Ticket 11 export.
+- Ticket 11 confirmation is mandatory before any external write; Ticket 10 never emits `SUBMITTED` / `POSTED`.
+
 ## Probe safety
 
 - probes are registered by ID and versioned

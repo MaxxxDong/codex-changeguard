@@ -4,7 +4,8 @@
  * only under an isolated target via registered recovery operations) + Ticket 03
  * multi-instance scan / SessionStart tools (state writes only under PLUGIN_DATA)
  * + Ticket 05 untrusted page-evidence analysis (orchestrator-supplied envelope)
- * + Ticket 06 lifecycle (KNOWN_GOOD / retention / A-B / canary / supersession).
+ * + Ticket 06 lifecycle (KNOWN_GOOD / retention / A-B / canary / supersession)
+ * + Ticket 10 upstream draft preview (local-only capsule; never external write).
  *
  * Wire protocol: newline-delimited JSON-RPC 2.0 over stdio.
  * Request frames are accumulated as bounded bytes (not unbounded readline).
@@ -37,10 +38,17 @@ import type {
   PageDisclosureDecision,
 } from "../page/types.js";
 import { MAX_PAGE_ENVELOPE_BYTES } from "../page/limits.js";
+import { previewUpstream } from "../upstream/preview.js";
+import type {
+  DisclosureDecision as UpstreamDisclosureDecision,
+  UpstreamPreviewResult,
+} from "../upstream/types.js";
+import { MAX_UPSTREAM_REQUEST_BYTES } from "../upstream/limits.js";
 
 const TOOL_DIAGNOSE = "changeguard_diagnose";
 const TOOL_IMPACT = "changeguard_impact";
 const TOOL_ANALYZE_PAGE = "changeguard_analyze_page";
+const TOOL_UPSTREAM_PREVIEW = "changeguard_upstream_preview";
 const TOOL_REPAIR_PREVIEW = "changeguard_repair_preview";
 const TOOL_REPAIR_APPLY = "changeguard_repair_apply";
 const TOOL_VERIFY = "changeguard_verify";
@@ -54,6 +62,7 @@ const KNOWN_TOOLS = new Set([
   TOOL_DIAGNOSE,
   TOOL_IMPACT,
   TOOL_ANALYZE_PAGE,
+  TOOL_UPSTREAM_PREVIEW,
   TOOL_REPAIR_PREVIEW,
   TOOL_REPAIR_APPLY,
   TOOL_VERIFY,
@@ -157,6 +166,30 @@ function toolSchemas() {
             enum: ["approved", "refused", "not_requested"],
             description:
               "Disclosure for optional public page transport. Default not_requested. Production MCP never injects transport (transport_calls: 0).",
+          },
+        },
+      },
+    },
+    {
+      name: TOOL_UPSTREAM_PREVIEW,
+      description:
+        "Generate a local-only Upstream Submission Capsule (preview). Routes among GitHub Issue / Discussions / Bugcrowd / OpenAI Support; deduplicates; sanitizes optional doctor JSON; never performs external write, reaction, upload, or token/auth. Production never injects form transport.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["target", "request"],
+        properties: {
+          target: targetProp,
+          request: {
+            type: "object",
+            description:
+              "Bounded upstream preview request (case_kind, surface, platform, actual_behavior, technical_signals, reproduction, observed_facts, duplicate_search, evidence_delta, optional doctor_json, privacy_review). additionalProperties false; no tokens/cookies/session.",
+          },
+          disclosure_decision: {
+            type: "string",
+            enum: ["approved", "refused", "not_requested"],
+            description:
+              "Disclosure for optional official form refresh. Default not_requested. Production MCP never injects transport (transport_calls: 0).",
           },
         },
       },
@@ -342,6 +375,7 @@ function handleToolsCall(params: unknown): {
     | DiagnosisResult
     | ImpactAssessmentResult
     | PageAnalysisResult
+    | UpstreamPreviewResult
     | RepairResult
     | ScanResult
     | LifecycleResult;
@@ -454,6 +488,59 @@ function handleToolsCall(params: unknown): {
     const payload = analyzePage({
       targetPath: target,
       envelope: a.envelope,
+      disclosure_decision,
+      transport: null,
+    });
+    return { payload, ok: payload.ok };
+  }
+
+  if (p.name === TOOL_UPSTREAM_PREVIEW) {
+    const allowed = new Set(["target", "request", "disclosure_decision"]);
+    for (const k of Object.keys(a)) {
+      if (!allowed.has(k)) {
+        throw Object.assign(new Error("Unknown or extra arguments."), {
+          code: "EXTRA_ARGS",
+        });
+      }
+    }
+    const target = requireTarget(a);
+    if (a.request === undefined || a.request === null) {
+      throw Object.assign(new Error("Invalid request."), {
+        code: "INVALID_ARGS",
+      });
+    }
+    let requestSerialized: string;
+    try {
+      requestSerialized = JSON.stringify(a.request);
+    } catch {
+      throw Object.assign(new Error("Invalid request."), {
+        code: "INVALID_ARGS",
+      });
+    }
+    if (
+      Buffer.byteLength(requestSerialized, "utf8") > MAX_UPSTREAM_REQUEST_BYTES
+    ) {
+      throw Object.assign(new Error("Upstream request exceeds size limit."), {
+        code: "SIZE_LIMIT",
+      });
+    }
+    let disclosure_decision: UpstreamDisclosureDecision = "not_requested";
+    if (a.disclosure_decision !== undefined) {
+      if (
+        a.disclosure_decision !== "approved" &&
+        a.disclosure_decision !== "refused" &&
+        a.disclosure_decision !== "not_requested"
+      ) {
+        throw Object.assign(new Error("Invalid disclosure_decision."), {
+          code: "INVALID_ARGS",
+        });
+      }
+      disclosure_decision = a.disclosure_decision;
+    }
+    // MCP never injects a live form transport — no hidden network / no external write.
+    const payload: UpstreamPreviewResult = previewUpstream({
+      targetPath: target,
+      request: a.request,
       disclosure_decision,
       transport: null,
     });

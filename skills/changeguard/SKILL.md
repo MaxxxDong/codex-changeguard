@@ -197,14 +197,41 @@ When the isolated target carries sanitized `crash_metadata` (or browser-crash si
 
 Diagnosis and repair use the same public seams as Tickets 01–02. Control files are limited to registered paths under an isolated target (`config/config.toml`, optional override and managed.policy marker). Distinct measured fault classes (`ConfigTomlSyntaxError`, `ConfigSchemaTypeError`, `ConfigObsoleteKeyError`, `ConfigSourceConflictError`) produce distinct fingerprints. Repair Capsules for registered `config_set` / `config_remove` operations show redacted old-value summaries, never secret material. Managed/admin-owned targets return `ADMIN_ACTION_REQUIRED` with IT handoff facts only. Startup verification covers original failure, config reload, and a basic registered command; verification failure auto-rolls back.
 
+## Ticket 10 — upstream draft routing (preview only)
+
+### Public seams (same core)
+
+1. Rescue CLI: `changeguard upstream-preview <isolated-target> --request=<request.json> [--disclose-approved|--disclose-refused]`
+2. MCP tool: `changeguard_upstream_preview` with `{ "target", "request", "disclosure_decision"? }`
+
+Both call `previewUpstream()` and return the same Upstream Submission Capsule. Production never injects form transport and never performs external write, reaction, subscription, upload, comment, Issue creation, or token/auth.
+
+### Orchestration steps
+
+1. Resolve an isolated target for local incident context.
+2. Build a bounded upstream request (case_kind, surface, platform/version, actual behavior, technical signals, reproduction, observed_facts / user_reports / hypotheses, duplicate_search, evidence_delta, optional doctor_json, privacy_review).
+3. Present disclosure before any optional official form refresh; production seams stay offline.
+4. Call CLI or MCP — not a parallel heuristic.
+5. Present route, form, duplicate state, maintainer-value gate, doctor inclusion manifest, and draft body/comment **only when allowed** (exact-dup zero-delta → subscribe/upvote only).
+6. State explicitly: preview only; Ticket 11 confirmation required before any real GitHub action.
+
+### Forbidden in Ticket 10
+
+- external write / reaction / subscribe / upload / Issue create / comment post
+- requesting, storing, or displaying access tokens
+- rendering a public Issue draft for validated security (Bugcrowd private only)
+- executing `codex doctor` or arbitrary shell to collect diagnostics
+- claiming `SUBMITTED` / `POSTED` status
+
 ## Planned commands
 
 - `/changeguard scan`: compare installed and last-seen Codex fingerprints via the shared instance core (Ticket 03)
 - `/changeguard diagnose`: build an incident fingerprint via the shared core (Ticket 01 + Ticket 07 config faults + Ticket 08 plugin-cache mechanisms on isolated targets)
 - `/changeguard diagnose <URL>` / analyze-page: untrusted page-evidence applicability (Ticket 05)
 - `/changeguard impact`: official-evidence Impact Card via the shared core (Ticket 04)
+- `/changeguard upstream-preview`: local-only Upstream Submission Capsule (Ticket 10; Ticket 11 performs confirmed writes)
 - `/changeguard repro-pack`: show the disclosure manifest and export a redacted evidence package after confirmation
 - `/changeguard recovery-preview` / repair-preview: build a Repair Capsule (Ticket 02 protected-process; Ticket 07 config set/remove; Ticket 08 plugin-cache)
 - `/changeguard verify` / `/changeguard rollback`: recovery seams (Tickets 02 / 07 / 08)
 
-Upstream submission remains a later ticket. This Skill freezes the safety contract and routes diagnosis/repair/scan/impact/page analysis through the shared core only.
+Confirmed upstream writes remain Ticket 11. This Skill freezes the safety contract and routes diagnosis/repair/scan/impact/page/upstream-preview through the shared core only.
