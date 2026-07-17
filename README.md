@@ -13,8 +13,10 @@ ChangeGuard is not a generic changelog summarizer, Issue chatbot, environment do
 - Competition: OpenAI Build Week 2026
 - Track: `track-openai-build-week-codex-changeguard-20260717`
 - Gate B: approved, option A
-- Local scope: Ticket 01 read-only diagnosis spine (CLI + MCP + shared core); broader product remains in progress
-- Registration and external submission: not started; Gate C not authorized
+- Ticket 01 (read-only diagnosis spine): `LOCAL_COMPLETE` on commit `d7d917b03fc8b2ddd6b9b42b961cf58b4af4e5b2` (CLI + MCP + shared core)
+- Broader product: still `IN_PROGRESS` (Tickets 02–17 not complete)
+- Registration and external submission: `NOT_STARTED`; Gate C not authorized; no public publication or upload
+- Exact local-verification evidence: [HANDOFF.md](HANDOFF.md)
 
 ## Start here
 
