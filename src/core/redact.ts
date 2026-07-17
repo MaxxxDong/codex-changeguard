@@ -3,16 +3,27 @@
  * Strips absolute paths and credential-shaped tokens from user-visible strings.
  */
 
-const ABS_PATH =
-  /(?:\/(?:Users|home|tmp|var|private|System|Library|opt|usr)\/[^\s"'`]+)|(?:[A-Za-z]:\\[^\s"'`]+)|(?:\\\\[^\s"'`]+)/g;
+/**
+ * Generic absolute-path shapes after NFKC:
+ * - POSIX absolute paths (any root, not only /Users|/home|…)
+ * - Windows drive paths
+ * - Windows UNC paths
+ *
+ * Avoid leaking /etc, /root, /Applications, or arbitrary absolute roots.
+ */
+const ABS_PATH_POSIX =
+  /(?:^|[\s"'`=(,:\[{])(\/(?:[^/\s"'`]+\/)*[^/\s"'`]+)/g;
+const ABS_PATH_WIN_DRIVE = /(?:^|[\s"'`=(,:\[{])([A-Za-z]:\\(?:[^\s"'`\\]+\\)*[^\s"'`]*)/g;
+const ABS_PATH_WIN_UNC = /(?:^|[\s"'`=(,:\[{])(\\\\[^\s"'`]+(?:\\[^\s"'`]*)*)/g;
+
+/** Standalone absolute POSIX path at start of string or after delimiter. */
+const ABS_PATH_POSIX_STANDALONE = /(?:^|[\s"'`=(,:\[{])(\/[^\s"'`]+)/g;
 
 const CREDENTIAL_SHAPES = [
   /\bBearer\s+[A-Za-z0-9\-._~+/]+=*/gi,
   /\b(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|auth[_-]?token|password|passwd|secret|client[_-]?secret)\s*[:=]\s*\S+/gi,
   /\b(?:sk|pk|rk)-[A-Za-z0-9]{8,}\b/g,
   /\b(?:xox[baprs]-)[A-Za-z0-9-]{10,}\b/g,
-  // Full-width underscore variants after NFKC still covered by above;
-  // also catch API_KEY=value without word boundary issues.
   /\bAPI[_-]?KEY\s*[:=]\s*\S+/gi,
 ];
 
@@ -21,9 +32,28 @@ export function nfkc(input: string): string {
   return input.normalize("NFKC");
 }
 
+function redactAbsolutePaths(s: string): string {
+  // Replace generic absolute paths with a placeholder. Use a function replacer
+  // that preserves the leading delimiter character.
+  const replacePath = (full: string, pathPart: string): string => {
+    const leadLen = full.length - pathPart.length;
+    const lead = leadLen > 0 ? full.slice(0, leadLen) : "";
+    return `${lead}<redacted-path>`;
+  };
+  let out = s.replace(ABS_PATH_POSIX_STANDALONE, replacePath);
+  out = out.replace(ABS_PATH_POSIX, replacePath);
+  out = out.replace(ABS_PATH_WIN_DRIVE, replacePath);
+  out = out.replace(ABS_PATH_WIN_UNC, replacePath);
+  // Also catch bare absolute paths that fill an entire field.
+  if (/^\/[^\s]+$/.test(out) || /^[A-Za-z]:\\[^\s]+$/.test(out) || /^\\\\[^\s]+$/.test(out)) {
+    out = "<redacted-path>";
+  }
+  return out;
+}
+
 export function redactText(input: string): string {
   let s = nfkc(input);
-  s = s.replace(ABS_PATH, "<redacted-path>");
+  s = redactAbsolutePaths(s);
   for (const re of CREDENTIAL_SHAPES) {
     s = s.replace(re, "<redacted-secret>");
   }

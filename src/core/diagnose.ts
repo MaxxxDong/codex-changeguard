@@ -142,7 +142,11 @@ export function diagnose(
 
   let incidentBuf: Buffer;
   try {
-    incidentBuf = readBoundedFile(incidentMeta.real, MAX_INCIDENT_BYTES);
+    incidentBuf = readBoundedFile(
+      incidentMeta.real,
+      MAX_INCIDENT_BYTES,
+      incidentMeta.preOpen,
+    );
   } catch (e) {
     if (e instanceof PathSafetyError) {
       return fail(e.code, e.message);
@@ -179,7 +183,7 @@ export function diagnose(
     if (art.size > MAX_ARTIFACT_BYTES) {
       return fail("SIZE_LIMIT", "Artifact exceeds size limit.");
     }
-    const artBuf = readBoundedFile(art.real, MAX_ARTIFACT_BYTES);
+    const artBuf = readBoundedFile(art.real, MAX_ARTIFACT_BYTES, art.preOpen);
     artifactPresent = true;
     measuredArtifactSha = sha256Buffer(artBuf);
     evidence.push({

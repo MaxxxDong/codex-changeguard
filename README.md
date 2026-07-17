@@ -13,7 +13,7 @@ ChangeGuard is not a generic changelog summarizer, Issue chatbot, environment do
 - Competition: OpenAI Build Week 2026
 - Track: `track-openai-build-week-codex-changeguard-20260717`
 - Gate B: approved, option A
-- Local scope: Ticket 01 read-only diagnosis spine implemented (CLI + MCP + shared core)
+- Local scope: Ticket 01 read-only diagnosis spine (CLI + MCP + shared core); broader product remains in progress
 - Registration and external submission: not started; Gate C not authorized
 
 ## Start here
@@ -33,22 +33,31 @@ Rescue CLI and MCP share one diagnosis core. Both return the same structured
 `DiagnosisResult` / `IncidentFingerprint`. The flow is read-only: no network,
 no target mutation, no repair, and never `RESOLVED_VERIFIED`.
 
+A clean source checkout is not runnable until dependencies are installed and the
+project is built (or packaged):
+
 ```bash
 npm ci
 npm run build
+npm test
+npm run check:boundary
+npm run package
+npm run package:smoke
 node bin/changeguard.js diagnose fixtures/protected-process
 node bin/changeguard.js diagnose fixtures/negative-control
-npm test
 ```
 
 - CLI: `changeguard diagnose <isolated-target-directory>`
-- MCP tool: `changeguard_diagnose` with `{ "target": "<isolated-target-directory>" }`
+- MCP tool: `changeguard_diagnose` with `{ "target": "<isolated-target-directory>" }` only
 - Skill: `/changeguard diagnose` orchestrates the same seams (see `skills/changeguard/SKILL.md`)
+- Package: `npm run package` writes `release/codex-changeguard-plugin/` (compiled JS + manifest + MCP + Skill + fixtures/docs/schemas; no `node_modules`)
 
 Positive protected-process fixture may reach `SOURCE_COMPONENT_LOCATED` only when
-artifact bytes are independently hashed and the AST pattern is measured locally.
-Declared hashes or AST ids inside incident JSON never self-prove. The negative
-control stays `INCONCLUSIVE` and does not claim a root cause. User-resolution and
+artifact bytes are independently hashed and the protected-process structural
+signature is measured locally (exactly one real shim block; comments/strings
+cannot spoof). Declared hashes or AST ids inside incident JSON never self-prove;
+surface/error/phase remain applicability gates. The negative control stays
+`INCONCLUSIVE` and does not claim a root cause. User-resolution and
 upstream-contribution receipts are always separate.
 
 ## Plugin surfaces

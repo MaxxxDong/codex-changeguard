@@ -41,6 +41,9 @@ const PHASES = new Set([
 
 const OSES = new Set(["macos", "windows", "linux", "unknown"]);
 
+const STACK_FRAME_KEYS = new Set(["module", "file", "symbol", "line_bucket"]);
+const ARTIFACT_HASH_KEYS = new Set(["path_alias", "sha256"]);
+
 export class FingerprintError extends Error {
   readonly code: string;
   constructor(code: string, message = "Invalid incident.") {
@@ -130,10 +133,18 @@ function parseStackFrames(raw: unknown): StackFrame[] | undefined {
     throw new FingerprintError("FIELD_LIMIT", "Too many stack frames.");
   }
   return raw.map((item, i) => {
-    if (!item || typeof item !== "object") {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
       throw new FingerprintError("MALFORMED_INCIDENT", `Invalid stack frame ${i}.`);
     }
     const f = item as Record<string, unknown>;
+    for (const k of Object.keys(f)) {
+      if (!STACK_FRAME_KEYS.has(k)) {
+        throw new FingerprintError(
+          "MALFORMED_INCIDENT",
+          "Unexpected stack_frames field.",
+        );
+      }
+    }
     return {
       module: asNullableString(f.module, 256, "stack.module"),
       file: asNullableString(f.file, 256, "stack.file"),
@@ -183,14 +194,30 @@ function parseArtifactHashes(raw: unknown): ArtifactHash[] | undefined {
   if (raw.length > MAX_ARTIFACT_HASHES) {
     throw new FingerprintError("FIELD_LIMIT", "Too many artifact_hashes.");
   }
+  const seenAliases = new Set<string>();
   return raw.map((item) => {
-    if (!item || typeof item !== "object") {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
       throw new FingerprintError("MALFORMED_INCIDENT", "Invalid artifact hash.");
     }
     const a = item as Record<string, unknown>;
+    for (const k of Object.keys(a)) {
+      if (!ARTIFACT_HASH_KEYS.has(k)) {
+        throw new FingerprintError(
+          "MALFORMED_INCIDENT",
+          "Unexpected artifact_hashes field.",
+        );
+      }
+    }
     if (typeof a.path_alias !== "string" || !/^[A-Z][A-Z0-9_]{0,63}$/.test(a.path_alias)) {
       throw new FingerprintError("MALFORMED_INCIDENT", "Invalid path_alias.");
     }
+    if (seenAliases.has(a.path_alias)) {
+      throw new FingerprintError(
+        "MALFORMED_INCIDENT",
+        "Duplicate artifact path_alias.",
+      );
+    }
+    seenAliases.add(a.path_alias);
     if (typeof a.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(a.sha256)) {
       throw new FingerprintError("MALFORMED_INCIDENT", "Invalid sha256.");
     }

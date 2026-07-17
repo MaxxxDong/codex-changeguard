@@ -8,6 +8,7 @@ node_modules/
 dist/
 dist-tests/
 build/
+release/
 .changeguard-state/
 .grok-output/
 .grok-worker/

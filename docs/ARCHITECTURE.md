@@ -60,22 +60,26 @@ Evidence-locked verdict + Recovery Capsule preview
 Public seams:
 
 1. `changeguard diagnose <isolated-target>` (repository wrapper `bin/changeguard.js`)
-2. MCP tool `changeguard_diagnose` with argument `{ target }`
+2. MCP tool `changeguard_diagnose` with argument `{ target }` only (no extra top-level `tools/call` params)
 
 Both call `diagnose()` and return the same `DiagnosisResult` shape:
 
 - `diagnosis_state` (evidence ladder state; Ticket 01 max is `SOURCE_COMPONENT_LOCATED`)
-- `incident_fingerprint` (schema-validated, redacted)
-- independent `user_resolution` and `upstream_contribution` receipts
-- `network_used: false`, `target_mutated: false`, `repair_applied: false`
+- `incident_fingerprint` (schema-validated, redacted; nested objects reject extra fields)
+- independent `user_resolution` and `upstream_contribution` receipts (distinct receipt IDs)
+- `network_used: false`, `target_mutated: false`, `repair_applied: false` (markers only; boundary also enforced by `scripts/check-production-boundary.mjs`)
 
 Core I/O rules:
 
 - read only named candidates (`incident.json`, optional `artifacts/browser-client.mjs`)
-- `lstat` first; refuse symlink candidates whose realpath escapes the target root without reading outside content
+- fail-closed no-follow: refuse a target that is itself a symlink; refuse any symlink in any intermediate segment or leaf of named candidates (even if it currently resolves inside the target)
+- open with `O_NOFOLLOW` when available, `fstat` the fd, require a regular file, enforce the byte limit from the fd, and compare stable pre-open metadata where meaningful
 - explicit byte limits; never recursively crawl a project tree
-- independently measure artifact SHA-256 and AST pattern; declared JSON hashes/ids are contextual only
+- independently measure artifact SHA-256 and a syntax-aware structural signature of the exact protected-process shim block; declared JSON hashes/ids never self-prove
+- surface / error class / failure phase remain applicability gates after independent measurements
+- MCP stdio uses a bounded byte-oriented NDJSON frame accumulator (`MAX_MCP_REQUEST_BYTES`) before `JSON.parse`
 - Scenario Harness owns whole-target before/after hashing, not the diagnosis core
+- Packaging: `npm run package` builds `release/codex-changeguard-plugin/` with compiled JS + manifest + MCP config + Skill + fixtures/docs/schemas; no `node_modules`. A clean source checkout is not claimed runnable before `npm ci && npm run build` (or package).
 
 ## 3. Detection and localization ladder
 
@@ -225,19 +229,23 @@ There is no assumed native software-update event.
 
 Inputs:
 
-- known affected `browser-client.mjs` SHA-256
-- the three assignment statements that redefine global process/global
-- failure phase before extension handshake
+- known affected `browser-client.mjs` SHA-256 (independently measured from fixture bytes)
+- the exact three-statement protected-process shim block (structural match, not regex over raw text):
+  - `globalThis.process = <shim>;`
+  - `globalThis.global = globalThis.global ?? globalThis;`
+  - `globalThis.global.process = <same shim>;`
+- exactly one such block per file; comments and string/template contents cannot spoof a match
+- failure phase before extension handshake (applicability gate)
 - community Issue comment as untrusted workaround evidence
 
 Expected path:
 
-1. Detect error/phase signature.
-2. Hash the packaged copies and identify identical artifacts.
-3. Match the AST pattern and require exactly one target block per file.
+1. Detect error/phase/surface applicability gates from the incident.
+2. Hash the packaged copies and identify identical artifacts via independent SHA-256.
+3. Match the structural shim signature and require exactly one target block per file.
 4. Report Issue #32925 as a candidate; the comment remains community evidence.
-5. Run the property-descriptor and bundled module fixture probes.
-6. Reach `SOURCE_COMPONENT_LOCATED`; reach `LOCAL_REPRO_CONFIRMED` only if the deterministic fixture reproduces and the negative control does not.
+5. Run the property-descriptor and bundled module fixture probes (later tickets for live repro).
+6. Reach `SOURCE_COMPONENT_LOCATED` from measured hash + structural signature + gates; reach `LOCAL_REPRO_CONFIRMED` only if the deterministic fixture reproduces and the negative control does not.
 7. Produce a T1 Recovery Capsule preview for the local shim; never patch real caches in the competition demo.
 
 The precise claim is: “The exact affected pattern is present in these local artifacts and the bundled probe reproduces the same protected-process failure mechanism.” It is not: “OpenAI officially confirmed Issue #32925 as the root cause.”

@@ -21,13 +21,13 @@ function usageError(): never {
     user_resolution: {
       status: "INCONCLUSIVE",
       summary: "Invalid arguments.",
-      receipt_id: "cli_usage",
+      receipt_id: "cli_usage_user",
     },
     upstream_contribution: {
       status: "NONE",
       summary: "No upstream contribution.",
       issue_candidates: [],
-      receipt_id: "cli_usage",
+      receipt_id: "cli_usage_upstream",
     },
     evidence: [],
     error_code: "USAGE",
@@ -72,13 +72,13 @@ export function runCli(argv: string[]): void {
       user_resolution: {
         status: "INCONCLUSIVE",
         summary: "Diagnosis failed safely.",
-        receipt_id: "cli_error",
+        receipt_id: "cli_error_user",
       },
       upstream_contribution: {
         status: "NONE",
         summary: "No upstream contribution.",
         issue_candidates: [],
-        receipt_id: "cli_error",
+        receipt_id: "cli_error_upstream",
       },
       evidence: [],
       error_code: "INTERNAL",

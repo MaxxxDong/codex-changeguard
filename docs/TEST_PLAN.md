@@ -69,17 +69,20 @@ isolated target filesystem. The harness owns whole-target before/after hashing.
 
 Mandatory cases (implemented in `tests/scenario-harness.test.ts`):
 
-- positive fixture → `SOURCE_COMPONENT_LOCATED` from measured hash + AST only
-- negative control → `INCONCLUSIVE`, no root-cause claim
+- positive fixture → `SOURCE_COMPONENT_LOCATED` from independently measured hash + structural shim signature, with surface/error/phase applicability gates
+- negative control → `INCONCLUSIVE`, no root-cause claim; Ticket 01 user statuses only from the allowed non-resolved set
 - target bytes/hash unchanged before vs after diagnosis
-- CLI/MCP result equivalence for stable diagnosis fields
-- no network markers; no repair / `RESOLVED_VERIFIED`
-- symlink escape (incident or artifact) refused without reading outside content
-- only named allowlisted candidates read; no recursive crawl
-- incident size bound; malformed JSON; extra fields; AST id length > 128
-- credential and full-width Unicode secret redaction after NFKC
-- MCP partial stdout chunks, prompt timer cleanup, extra-arg rejection
+- CLI/MCP comprehensive stable-field equivalence (positive, negative, error); normalize only receipt IDs
+- distinct user vs upstream receipt IDs on success and error/usage paths
+- `network_used:false` plus independent production-boundary guard (`npm run check:boundary`)
+- target directory symlink refused; intermediate `artifacts` directory symlink refused; incident/artifact leaf symlink refused; non-file candidates refused; no outside marker leakage
+- only named allowlisted candidates read; nested unreadable/sentinel path not read
+- incident size bound; malformed JSON; extra top-level and nested fields; duplicate `path_alias`; AST id length > 128
+- credential and full-width Unicode secret redaction after NFKC; generic POSIX/Windows/UNC absolute path redaction
+- MCP bounded frame accumulator (overflow without newline; recovery; partial UTF-8 / multi-frame); extra-arg and extra top-level param rejection
+- structural signature: exact block once; comment/string spoof; two blocks; missing/reordered/different-shim; old surrogate does not match
 - no absolute disposable path or raw exception leak on public stdout
+- package smoke: `npm run package` then `npm run package:smoke` from a non-repo cwd (Node + package files only)
 
 ## Initial commands
 
@@ -88,9 +91,17 @@ npm ci
 npm run typecheck
 npm run build
 npm test
+npm run check:boundary
+npm run package
+npm run package:smoke
+node scripts/cli-hash-proof.mjs
 node bin/changeguard.js diagnose fixtures/protected-process
 node bin/changeguard.js diagnose fixtures/negative-control
 ```
+
+A clean source checkout is not claimed runnable before `npm ci && npm run build`
+(or `npm run package`). Generated `dist/` need not be committed when package +
+package smoke prove the published artifact.
 
 Additional static checks remain:
 

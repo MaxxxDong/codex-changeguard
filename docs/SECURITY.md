@@ -71,14 +71,13 @@ Issue bodies, comments, release prose, commit messages, and community workaround
 
 The public CLI and MCP diagnosis seams enforce:
 
-- no network entry points and no target mutation
+- no network entry points and no target mutation (also checked by an independent production-boundary AST guard in `scripts/check-production-boundary.mjs`; `network_used:false` alone is not proof)
 - named candidate reads only (no recursive project crawl)
-- `lstat` / no-follow with symlink-escape refusal before any outside content is read
-- incident and MCP request size bounds
-- NFKC normalization then redaction of absolute paths and credential shapes
-  (Bearer, API key, token, password, secret), including full-width Unicode forms
+- fail-closed no-follow: refuse symlink targets; refuse any symlink in intermediate segments or leaves of named candidates, even if currently resolving inside the target; open with `O_NOFOLLOW` when available, `fstat` the fd, require a regular file, and enforce size from the fd
+- incident and MCP request size bounds; MCP uses a bounded byte-oriented NDJSON frame accumulator (reject before unbounded buffering / `JSON.parse`; recover after overflow)
+- NFKC normalization then redaction of generic POSIX absolute paths, Windows drive and UNC paths, and credential shapes (Bearer, API/access/refresh/auth tokens, password/passwd, secret/client_secret), including full-width Unicode forms
 - generic path-free errors; no raw exception stacks or disposable clone paths in output
-- schema item/count/length limits, including 128 characters for AST signature ids
+- schema item/count/length limits, including 128 characters for AST signature ids; reject extra fields in nested `stack_frames[]` and `artifact_hashes[]`; reject duplicate `path_alias`
 
 ## Recovery safety
 

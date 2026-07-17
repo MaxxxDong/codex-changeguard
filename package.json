@@ -13,7 +13,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.tests.json --noEmit",
-    "test": "npm run build && tsc -p tsconfig.tests.json && node --test --test-concurrency=1 dist-tests/tests/*.test.js",
+    "test": "npm run build && tsc -p tsconfig.tests.json && node --test --test-concurrency=1 'dist-tests/tests/**/*.test.js'",
+    "check:boundary": "node scripts/check-production-boundary.mjs",
+    "package": "node scripts/package-plugin.mjs",
+    "package:smoke": "node scripts/package-smoke.mjs",
     "cli": "node bin/changeguard.js"
   },
   "devDependencies": {

@@ -1,19 +1,27 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 export npm_config_cache="${npm_config_cache:-/Users/max/Library/Caches/grok-worker/npm}"
 mkdir -p .grok-output/verification
 
-npm run typecheck > .grok-output/verification/typecheck.log 2>&1
-echo "typecheck_exit:$?"
+run_step() {
+  local name="$1"
+  shift
+  set +e
+  "$@" > ".grok-output/verification/${name}.log" 2>&1
+  local ec=$?
+  set -e
+  echo "${name}_exit:${ec}"
+  return 0
+}
 
-npm run build > .grok-output/verification/build.log 2>&1
-echo "build_exit:$?"
-
-npm test > .grok-output/verification/npm-test.log 2>&1
-echo "test_exit:$?"
-
-node scripts/cli-hash-proof.mjs > .grok-output/verification/cli-hash-proof.log 2>&1
-echo "proof_exit:$?"
+run_step typecheck npm run typecheck
+run_step build npm run build
+run_step npm-test npm test
+run_step boundary npm run check:boundary
+run_step package npm run package
+run_step package-smoke npm run package:smoke
+run_step cli-hash-proof node scripts/cli-hash-proof.mjs
+run_step git-diff-check git diff --check
 
 {
   echo "=== git status ==="

@@ -15,9 +15,10 @@
 
 ## Implementation notes (Ticket 01)
 
-- Shared core: `src/core/diagnose.ts` (named candidates only, `lstat`/no-follow, byte limits).
-- Public seams: `bin/changeguard.js` → `dist/cli/main.js` (`changeguard diagnose <target>`); MCP tool `changeguard_diagnose` via `dist/mcp/server.js`.
+- Shared core: `src/core/diagnose.ts` (named candidates only; fail-closed no-follow for target and all candidate segments; `O_NOFOLLOW` + fstat; byte limits).
+- Public seams: `bin/changeguard.js` → `dist/cli/main.js` (`changeguard diagnose <target>`); MCP tool `changeguard_diagnose` via `dist/mcp/server.js` with bounded NDJSON frames.
 - Skill orchestrates the same CLI/MCP contracts (`skills/changeguard/SKILL.md`).
-- Positive fixture may reach `SOURCE_COMPONENT_LOCATED` only from independently measured artifact hash + AST pattern.
+- Positive fixture may reach `SOURCE_COMPONENT_LOCATED` only from independently measured artifact hash + structural shim signature (exactly one real block); surface/error/phase are applicability gates.
 - Negative control remains `INCONCLUSIVE` with separate user/upstream receipts.
+- Package: `npm run package` / `npm run package:smoke`; boundary: `npm run check:boundary`.
 - Never claims `RESOLVED_VERIFIED`, applies a repair, submits an Issue, uses the network, or mutates the target.
