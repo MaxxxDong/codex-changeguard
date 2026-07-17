@@ -4,12 +4,31 @@
 
 **Blocked by:** 01 — 建立只读诊断主链; 04 — 提供官方证据刷新与更新影响卡.
 
-**Status:** ready-for-agent
+**Status:** `LOCAL_COMPLETE` (locally verified on integrated commit `5aa12c6c7370d9da84be3078c14fc63cf7e90fec`)
 
-- [ ] 提取症状、平台、版本、错误、操作、证据来源和作者结论，并把事实与推断分开。
-- [ ] 页面中的代理指令、提示注入和要求泄漏数据的内容被隔离为不可信文本。
-- [ ] 页面命令只能转换为待验证的 Repair DSL 候选，不能直接执行。
-- [ ] 读取已登录页面时不采集 Cookie、Storage、令牌或完整浏览器请求内容。
-- [ ] 输出明确包含适用性、缺失证据、反证、风险、隔离测试和可否进入 Repair Capsule。
-- [ ] 泛化 ChatGPT 会话问题不会被错误映射为 Codex 组件缺陷。
-- [ ] Scenario Harness 覆盖有效候选、错误平台、提示注入、无证据断言和登录页面边界。
+Broader ChangeGuard product remains `IN_PROGRESS`. Tickets 10–17 are not complete. Registration, external submission, and Gate C remain not authorized / `NOT_STARTED`. No public publication or upload has occurred.
+
+Exact operational evidence (Root integrated verification, Wave 3 final review, residual boundaries) is canonical in [HANDOFF.md](../../../HANDOFF.md).
+
+- [x] 提取症状、平台、版本、错误、操作、证据来源和作者结论，并把事实与推断分开。
+- [x] 页面中的代理指令、提示注入和要求泄漏数据的内容被隔离为不可信文本。
+- [x] 页面命令只能转换为待验证的 Repair DSL 候选，不能直接执行。
+- [x] 读取已登录页面时不采集 Cookie、Storage、令牌或完整浏览器请求内容。
+- [x] 输出明确包含适用性、缺失证据、反证、风险、隔离测试和可否进入 Repair Capsule。
+- [x] 泛化 ChatGPT 会话问题不会被错误映射为 Codex 组件缺陷。
+- [x] Scenario Harness 覆盖有效候选、错误平台、提示注入、无证据断言和登录页面边界。
+
+## Implementation notes (Ticket 05)
+
+- Page analysis core: `src/page/` (`analyze.ts`, `envelope.ts`, `extract.ts`, `compare.ts`, `dsl-candidates.ts`, disclosure/transport).
+- Public seams: `changeguard analyze-page <target> --envelope=<page.json> [--disclose-…]` and MCP `changeguard_analyze_page`.
+- Orchestrator-supplied page envelopes only in production; optional transport requires explicit disclosure injection and is never auto-wired.
+- Page text is untrusted data; Repair DSL is always `candidate_only` with `repair_authorized: false`.
+- Harness: `tests/ticket05-page-analysis.test.ts`.
+
+## Local completion closeout
+
+- Local status: `LOCAL_COMPLETE` on integrated commit `5aa12c6c7370d9da84be3078c14fc63cf7e90fec` (integrated as `607be8f`).
+- Root integrated verification (dynamic) and Wave 3 final independent review (`changeguard-wave3-final-review-r2`, `NO_P0_P1`, static): see [HANDOFF.md](../../../HANDOFF.md) § Wave 3 closeout.
+- Product-wide status remains `IN_PROGRESS`; this ticket does not complete Tickets 10–17.
+- Registration `NOT_STARTED`; external submission `NOT_STARTED`; Gate C not authorized.

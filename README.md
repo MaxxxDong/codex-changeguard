@@ -14,8 +14,10 @@ ChangeGuard is not a generic changelog summarizer, Issue chatbot, environment do
 - Track: `track-openai-build-week-codex-changeguard-20260717`
 - Gate B: approved, option A
 - Tickets 01–04: `LOCAL_COMPLETE` on integrated commit `c20ddc5` (Ticket 01 first closed on `d7d917b`; Wave 2 tip `c20ddc5`)
-- Broader product: still `IN_PROGRESS` (Tickets 05–17 not complete)
-- Registration and external submission: `NOT_STARTED`; Gate C not authorized; no public publication or upload
+- Tickets 05–09: `LOCAL_COMPLETE` on integrated HEAD `5aa12c6` (Wave 3 tip; Root full regression 212/212; final review `changeguard-wave3-final-review-r2` → `NO_P0_P1`)
+- Broader product: still `IN_PROGRESS` (Tickets 10–17 not complete)
+- Residual platform claims: real-machine Full/Preview/Limited matrix remains with Tickets 13–15; Ticket 06 CLI/Desktop **version** rollback stays `preview_only` / Desktop may be `limited`
+- Registration and external submission: `NOT_STARTED`; Gate C not authorized; no public publication, upload, or real external GitHub writes
 - Exact local-verification evidence: [HANDOFF.md](HANDOFF.md)
 
 ## Start here
@@ -29,7 +31,7 @@ ChangeGuard is not a generic changelog summarizer, Issue chatbot, environment do
 - [Schemas](schemas/)
 - [Synthetic fixtures](fixtures/)
 
-## Public surfaces (Tickets 01–05, plus integrated 07–09)
+## Public surfaces (Tickets 01–09)
 
 Rescue CLI and MCP share the same cores. A clean source checkout is not runnable
 until dependencies are installed and the project is built (or packaged):
@@ -54,6 +56,7 @@ Implemented public commands (repository wrapper: `node bin/changeguard.js …`):
 | Diagnose (Ticket 01) | `changeguard diagnose <target>` | `changeguard_diagnose` |
 | Impact Card (Ticket 04) | `changeguard impact <target> [--disclose-approved\|--disclose-refused]` | `changeguard_impact` |
 | Page analysis (Ticket 05) | `changeguard analyze-page <target> --envelope=<page.json> [--disclose-…]` | `changeguard_analyze_page` |
+| Lifecycle (Ticket 06) | `changeguard lifecycle <operation> <target>` | `changeguard_lifecycle` |
 | Repair (Ticket 02) | `repair-preview` / `repair-apply` / `verify` / `rollback` | `changeguard_repair_*` / `changeguard_verify` / `changeguard_rollback` |
 | Instances (Ticket 03) | `scan` / `scan-system` / `session-start` | `changeguard_scan` / `changeguard_scan_system` / `changeguard_session_start` |
 
@@ -74,16 +77,6 @@ Experimental repair is limited to isolated targets after an exact scope-bound
 one-shot authorization token. `RESOLVED_VERIFIED` requires original-failure absence
 plus core health; verification failure auto-rollbacks; live Codex/Profile installs
 are out of scope.
-
-### Plugin cache / skew / reconciliation (Ticket 08)
-
-Isolated `fixtures/plugin-cache/*` targets distinguish bundled corruption, stale
-shared cache, dependency/version skew, and reconciliation overwrite (never generic
-dependency-install failure). Repair reuses Ticket 02 authorization with verified
-resource copy / atomic replace / rename-to-quarantine only; verification crosses one
-reconciliation cycle and a restart/health check. Immediate recurrence cannot claim
-`RESOLVED_VERIFIED`. Ticket 08 is implemented on this branch but is **not** product
-closeout — broader Tickets 05–17 remain incomplete.
 
 ### Instance scan and SessionStart (Ticket 03)
 
@@ -108,14 +101,16 @@ commands become candidate-only Repair DSL and never authorize apply. Logged-page
 never reads cookies, storage, tokens, or full browser requests. Generic ChatGPT or
 account/session pages are hard-gated away from Codex component defects.
 
-### Desktop Browser crash-family classifier (Ticket 09)
+### KNOWN_GOOD / rollback lifecycle (Ticket 06)
 
-Sanitized Windows crash fixtures under `fixtures/crash-family/` fork distinct
-exception / GPU / interaction / concurrency families via deterministic gates.
-Compatible fixtures rank the correct `openai/codex#…` Issue in the Top 3;
-title similarity alone cannot create high confidence. Without a verified fix,
-diagnosis returns `UPSTREAM_BLOCKED` (or `INCONCLUSIVE`) and never authorizes a
-symptom-level Repair Capsule. Active crash probes require disposable isolation.
+Isolated lifecycle ledger retains repair backups (age + successful starts) and the last
+three healthy control-surface checkpoints as `KNOWN_GOOD`. Update-regression claims
+require controlled A/B evidence (timestamps alone refuse). Exact-instance control-surface
+rollback returns `MITIGATED_VERIFIED_BY_ROLLBACK` only. CLI and Desktop **version**
+rollback seams are registered `preview_only` guidance (official pin / signed media);
+ChangeGuard never stores or redistributes OpenAI binaries. Desktop version rollback is
+`limited` without signed history or lawful media. Canary and upstream supersession emit
+exact guidance enums. Real-machine platform Full/Preview/Limited claims remain Tickets 13–15.
 
 ### Configuration / startup fault pack (Ticket 07)
 
@@ -124,10 +119,29 @@ source conflicts with distinct fingerprints. Registered `config_set` / `config_r
 repairs run through the Ticket 02 engine with startup verification and automatic
 rollback; managed policy targets return `ADMIN_ACTION_REQUIRED` without bypass guidance.
 
+### Plugin cache / skew / reconciliation (Ticket 08)
+
+Isolated `fixtures/plugin-cache/*` targets distinguish bundled corruption, stale
+shared cache, dependency/version skew, and reconciliation overwrite (never generic
+dependency-install failure). Repair reuses Ticket 02 authorization with verified
+resource copy / atomic replace / rename-to-quarantine only; verification crosses one
+reconciliation cycle and a restart/health check. Immediate recurrence cannot claim
+`RESOLVED_VERIFIED`.
+
+### Desktop Browser crash-family classifier (Ticket 09)
+
+Sanitized Windows crash fixtures under `fixtures/crash-family/` fork distinct
+exception / GPU / interaction / concurrency families via deterministic gates.
+Compatible fixtures rank the correct `openai/codex#…` Issue in the Top 3;
+title similarity alone cannot create high confidence. Without a verified fix,
+diagnosis returns `UPSTREAM_BLOCKED` (or `INCONCLUSIVE`) and never authorizes a
+symptom-level Repair Capsule. Active crash probes require disposable isolation.
+Windows real-machine Full support remains Ticket 14.
+
 ## Plugin surfaces
 
 - Skill commands for update scanning, incident diagnosis, page analysis, Impact Card, and recovery preview
-- A local-facts MCP server with explicit tool approval (`changeguard_diagnose`, `changeguard_impact`, `changeguard_analyze_page`, repair/scan tools)
+- A local-facts MCP server with explicit tool approval (`changeguard_diagnose`, `changeguard_impact`, `changeguard_analyze_page`, `changeguard_lifecycle`, repair/scan tools)
 - An optional trusted `SessionStart` hook that notices version-fingerprint changes (Ticket 03)
 - A manual scan path that always works when hooks are disabled or untrusted
 
