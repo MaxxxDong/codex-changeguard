@@ -84,8 +84,9 @@ Upstream Submission Capsules are **preview artifacts**, not submissions.
 
 - Capsule always carries `external_write: false`, `repair_authorized: false`, `mode: preview_only`, `locality: local_only`. No Issue create/comment/reaction/subscribe/upload/token/auth operation runs on this seam.
 - Validated security vulnerabilities route only to Bugcrowd private reporting guidance; public Issue drafts are forbidden for that route.
-- Request and doctor envelopes reject forbidden privacy keys (`token`, `cookie`, `session`, secrets, full env). Full-width / NFKC secret and path shapes are redacted. Prompt injection is quarantined (`PREVIEW_BLOCKED`).
-- Optional form-definition refresh uses the same official host/repo allowlist (`github.com` / `api.github.com` / `raw.githubusercontent.com` + `openai/codex` only) and requires disclosure approved **plus** an injected transport. Production CLI/MCP never inject transport.
+- Request and doctor envelopes reject forbidden privacy keys (`token`, `cookie`, `session`, secrets, full env). Full-width / NFKC secret and path shapes are redacted. Prompt injection is quarantined (`PREVIEW_BLOCKED`, recommendation `blocked`); NFKC injection scan covers every free-text field that can enter a capsule/draft, including platform/version strings.
+- Capsule `privacy_review.passed` requires no injection and `secrets_redacted` and `paths_redacted` and `session_excluded` (session_excluded is exported). Gate/privacy failure is non-ready (`GATE_FAILED` / `PREVIEW_BLOCKED`) and takes precedence over Bugcrowd `ROUTED_PRIVATE`.
+- Optional form-definition refresh uses the same official host/repo allowlist (`github.com` / `api.github.com` / `raw.githubusercontent.com` + `openai/codex` only) and requires disclosure approved **plus** an injected transport. Production CLI/MCP never inject transport. Failed injected refresh falls back to bundled immutable snapshot labeling (never mislabeled live/transport_refresh).
 - `codex doctor --json` is orchestrator-supplied only; never collected by executing codex or shell. Inclusion manifest lists sanitized fields before any later Ticket 11 export.
 - Ticket 11 confirmation is mandatory before any external write; Ticket 10 never emits `SUBMITTED` / `POSTED`.
 

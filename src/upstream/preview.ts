@@ -22,9 +22,12 @@ import { applyFormMap, routeUpstream } from "./routing.js";
 import type {
   CapsuleStatus,
   DisclosureDecision,
+  DuplicateAssessment,
+  DuplicateRecommendation,
   UpstreamFormTransport,
   UpstreamPreviewRequest,
   UpstreamPreviewResult,
+  UpstreamRoute,
   UpstreamSubmissionCapsule,
 } from "./types.js";
 
@@ -88,6 +91,13 @@ function quarantineRequestFreeText(
     ...request,
     actual_behavior: placeholder,
     technical_signals: request.technical_signals.map(() => placeholder),
+    platform: {
+      os: request.platform.os ? placeholder : null,
+      arch: request.platform.arch ? placeholder : null,
+      unknown_reason: request.platform.unknown_reason ? placeholder : null,
+    },
+    codex_version: request.codex_version ? placeholder : null,
+    version_unknown_reason: request.version_unknown_reason ? placeholder : null,
     reproduction: {
       ...request.reproduction,
       steps: request.reproduction.steps.map(() => placeholder),
@@ -116,6 +126,85 @@ function quarantineRequestFreeText(
     },
     // Drop doctor payload from export path when injection detected.
     doctor_json: null,
+  };
+}
+
+/**
+ * Central export invariant for submission-consumable draft fields:
+ * - only PREVIEW_READY may export public/discussion draft content
+ * - ROUTED_PRIVATE exports private_report recommendation and private guidance only
+ * - PREVIEW_BLOCKED / GATE_FAILED export recommendation=blocked and null drafts
+ * - exact-duplicate zero-delta PREVIEW_READY keeps subscribe_or_upvote + null drafts
+ */
+function applyCapsuleExportInvariant(input: {
+  status: CapsuleStatus;
+  route: UpstreamRoute;
+  assessed: DuplicateAssessment & { draft_title: string | null };
+}): {
+  duplicate: DuplicateAssessment;
+  draft_title: string | null;
+  draft_labels: string[];
+} {
+  const { status, route, assessed } = input;
+
+  if (status === "PREVIEW_BLOCKED" || status === "GATE_FAILED") {
+    return {
+      duplicate: {
+        state: assessed.state,
+        matched_issue_id: assessed.matched_issue_id,
+        matched_issue_url: assessed.matched_issue_url,
+        evidence_delta_material: assessed.evidence_delta_material,
+        evidence_delta_hash: assessed.evidence_delta_hash,
+        recommendation: "blocked" satisfies DuplicateRecommendation,
+        draft_body: null,
+        draft_comment: null,
+        cross_link_issue_ids: [],
+      },
+      draft_title: null,
+      draft_labels: [],
+    };
+  }
+
+  if (status === "ROUTED_PRIVATE") {
+    return {
+      duplicate: {
+        state: assessed.state,
+        matched_issue_id: assessed.matched_issue_id,
+        matched_issue_url: assessed.matched_issue_url,
+        evidence_delta_material: assessed.evidence_delta_material,
+        evidence_delta_hash: assessed.evidence_delta_hash,
+        recommendation: "private_report",
+        draft_body: null,
+        draft_comment: null,
+        cross_link_issue_ids: [],
+      },
+      draft_title: null,
+      draft_labels: [],
+    };
+  }
+
+  // PREVIEW_READY only: public/discussion drafts and labels may export.
+  const draft_title =
+    assessed.recommendation === "subscribe_or_upvote"
+      ? null
+      : assessed.draft_title;
+  return {
+    duplicate: {
+      state: assessed.state,
+      matched_issue_id: assessed.matched_issue_id,
+      matched_issue_url: assessed.matched_issue_url,
+      evidence_delta_material: assessed.evidence_delta_material,
+      evidence_delta_hash: assessed.evidence_delta_hash,
+      recommendation: assessed.recommendation,
+      draft_body: assessed.draft_body,
+      draft_comment: assessed.draft_comment,
+      cross_link_issue_ids: assessed.cross_link_issue_ids,
+    },
+    draft_title,
+    draft_labels:
+      route === "GITHUB_ISSUE" && assessed.state === "NEW_INCIDENT"
+        ? ["bug", "changeguard-preview"]
+        : [],
   };
 }
 
@@ -247,59 +336,73 @@ export function previewUpstream(
   // Truthful network/transport: production null transport → false/0; injected call → true/1.
   const network_used = transport_calls > 0;
 
-  // Duplicate assessment (exact enums + zero-delta reaction-only).
-  const dupFull = assessDuplicate(request, routeDecision.route);
-  const draft_title = dupFull.draft_title;
-  // Injection always nulls usable drafts — including private routes.
-  const blockDrafts =
-    injection_detected || routeDecision.public_issue_draft_forbidden;
-  const duplicate = {
-    state: dupFull.state,
-    matched_issue_id: dupFull.matched_issue_id,
-    matched_issue_url: dupFull.matched_issue_url,
-    evidence_delta_material: dupFull.evidence_delta_material,
-    evidence_delta_hash: dupFull.evidence_delta_hash,
-    recommendation: injection_detected
-      ? dupFull.recommendation
-      : routeDecision.public_issue_draft_forbidden
-        ? dupFull.recommendation
-        : dupFull.recommendation,
-    draft_body: blockDrafts ? null : dupFull.draft_body,
-    draft_comment: blockDrafts ? null : dupFull.draft_comment,
-    cross_link_issue_ids: injection_detected ? [] : dupFull.cross_link_issue_ids,
+  // Duplicate assessment for gate evaluation (full drafts kept until export filter).
+  const assessed = assessDuplicate(request, routeDecision.route);
+  const assessmentForGate: DuplicateAssessment = {
+    state: assessed.state,
+    matched_issue_id: assessed.matched_issue_id,
+    matched_issue_url: assessed.matched_issue_url,
+    evidence_delta_material: assessed.evidence_delta_material,
+    evidence_delta_hash: assessed.evidence_delta_hash,
+    recommendation: assessed.recommendation,
+    // Gate material_value inspects draft presence; injection still nulls usable drafts.
+    draft_body: injection_detected ? null : assessed.draft_body,
+    draft_comment: injection_detected ? null : assessed.draft_comment,
+    cross_link_issue_ids: injection_detected ? [] : assessed.cross_link_issue_ids,
   };
 
-  const privacy_passed = !injection_detected;
+  // Displayed privacy booleans are exactly the operands of `passed`.
+  const secrets_redacted =
+    request.privacy_review.secrets_redacted || doctor.secrets_redacted;
+  const paths_redacted =
+    request.privacy_review.paths_redacted || doctor.paths_redacted;
+  const session_excluded = request.privacy_review.session_excluded;
+  const privacy_review_passed =
+    !injection_detected &&
+    secrets_redacted &&
+    paths_redacted &&
+    session_excluded;
+
   const gate = evaluateMaintainerValueGate({
     request,
     route: routeDecision.route,
-    duplicate,
+    duplicate: assessmentForGate,
     doctor,
-    privacy_passed,
+    privacy_passed: !injection_detected,
   });
 
-  // Privacy/injection takes precedence over private routing and gate outcomes.
+  // Injection → PREVIEW_BLOCKED. Gate failure precedes private routing:
+  // only a gate-passed private (Bugcrowd) route is ROUTED_PRIVATE.
   let status: CapsuleStatus;
   if (injection_detected) {
     status = "PREVIEW_BLOCKED";
-  } else if (routeDecision.route === "BUGCROWD") {
-    status = "ROUTED_PRIVATE";
   } else if (!gate.passed) {
     status = "GATE_FAILED";
+  } else if (routeDecision.route === "BUGCROWD") {
+    status = "ROUTED_PRIVATE";
   } else {
     status = "PREVIEW_READY";
   }
 
+  const exported = applyCapsuleExportInvariant({
+    status,
+    route: routeDecision.route,
+    assessed,
+  });
+  const duplicate = exported.duplicate;
+
+  // Guidance is status-scoped: private guidance only on ROUTED_PRIVATE;
+  // support/discussion guidance only on PREVIEW_READY for those routes.
   const private_report_guidance =
-    routeDecision.route === "BUGCROWD"
+    status === "ROUTED_PRIVATE"
       ? "Report privately via OpenAI Bugcrowd. Do not open a public GitHub Issue for validated security vulnerabilities."
       : null;
   const support_guidance =
-    routeDecision.route === "OPENAI_SUPPORT"
+    status === "PREVIEW_READY" && routeDecision.route === "OPENAI_SUPPORT"
       ? "Contact OpenAI Support for account, billing, or private cases. No public Issue draft is generated."
       : null;
   const discussion_guidance =
-    routeDecision.route === "GITHUB_DISCUSSIONS"
+    status === "PREVIEW_READY" && routeDecision.route === "GITHUB_DISCUSSIONS"
       ? "Open a GitHub Discussion for product support questions (not a bug Issue form)."
       : null;
 
@@ -315,13 +418,6 @@ export function previewUpstream(
     gate_passed: gate.passed,
     status,
   };
-
-  const exportTitle =
-    injection_detected ||
-    routeDecision.public_issue_draft_forbidden ||
-    duplicate.recommendation === "subscribe_or_upvote"
-      ? null
-      : draft_title;
 
   const capsule: UpstreamSubmissionCapsule = {
     schema_version: 1,
@@ -340,11 +436,10 @@ export function previewUpstream(
     form_snapshot,
     doctor_inclusion: doctor,
     privacy_review: {
-      passed: privacy_passed && request.privacy_review.secrets_redacted,
-      secrets_redacted:
-        request.privacy_review.secrets_redacted || doctor.secrets_redacted,
-      paths_redacted:
-        request.privacy_review.paths_redacted || doctor.paths_redacted,
+      passed: privacy_review_passed,
+      secrets_redacted,
+      paths_redacted,
+      session_excluded,
       injection_quarantined: injection_detected,
       quarantine,
     },
@@ -355,13 +450,8 @@ export function previewUpstream(
     error_strings: request.error_strings,
     command_strings: request.command_strings,
     route_rationale: routeDecision.rationale,
-    draft_title: exportTitle,
-    draft_labels:
-      !injection_detected &&
-      routeDecision.route === "GITHUB_ISSUE" &&
-      duplicate.state === "NEW_INCIDENT"
-        ? ["bug", "changeguard-preview"]
-        : [],
+    draft_title: exported.draft_title,
+    draft_labels: exported.draft_labels,
     private_report_guidance,
     support_guidance,
     discussion_guidance,
@@ -372,12 +462,9 @@ export function previewUpstream(
     capsule_content_sha256: null,
   });
 
-  // PREVIEW_BLOCKED is not a success: ok=false so CLI exits non-zero.
-  // ROUTED_PRIVATE / GATE_FAILED remain inspectable previews with ok=true.
-  const ok =
-    status === "PREVIEW_READY" ||
-    status === "ROUTED_PRIVATE" ||
-    status === "GATE_FAILED";
+  // PREVIEW_BLOCKED and GATE_FAILED are non-ready: ok=false so CLI/MCP error.
+  // Only PREVIEW_READY and gate-passed ROUTED_PRIVATE are ok=true.
+  const ok = status === "PREVIEW_READY" || status === "ROUTED_PRIVATE";
 
   return emptyResult({
     ok,

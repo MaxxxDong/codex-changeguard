@@ -103,7 +103,8 @@
             "cross_link_related",
             "private_report",
             "contact_support",
-            "open_discussion"
+            "open_discussion",
+            "blocked"
           ]
         },
         "draft_body": { "type": ["string", "null"], "maxLength": 16384 },
@@ -232,13 +233,18 @@
         "passed",
         "secrets_redacted",
         "paths_redacted",
+        "session_excluded",
         "injection_quarantined",
         "quarantine"
       ],
       "properties": {
-        "passed": { "type": "boolean" },
+        "passed": {
+          "type": "boolean",
+          "description": "Exactly no injection AND secrets_redacted AND paths_redacted AND session_excluded."
+        },
         "secrets_redacted": { "type": "boolean" },
         "paths_redacted": { "type": "boolean" },
+        "session_excluded": { "type": "boolean" },
         "injection_quarantined": { "type": "boolean" },
         "quarantine": { "type": ["object", "null"] }
       }

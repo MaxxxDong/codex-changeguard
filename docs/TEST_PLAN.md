@@ -217,11 +217,16 @@ Black-box and contract coverage in `tests/ticket10-upstream-preview.test.ts`:
 - exact duplicate material Evidence Delta → structured comment preview
 - related-not-same → separate body + cross-links
 - new incident → `open_new` with maintainer-value body; facts/reports/hypotheses separated
-- maintainer-value gate fails when technical signals or privacy review missing
+- maintainer-value gate fails when technical signals or privacy review missing (`GATE_FAILED`, `ok: false`, recommendation `blocked`, null drafts)
+- privacy_review.passed = no injection AND secrets_redacted AND paths_redacted AND session_excluded (session exported; negative combinations)
+- privacy/gate failure precedes BUGCROWD `ROUTED_PRIVATE`; only gate-passed private route is `ROUTED_PRIVATE`
 - doctor sanitization + inclusion manifest; forbidden doctor keys fail closed; secrets/paths redacted
 - immutable form snapshot integrity (main commit + blob SHAs + `integrity_sha256`); stale vs fresh labels
 - approved fake form transport (one call, official allowlist only); refused / zero transport (`transport_calls: 0`)
-- prompt injection quarantine (`PREVIEW_BLOCKED`); malformed/oversized/extra fields fail closed
+- injected transport refresh failure: `transport_calls: 1` / `network_used: true` but `source=bundled_immutable` with bundled freshness (never transport_refresh/live)
+- prompt injection quarantine (`PREVIEW_BLOCKED`); platform/version side-channels scanned after NFKC; CLI/MCP side-channel coverage
+- export invariant: only `PREVIEW_READY` may export public/discussion drafts; `blocked` for blocked/failed; zero-delta exact dup keeps `subscribe_or_upvote` + null drafts
+- malformed/oversized/extra fields fail closed
 - CLI/MCP `upstream-preview` / `changeguard_upstream_preview` stable-field equivalence; target tree hash unchanged
 - capsule never `SUBMITTED`/`POSTED`; `external_write: false`; schema `preview_only`
 

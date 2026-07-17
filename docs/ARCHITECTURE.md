@@ -459,6 +459,8 @@ Both return the same `UpstreamPreviewResult` / `UpstreamSubmissionCapsule` JSON.
 - `mode: preview_only`, `locality: local_only`, `repair_authorized: false`, `external_write: false`
 - `requires_ticket11_confirmation: true` — Ticket 11 owns any real write after separate preview+confirmation
 - `submission_status` on the result is always `none`; capsule `status` is never `SUBMITTED` / `POSTED`
+- Capsule `status` is one of `PREVIEW_READY` | `PREVIEW_BLOCKED` | `GATE_FAILED` | `ROUTED_PRIVATE`
+- Result `ok` is true only for `PREVIEW_READY` and gate-passed `ROUTED_PRIVATE`. `PREVIEW_BLOCKED` and `GATE_FAILED` are non-ready (`ok: false`, CLI non-zero / MCP error)
 
 ### Channel routing
 
@@ -471,11 +473,19 @@ Both return the same `UpstreamPreviewResult` / `UpstreamSubmissionCapsule` JSON.
 
 GitHub Issue form map (current official templates): `APP` → `1-codex-app.yml`, `CLI` → `3-cli.yml` (includes `codex doctor --json`), `EXTENSION` → `2-extension.yml`, `OTHER` → `4-bug-report.yml`.
 
-### Duplicate states
+Injection and gate failure take precedence over private routing: only a gate-passed Bugcrowd path becomes `ROUTED_PRIVATE`. A privacy/gate failure on a security request is `GATE_FAILED` (or `PREVIEW_BLOCKED` on injection), never a false-ready private route.
+
+### Duplicate states and export invariant
 
 Exact enums: `EXACT_DUPLICATE`, `RELATED_NOT_SAME`, `NEW_INCIDENT`.
 
-- Exact duplicate with **zero** material Evidence Delta → recommend `subscribe_or_upvote` only; `draft_body` and `draft_comment` are null (follows official “search first / react only” guidance).
+Recommendations include a non-executable `blocked` value used only for `PREVIEW_BLOCKED` / `GATE_FAILED` (empty cross-links/labels; null `draft_title` / `draft_body` / `draft_comment`).
+
+Central export invariant:
+
+- Only `PREVIEW_READY` may export public/discussion draft content.
+- `ROUTED_PRIVATE` exports only private guidance and `private_report` recommendation (null public drafts).
+- Exact duplicate with **zero** material Evidence Delta on `PREVIEW_READY` → `subscribe_or_upvote` only; `draft_body` and `draft_comment` are null (official “search first / react only” guidance).
 - Exact duplicate with **material** Evidence Delta → `comment_with_delta` structured comment preview only.
 - Related mechanisms remain separate (`RELATED_NOT_SAME`) with cross-links; symptom similarity alone cannot merge incidents.
 
@@ -483,13 +493,15 @@ Exact enums: `EXACT_DUPLICATE`, `RELATED_NOT_SAME`, `NEW_INCIDENT`.
 
 Requires: route, duplicate search (Issue path), surface, platform/version or explicit unknown reason, actual behavior, ≥1 technical signal, sanitized baseline diagnostics (doctor inclusion or explicit refusal), privacy review flags, reproduction quality or intermittent marker, and material value over an existing Issue. Separates `observed_facts`, `user_reports`, and `hypotheses`. Exact technical error/command strings are preserved except required secret/path redaction.
 
+Capsule `privacy_review.passed` is exactly: no injection **and** `secrets_redacted` **and** `paths_redacted` **and** `session_excluded` (those booleans are exported and aligned with pass semantics). Prompt-injection scanning after NFKC covers every free-text field that can enter a capsule/draft, including `platform.os` / `platform.arch` / `platform.unknown_reason`, `codex_version`, and `version_unknown_reason`.
+
 ### Doctor envelope
 
 Orchestrator may supply a bounded `codex doctor --json` object. ChangeGuard sanitizes allowlisted keys, shows an inclusion manifest, and never executes `codex` or arbitrary shell.
 
 ### Official form snapshot
 
-Bundled immutable snapshot (`fixtures/upstream/form-snapshot-2026-07-18.json`) records main commit `3a067484584861606ad842de5bc4ac735a865ddf` and form blob SHAs verified 2026-07-18. Snapshot carries exact `integrity_sha256` and is labeled `fresh` / `stale` by age. Optional form refresh requires disclosure `approved` **and** an injected official-only transport; production CLI/MCP inject null (`transport_calls: 0`). The snapshot is testable immutable evidence, not a claim of perpetual currency.
+Bundled immutable snapshot (`fixtures/upstream/form-snapshot-2026-07-18.json`) records main commit `3a067484584861606ad842de5bc4ac735a865ddf` and form blob SHAs verified 2026-07-18. Snapshot carries exact `integrity_sha256` and is labeled `fresh` / `stale` by age. Optional form refresh requires disclosure `approved` **and** an injected official-only transport; production CLI/MCP inject null (`transport_calls: 0`). When an injected transport fails after being called, `transport_calls: 1` and `network_used: true` remain truthful, but `form_snapshot.source` stays `bundled_immutable` with freshness derived from the bundled snapshot age (never mislabeled `transport_refresh` / live). The snapshot is testable immutable evidence, not a claim of perpetual currency.
 
 Schema: `schemas/upstream-submission-capsule.schema.json`. Synthetic fixtures: `fixtures/upstream/*`.
 

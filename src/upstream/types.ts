@@ -54,7 +54,9 @@ export type DuplicateRecommendation =
   | "cross_link_related"
   | "private_report"
   | "contact_support"
-  | "open_discussion";
+  | "open_discussion"
+  /** Non-executable: PREVIEW_BLOCKED / GATE_FAILED export only. */
+  | "blocked";
 
 export type EvidenceDeltaKind =
   | "platform_version"
@@ -267,9 +269,14 @@ export interface UpstreamSubmissionCapsule {
   form_snapshot: FormSnapshotView;
   doctor_inclusion: DoctorSanitizationResult;
   privacy_review: {
+    /**
+     * Exactly: no injection AND secrets_redacted AND paths_redacted AND
+     * session_excluded (same booleans as displayed).
+     */
     passed: boolean;
     secrets_redacted: boolean;
     paths_redacted: boolean;
+    session_excluded: boolean;
     injection_quarantined: boolean;
     quarantine: QuarantineRecord | null;
   };

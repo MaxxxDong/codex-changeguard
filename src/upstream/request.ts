@@ -409,6 +409,15 @@ function collectRawUserStrings(obj: Record<string, unknown>): string[] {
   pushArr(obj.error_strings);
   pushArr(obj.command_strings);
 
+  // Platform / version strings can enter capsule draft bodies and comments.
+  if (isPlainObject(obj.platform)) {
+    push(obj.platform.os);
+    push(obj.platform.arch);
+    push(obj.platform.unknown_reason);
+  }
+  push(obj.codex_version);
+  push(obj.version_unknown_reason);
+
   if (isPlainObject(obj.reproduction)) {
     pushArr(obj.reproduction.steps);
     push(obj.reproduction.intermittent_marker);
