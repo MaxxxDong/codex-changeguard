@@ -998,25 +998,30 @@ export function runCanary(input: CanaryInput): LifecycleResult {
     const nowMs = nowOf(input.nowMs);
     // Fail closed: only exact true means executed. Omitted/false → availability only.
     const executed = input.canary_executed === true;
+    const faultAbsent = input.original_fault_absent === true;
+    const coreOk = input.core_regressions_passed === true;
 
-    // Ticket 12 authority: RECOMMEND_UPGRADE requires a process-local live
-    // measurement witness. Public/CLI boolean inputs may report availability,
-    // HOLD, or general guidance only — never upgrade without the witness.
-    const liveAuth = recordCanaryWithLiveWitness(input.live_measurement_witness, {
-      candidate_version: input.candidate_version,
-    });
-    const hasLiveAuthority = liveAuth.ok === true;
+    // Ticket 12 P0 authority: never mutate witness stage until the successful
+    // measured-canary branch is established in this same call
+    // (executed + fault absent + core ok + live witness bind + exact target).
+    let hasLiveAuthority = false;
+    if (executed && faultAbsent && coreOk) {
+      const liveAuth = recordCanaryWithLiveWitness(
+        input.live_measurement_witness,
+        {
+          candidate_version: input.candidate_version,
+          target_real: targetReal,
+        },
+      );
+      hasLiveAuthority = liveAuth.ok === true;
+    }
 
     let guidance: VersionGuidance;
     let detail: string;
     if (!executed) {
       guidance = "UPGRADE_CANARY_AVAILABLE";
       detail = "Canary available in isolated profile; not yet executed.";
-    } else if (
-      hasLiveAuthority &&
-      input.original_fault_absent === true &&
-      input.core_regressions_passed === true
-    ) {
+    } else if (hasLiveAuthority && faultAbsent && coreOk) {
       guidance = "RECOMMEND_UPGRADE";
       detail =
         "Live-measured canary passed: original fault absent and core regressions passed (process-local witness). Artifact-level evidence — not installed-binary identity.";
@@ -1027,16 +1032,12 @@ export function runCanary(input: CanaryInput): LifecycleResult {
       guidance = "HOLD_KNOWN_GOOD";
       detail =
         "Canary failed: hold KNOWN_GOOD; original fault and/or core regressions not clean.";
-    } else if (
-      executed &&
-      input.original_fault_absent === true &&
-      input.core_regressions_passed === true &&
-      !hasLiveAuthority
-    ) {
-      // Boolean-only all-true path: availability / general guidance only.
+    } else if (executed && faultAbsent && coreOk && !hasLiveAuthority) {
+      // Boolean-only all-true path, or witness present but unbound/invalid:
+      // availability / general guidance only — stage never advanced above.
       guidance = "UPGRADE_CANARY_AVAILABLE";
       detail =
-        "Canary flags reported but live measurement witness absent; upgrade not recommended (authority closed).";
+        "Canary flags reported but live measurement witness absent or unbound; upgrade not recommended (authority closed).";
     } else {
       guidance = "GENERAL_UPDATE_ONLY";
       detail = "Insufficient canary evidence; general update guidance only.";
@@ -1044,8 +1045,8 @@ export function runCanary(input: CanaryInput): LifecycleResult {
 
     const canary: CanaryResult = {
       candidate_version: input.candidate_version,
-      original_fault_absent: input.original_fault_absent === true,
-      core_regressions_passed: input.core_regressions_passed === true,
+      original_fault_absent: faultAbsent,
+      core_regressions_passed: coreOk,
       isolated_profile: true,
       version_guidance: guidance,
       detail,
@@ -1176,6 +1177,8 @@ export function supersedeRecipe(input: SupersedeInput): LifecycleResult {
     }
     const liveAuth = consumeWitnessForSupersede(input.live_measurement_witness, {
       candidate_version: candidateVersion,
+      // Exact canonical target must match the measured candidate root.
+      target_real: targetReal,
     });
     if (!liveAuth.ok) {
       return fail(op, liveAuth.code, liveAuth.message);

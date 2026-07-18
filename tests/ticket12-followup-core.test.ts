@@ -59,6 +59,8 @@ import {
 import type { FollowupResult } from "../src/upstream/followup/index.js";
 import {
   isLiveMeasurementWitness,
+  LIFECYCLE_LEDGER_REL,
+  readLiveMeasurementAttestation,
   runCanary,
   supersedeRecipe,
 } from "../src/core/lifecycle/index.js";
@@ -1196,6 +1198,302 @@ test("Ticket12 adversarial: witness replay after supersession fails closed", () 
   });
   assert.equal(sup2.ok, false);
   assert.equal(sup2.error_code, "LIVE_WITNESS_REPLAY");
+});
+
+// ─── P0 canary stage + target-binding authority (Ticket 12 correction) ───
+
+function measurePositiveWitness(
+  candidate: string,
+  baseline: string,
+  nowMs = NOW,
+) {
+  const measured = measureWithRegisteredProfile({
+    targetPath: candidate,
+    baselineTargetPath: baseline,
+    candidate_version: OFFICIAL_BOUND_VERSION,
+    profile_id: PROFILE,
+    nowMs,
+  });
+  assert.equal(measured.verdict, "positive");
+  assert.ok(measured.witness);
+  assert.equal(isLiveMeasurementWitness(measured.witness), true);
+  return measured.witness!;
+}
+
+function witnessStage(w: unknown): string | null {
+  return readLiveMeasurementAttestation(w)?.stage ?? null;
+}
+
+function lifecycleLedgerExists(target: string): boolean {
+  return fs.existsSync(path.join(target, LIFECYCLE_LEDGER_REL));
+}
+
+function readLifecycleRecipes(
+  target: string,
+): Array<{ recipe_id?: string; status?: string }> {
+  const abs = path.join(target, LIFECYCLE_LEDGER_REL);
+  if (!fs.existsSync(abs)) return [];
+  const raw = JSON.parse(fs.readFileSync(abs, "utf8")) as {
+    recipes?: Array<{ recipe_id?: string; status?: string }>;
+  };
+  return Array.isArray(raw.recipes) ? raw.recipes : [];
+}
+
+function assertNoSupersededRecipe(target: string, recipe_id: string): void {
+  const recipes = readLifecycleRecipes(target);
+  assert.equal(
+    recipes.some(
+      (r) =>
+        r.recipe_id === recipe_id &&
+        r.status === "SUPERSEDED_BY_UPSTREAM_FIX",
+    ),
+    false,
+    `target must not have SUPERSEDED recipe ${recipe_id}`,
+  );
+}
+
+function directSupersede(
+  targetPath: string,
+  witness: unknown,
+  recipe_id: string,
+  nowMs: number,
+) {
+  return supersedeRecipe({
+    targetPath,
+    recipe_id,
+    candidate_version: OFFICIAL_BOUND_VERSION,
+    live_measurement_witness: witness,
+    upstream: {
+      ref: OFFICIAL_RELEASE_URL,
+      evidence_digest: OFFICIAL_RELEASE_DIGEST,
+      verified: true,
+      measured_validation: true,
+    },
+    nowMs,
+  });
+}
+
+test("Ticket12 P0: canary_executed:false must not advance witness; supersede refused", () => {
+  const { baseline, candidate } = makeBaselineCandidatePair("cg-t12-p0-exec-");
+  const w = measurePositiveWitness(candidate, baseline, NOW);
+  assert.equal(witnessStage(w), "fresh");
+
+  const canary = runCanary({
+    targetPath: candidate,
+    candidate_version: OFFICIAL_BOUND_VERSION,
+    original_fault_absent: true,
+    core_regressions_passed: true,
+    canary_executed: false,
+    measured_outcomes: true,
+    live_measurement_witness: w,
+    nowMs: NOW + 1,
+  });
+  assert.equal(canary.ok, true);
+  assert.notEqual(canary.version_guidance, "RECOMMEND_UPGRADE");
+  assert.equal(canary.version_guidance, "UPGRADE_CANARY_AVAILABLE");
+  assert.equal(witnessStage(w), "fresh", "stage must remain fresh");
+
+  const sup = directSupersede(candidate, w, "p0-exec-false", NOW + 2);
+  assert.equal(sup.ok, false);
+  assert.ok(
+    sup.error_code === "LIVE_WITNESS_STAGE" ||
+      sup.error_code === "LIVE_WITNESS_REQUIRED",
+  );
+  assertNoSupersededRecipe(candidate, "p0-exec-false");
+});
+
+test("Ticket12 P0: original_fault_absent:false must not advance witness; supersede refused", () => {
+  const { baseline, candidate } = makeBaselineCandidatePair("cg-t12-p0-fault-");
+  const w = measurePositiveWitness(candidate, baseline, NOW);
+  assert.equal(witnessStage(w), "fresh");
+
+  const canary = runCanary({
+    targetPath: candidate,
+    candidate_version: OFFICIAL_BOUND_VERSION,
+    original_fault_absent: false,
+    core_regressions_passed: true,
+    canary_executed: true,
+    measured_outcomes: true,
+    live_measurement_witness: w,
+    nowMs: NOW + 1,
+  });
+  assert.equal(canary.ok, true);
+  assert.notEqual(canary.version_guidance, "RECOMMEND_UPGRADE");
+  assert.equal(witnessStage(w), "fresh", "failed canary must not advance stage");
+
+  const sup = directSupersede(candidate, w, "p0-fault-present", NOW + 2);
+  assert.equal(sup.ok, false);
+  assert.ok(
+    sup.error_code === "LIVE_WITNESS_STAGE" ||
+      sup.error_code === "LIVE_WITNESS_REQUIRED",
+  );
+  assertNoSupersededRecipe(candidate, "p0-fault-present");
+});
+
+test("Ticket12 P0: core_regressions_passed:false must not advance witness; supersede refused", () => {
+  const { baseline, candidate } = makeBaselineCandidatePair("cg-t12-p0-core-");
+  const w = measurePositiveWitness(candidate, baseline, NOW);
+  assert.equal(witnessStage(w), "fresh");
+
+  const canary = runCanary({
+    targetPath: candidate,
+    candidate_version: OFFICIAL_BOUND_VERSION,
+    original_fault_absent: true,
+    core_regressions_passed: false,
+    canary_executed: true,
+    measured_outcomes: true,
+    live_measurement_witness: w,
+    nowMs: NOW + 1,
+  });
+  assert.equal(canary.ok, true);
+  assert.notEqual(canary.version_guidance, "RECOMMEND_UPGRADE");
+  assert.equal(witnessStage(w), "fresh", "failed canary must not advance stage");
+
+  const sup = directSupersede(candidate, w, "p0-core-fail", NOW + 2);
+  assert.equal(sup.ok, false);
+  assert.ok(
+    sup.error_code === "LIVE_WITNESS_STAGE" ||
+      sup.error_code === "LIVE_WITNESS_REQUIRED",
+  );
+  assertNoSupersededRecipe(candidate, "p0-core-fail");
+});
+
+test("Ticket12 P0: canary under target B cannot use witness measured under A", () => {
+  const pairA = makeBaselineCandidatePair("cg-t12-p0-a-");
+  const pairB = makeBaselineCandidatePair("cg-t12-p0-b-");
+  const w = measurePositiveWitness(pairA.candidate, pairA.baseline, NOW);
+  assert.equal(witnessStage(w), "fresh");
+
+  const canaryB = runCanary({
+    targetPath: pairB.candidate,
+    candidate_version: OFFICIAL_BOUND_VERSION,
+    original_fault_absent: true,
+    core_regressions_passed: true,
+    canary_executed: true,
+    measured_outcomes: true,
+    live_measurement_witness: w,
+    nowMs: NOW + 1,
+  });
+  assert.equal(canaryB.ok, true);
+  assert.notEqual(canaryB.version_guidance, "RECOMMEND_UPGRADE");
+  assert.equal(
+    witnessStage(w),
+    "fresh",
+    "mismatched-target canary must not advance stage",
+  );
+
+  const supB = directSupersede(pairB.candidate, w, "p0-cross-b", NOW + 2);
+  assert.equal(supB.ok, false);
+  assertNoSupersededRecipe(pairB.candidate, "p0-cross-b");
+});
+
+test("Ticket12 P0: supersede under B refused after valid canary under A; B ledger unmutated", () => {
+  const pairA = makeBaselineCandidatePair("cg-t12-p0-supa-");
+  const pairB = makeBaselineCandidatePair("cg-t12-p0-supb-");
+  const w = measurePositiveWitness(pairA.candidate, pairA.baseline, NOW);
+
+  const canaryA = runCanary({
+    targetPath: pairA.candidate,
+    candidate_version: OFFICIAL_BOUND_VERSION,
+    original_fault_absent: true,
+    core_regressions_passed: true,
+    canary_executed: true,
+    measured_outcomes: true,
+    live_measurement_witness: w,
+    nowMs: NOW + 1,
+  });
+  assert.equal(canaryA.version_guidance, "RECOMMEND_UPGRADE");
+  assert.equal(witnessStage(w), "canary_recorded");
+
+  const bLedgerBefore = lifecycleLedgerExists(pairB.candidate)
+    ? fs.readFileSync(path.join(pairB.candidate, LIFECYCLE_LEDGER_REL), "utf8")
+    : null;
+
+  const supB = directSupersede(pairB.candidate, w, "p0-bind-b", NOW + 2);
+  assert.equal(supB.ok, false);
+  assert.equal(supB.error_code, "LIVE_WITNESS_BINDING");
+  assert.equal(
+    witnessStage(w),
+    "canary_recorded",
+    "binding failure must not consume witness",
+  );
+  assertNoSupersededRecipe(pairB.candidate, "p0-bind-b");
+
+  const bLedgerAfter = lifecycleLedgerExists(pairB.candidate)
+    ? fs.readFileSync(path.join(pairB.candidate, LIFECYCLE_LEDGER_REL), "utf8")
+    : null;
+  assert.equal(
+    bLedgerAfter,
+    bLedgerBefore,
+    "B lifecycle ledger must not be mutated on target-binding refusal",
+  );
+
+  // Same-target supersede under A still authorized once.
+  const supA = directSupersede(pairA.candidate, w, "p0-bind-a", NOW + 3);
+  assert.equal(supA.ok, true);
+  assert.equal(witnessStage(w), "consumed");
+});
+
+test("Ticket12 P0: same-target all-true path recommends once; supersede once; replay refused", () => {
+  const { baseline, candidate } = makeBaselineCandidatePair("cg-t12-p0-happy-");
+  const w = measurePositiveWitness(candidate, baseline, NOW);
+
+  const canary = runCanary({
+    targetPath: candidate,
+    candidate_version: OFFICIAL_BOUND_VERSION,
+    original_fault_absent: true,
+    core_regressions_passed: true,
+    canary_executed: true,
+    measured_outcomes: true,
+    live_measurement_witness: w,
+    nowMs: NOW + 1,
+  });
+  assert.equal(canary.version_guidance, "RECOMMEND_UPGRADE");
+  assert.equal(witnessStage(w), "canary_recorded");
+
+  const sup1 = directSupersede(candidate, w, "p0-happy", NOW + 2);
+  assert.equal(sup1.ok, true);
+  assert.equal(sup1.recipe?.status, "SUPERSEDED_BY_UPSTREAM_FIX");
+  assert.equal(witnessStage(w), "consumed");
+
+  const sup2 = directSupersede(candidate, w, "p0-happy-replay", NOW + 3);
+  assert.equal(sup2.ok, false);
+  assert.equal(sup2.error_code, "LIVE_WITNESS_REPLAY");
+  assertNoSupersededRecipe(candidate, "p0-happy-replay");
+});
+
+test("Ticket12 P0: failed canary does not strand fresh witness; later success may advance once", () => {
+  const { baseline, candidate } = makeBaselineCandidatePair("cg-t12-p0-retry-");
+  const w = measurePositiveWitness(candidate, baseline, NOW);
+
+  const failed = runCanary({
+    targetPath: candidate,
+    candidate_version: OFFICIAL_BOUND_VERSION,
+    original_fault_absent: false,
+    core_regressions_passed: true,
+    canary_executed: true,
+    measured_outcomes: true,
+    live_measurement_witness: w,
+    nowMs: NOW + 1,
+  });
+  assert.notEqual(failed.version_guidance, "RECOMMEND_UPGRADE");
+  assert.equal(witnessStage(w), "fresh");
+
+  const ok = runCanary({
+    targetPath: candidate,
+    candidate_version: OFFICIAL_BOUND_VERSION,
+    original_fault_absent: true,
+    core_regressions_passed: true,
+    canary_executed: true,
+    measured_outcomes: true,
+    live_measurement_witness: w,
+    nowMs: NOW + 2,
+  });
+  assert.equal(ok.version_guidance, "RECOMMEND_UPGRADE");
+  assert.equal(witnessStage(w), "canary_recorded");
+
+  const sup = directSupersede(candidate, w, "p0-retry", NOW + 3);
+  assert.equal(sup.ok, true);
 });
 
 test("Ticket12 adversarial: supersession evidence digest conflict refused", () => {

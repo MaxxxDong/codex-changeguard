@@ -57,8 +57,17 @@ export interface LiveMeasurementWitness {
   readonly [LIVE_WITNESS_BRAND]: true;
 }
 
+/**
+ * Private store record. Exact canonical target identity stays here only —
+ * never copied into public LiveMeasurementAttestation / results / evidence.
+ */
 interface AttestationState extends LiveMeasurementAttestation {
   stage: LiveMeasurementStage;
+  /**
+   * Exact canonical candidate root (realpath) proven during registered live
+   * measurement isolation. Used solely for process-local target binding.
+   */
+  measured_candidate_target_real: string;
 }
 
 const liveMeasurementStore = new WeakMap<object, AttestationState>();
@@ -477,6 +486,8 @@ export function runRegisteredLiveMeasurement(
     nonce,
     measured_at_ms: nowMs,
     stage: "fresh",
+    // Exact realpath from isolation proof — never exported publicly.
+    measured_candidate_target_real: candidateReal,
   };
 
   const witness = mintWitness(state);
@@ -515,35 +526,69 @@ export interface WitnessAuthorityFail {
   message: string;
 }
 
+function publicAttestationView(st: AttestationState): LiveMeasurementAttestation {
+  return {
+    profile_id: st.profile_id,
+    candidate_version: st.candidate_version,
+    baseline_artifact_sha256: st.baseline_artifact_sha256,
+    candidate_artifact_sha256: st.candidate_artifact_sha256,
+    baseline_isolation_digest: st.baseline_isolation_digest,
+    candidate_isolation_digest: st.candidate_isolation_digest,
+    probe_digests: [...st.probe_digests],
+    baseline_fault_present: true,
+    candidate_fault_present: false,
+    candidate_core_ok: true,
+    nonce: st.nonce,
+    measured_at_ms: st.measured_at_ms,
+    stage: st.stage,
+  };
+}
+
 function bindingMatch(
-  att: LiveMeasurementAttestation,
+  st: AttestationState,
   expected: {
     candidate_version: string;
     profile_id?: string;
+    /** Exact canonical target realpath for this operation (required). */
+    target_real: string;
   },
 ): boolean {
-  if (att.candidate_version !== expected.candidate_version) return false;
+  if (st.candidate_version !== expected.candidate_version) return false;
   if (
     expected.profile_id !== undefined &&
-    att.profile_id !== expected.profile_id
+    st.profile_id !== expected.profile_id
   ) {
     return false;
   }
-  if (att.profile_id !== PROTECTED_PROCESS_SHIM_PROFILE_V1) return false;
-  if (att.baseline_fault_present !== true) return false;
-  if (att.candidate_fault_present !== false) return false;
-  if (att.candidate_core_ok !== true) return false;
+  if (st.profile_id !== PROTECTED_PROCESS_SHIM_PROFILE_V1) return false;
+  if (st.baseline_fault_present !== true) return false;
+  if (st.candidate_fault_present !== false) return false;
+  if (st.candidate_core_ok !== true) return false;
+  // Exact target identity: witness measured under A never authorizes B.
+  if (
+    typeof expected.target_real !== "string" ||
+    expected.target_real.length === 0 ||
+    st.measured_candidate_target_real !== expected.target_real
+  ) {
+    return false;
+  }
   return true;
 }
 
 /**
  * Record canary under live measurement authority.
- * Requires stage fresh → advances to canary_recorded.
- * Plain objects / clones / consumed witnesses fail closed.
+ * Advances fresh → canary_recorded only when the caller has already established
+ * the successful measured-canary branch (executed + fault absent + core ok)
+ * and target/version/profile bind. Plain objects / clones / failed canaries
+ * never reach this mutator with authority; stage is not advanced on mismatch.
  */
 export function recordCanaryWithLiveWitness(
   witness: unknown,
-  expected: { candidate_version: string; profile_id?: string },
+  expected: {
+    candidate_version: string;
+    profile_id?: string;
+    target_real: string;
+  },
 ): WitnessAuthorityOk | WitnessAuthorityFail {
   if (!isWitnessObject(witness)) {
     return {
@@ -585,20 +630,22 @@ export function recordCanaryWithLiveWitness(
   st.stage = "canary_recorded";
   return {
     ok: true,
-    attestation: {
-      ...st,
-      probe_digests: [...st.probe_digests],
-    },
+    attestation: publicAttestationView(st),
   };
 }
 
 /**
  * Consume witness for supersession.
- * Requires stage canary_recorded → advances to consumed (one-shot).
+ * Requires stage canary_recorded, exact target binding, then consumed (one-shot).
+ * Target/version/profile mismatch fails closed without consuming the witness.
  */
 export function consumeWitnessForSupersede(
   witness: unknown,
-  expected: { candidate_version: string; profile_id?: string },
+  expected: {
+    candidate_version: string;
+    profile_id?: string;
+    target_real: string;
+  },
 ): WitnessAuthorityOk | WitnessAuthorityFail {
   if (!isWitnessObject(witness)) {
     return {
@@ -640,9 +687,6 @@ export function consumeWitnessForSupersede(
   st.stage = "consumed";
   return {
     ok: true,
-    attestation: {
-      ...st,
-      probe_digests: [...st.probe_digests],
-    },
+    attestation: publicAttestationView(st),
   };
 }
