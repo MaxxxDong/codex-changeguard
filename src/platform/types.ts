@@ -97,11 +97,15 @@ export interface ScenarioOutcome {
 }
 
 export interface IsolationProof {
-  active_codex_home_untouched: true;
-  disposable_targets_only: true;
-  no_sudo: true;
-  no_protected_write: true;
-  no_active_profile_mutation: true;
+  /**
+   * Isolation claim bits. Failures may set false (schema allows boolean).
+   * Full support requires every bit to be true.
+   */
+  active_codex_home_untouched: boolean;
+  disposable_targets_only: boolean;
+  no_sudo: boolean;
+  no_protected_write: boolean;
+  no_active_profile_mutation: boolean;
   /** Digest over isolation assertion material (hashes only). */
   isolation_digest: string;
   /**

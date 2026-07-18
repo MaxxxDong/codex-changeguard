@@ -380,16 +380,22 @@ export function listTrustedDisposableRoots(
 /**
  * Read-only, path-free witness of active ~/.codex existence + coarse metadata.
  * Never reads secret file contents; only directory metadata and top-level names.
+ *
+ * When ~/.codex is a symlink, isolation cannot be proved safely without
+ * following the link (path leakage / out-of-bounds risk). The safest policy is
+ * isolation_unprovable: digest is a stable unprovable marker and
+ * `isolation_provable` is false so harness must not seal Full.
  */
 export function captureActiveCodexHomeWitness(
   homeDir?: string | null,
-): { digest: string; present: boolean } {
+): { digest: string; present: boolean; isolation_provable: boolean } {
   const home =
     homeDir ?? process.env.HOME ?? process.env.USERPROFILE ?? null;
   if (!home || home.length === 0) {
     return {
       digest: sha256Text("active_codex:v1:no_home"),
       present: false,
+      isolation_provable: true,
     };
   }
   const active = path.resolve(path.join(home, ".codex"));
@@ -400,22 +406,16 @@ export function captureActiveCodexHomeWitness(
     return {
       digest: sha256Text("active_codex:v1:absent"),
       present: false,
+      isolation_provable: true,
     };
   }
   if (lst.isSymbolicLink()) {
-    // Symlink active home is treated as present-but-alias; still path-free digest.
-    let targetType = "symlink";
-    try {
-      const st = fs.statSync(active);
-      targetType = st.isDirectory() ? "symlink_dir" : "symlink_other";
-    } catch {
-      targetType = "symlink_dangling";
-    }
+    // Do not hash only symlink leaf metadata (uninformative) and do not follow
+    // the link for a deep witness (privacy / boundary). Fail closed for Full.
     return {
-      digest: sha256Text(
-        `active_codex:v1:${targetType}|ino=${lst.ino}|dev=${lst.dev}|mode=${lst.mode}|uid=${lst.uid}|gid=${lst.gid}|mtime=${Math.trunc(lst.mtimeMs)}|nlink=${lst.nlink}`,
-      ),
+      digest: sha256Text("active_codex:v1:isolation_unprovable:symlink"),
       present: true,
+      isolation_provable: false,
     };
   }
   const parts = [
@@ -441,7 +441,11 @@ export function captureActiveCodexHomeWitness(
       parts.push("entries=unreadable");
     }
   }
-  return { digest: sha256Text(parts.join("|")), present: true };
+  return {
+    digest: sha256Text(parts.join("|")),
+    present: true,
+    isolation_provable: true,
+  };
 }
 
 /**
@@ -470,24 +474,50 @@ export function assertDisposableTarget(
     process.env.USERPROFILE ??
     null;
 
+  /**
+   * Collect every deny root for the active Codex profile:
+   * - logical HOME/.codex
+   * - realpath(HOME)/.codex
+   * - realpath(HOME/.codex) itself (symlink/firmlink target)
+   * Fail-closed: refuse the logical path, its real target, and any child.
+   */
+  const collectActiveCodexDenyRoots = (): string[] => {
+    if (!home || home.length === 0) return [];
+    const roots = new Set<string>();
+    const homeResolved = path.resolve(home);
+    const activeLogical = path.resolve(path.join(home, ".codex"));
+    roots.add(activeLogical);
+
+    // realpath of active ~/.codex itself (not only HOME).
+    const activeReal = tryRealpath(activeLogical);
+    if (activeReal) roots.add(activeReal);
+
+    const homeReal = tryRealpath(homeResolved);
+    if (homeReal) {
+      const viaHome = path.resolve(path.join(homeReal, ".codex"));
+      roots.add(viaHome);
+      const viaHomeReal = tryRealpath(viaHome);
+      if (viaHomeReal) roots.add(viaHomeReal);
+    }
+    return [...roots];
+  };
+
+  const activeDenyRoots = collectActiveCodexDenyRoots();
+
   const denyPath = (abs: string): string | null => {
-    if (home && home.length > 0) {
-      const homeResolved = path.resolve(home);
-      const activeCodex = path.resolve(path.join(home, ".codex"));
-      // Refuse active profile and the entire home tree as mutation targets.
-      if (pathIsUnder(activeCodex, abs) || abs === activeCodex) {
+    for (const root of activeDenyRoots) {
+      if (pathIsUnder(root, abs)) {
         return "ACTIVE_CODEX_PROFILE_REFUSED";
       }
-      if (pathIsUnder(homeResolved, abs) && abs === homeResolved) {
+    }
+    if (home && home.length > 0) {
+      const homeResolved = path.resolve(home);
+      if (abs === homeResolved) {
         return "HOME_ROOT_REFUSED";
       }
-      // Also refuse HOME/.codex via realpath aliases.
       const homeReal = tryRealpath(homeResolved);
-      if (homeReal) {
-        const activeReal = path.join(homeReal, ".codex");
-        if (pathIsUnder(activeReal, abs) || abs === activeReal) {
-          return "ACTIVE_CODEX_PROFILE_REFUSED";
-        }
+      if (homeReal && abs === homeReal) {
+        return "HOME_ROOT_REFUSED";
       }
     }
     if (isProtectedPath(abs)) {
@@ -515,7 +545,11 @@ export function assertDisposableTarget(
 
   // Walk parent segments: refuse if any existing segment is a symlink that
   // redirects outside trusted roots (firmlink/symlink alias escape).
+  // Fail-closed: existing paths must realpath; unresolvable aliases are refused.
   const real = tryRealpath(resolved);
+  if (lst && !real) {
+    return { ok: false, code: "REALPATH_UNPROVABLE" };
+  }
   if (real) {
     const deniedReal = denyPath(real);
     if (deniedReal) {

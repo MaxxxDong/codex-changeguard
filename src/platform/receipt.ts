@@ -427,18 +427,30 @@ export function validatePlatformSupportReceipt(
 
   let isolationDigestClaimed: string | null = null;
   let activeHomeWitness: string | null = null;
+  /** All isolation claim bits true — required for Full, optional false for Preview. */
+  let isolationFullyProved = false;
   if (!isPlainObject(raw.isolation)) errors.push("isolation");
   else {
     const iso = raw.isolation;
-    for (const k of [
+    const isoKeys = [
       "active_codex_home_untouched",
       "disposable_targets_only",
       "no_sudo",
       "no_protected_write",
       "no_active_profile_mutation",
-    ] as const) {
-      if (iso[k] !== true) errors.push(`isolation.${k}`);
+    ] as const;
+    let allBool = true;
+    let allTrue = true;
+    for (const k of isoKeys) {
+      if (typeof iso[k] !== "boolean") {
+        errors.push(`isolation.${k}`);
+        allBool = false;
+        allTrue = false;
+      } else if (iso[k] !== true) {
+        allTrue = false;
+      }
     }
+    isolationFullyProved = allBool && allTrue;
     isolationDigestClaimed = asString(iso.isolation_digest);
     if (!isHex64(isolationDigestClaimed)) {
       errors.push("isolation.isolation_digest");
@@ -568,6 +580,10 @@ export function validatePlatformSupportReceipt(
     errors.push("support_level_full_without_proof");
   }
 
+  if (claimed === "full" && !isolationFullyProved) {
+    errors.push("isolation_not_fully_proved");
+  }
+
   if (claimed === "full" && Array.isArray(raw.uncovered_gaps) && raw.uncovered_gaps.length > 0) {
     errors.push("full_with_gaps");
   }
@@ -605,7 +621,8 @@ export function validatePlatformSupportReceipt(
         att.platform === platform &&
         att.arch === arch &&
         derived.level === "full" &&
-        claimed === "full"
+        claimed === "full" &&
+        isolationFullyProved
       ) {
         liveFullOk = true;
       } else {

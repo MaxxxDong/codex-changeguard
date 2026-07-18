@@ -205,11 +205,26 @@
         "active_home_witness_digest"
       ],
       "properties": {
-        "active_codex_home_untouched": { "const": true },
-        "disposable_targets_only": { "const": true },
-        "no_sudo": { "const": true },
-        "no_protected_write": { "const": true },
-        "no_active_profile_mutation": { "const": true },
+        "active_codex_home_untouched": {
+          "type": "boolean",
+          "description": "True only when active ~/.codex was proved untouched; false when unprovable or changed. Full requires true."
+        },
+        "disposable_targets_only": {
+          "type": "boolean",
+          "description": "True when all harness targets passed disposable isolation gates. Full requires true."
+        },
+        "no_sudo": {
+          "type": "boolean",
+          "description": "True when no elevated privileges were used. Full requires true."
+        },
+        "no_protected_write": {
+          "type": "boolean",
+          "description": "True when no protected system roots were write targets. Full requires true."
+        },
+        "no_active_profile_mutation": {
+          "type": "boolean",
+          "description": "True only when active profile non-mutation is proved. Full requires true."
+        },
         "isolation_digest": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"

@@ -657,12 +657,22 @@ export function runMacosScenarioHarness(
 
   // Re-capture active ~/.codex witness AFTER scenarios — must match before.
   const activeWitnessAfter = captureActiveCodexHomeWitness(home);
+  // Symlink active ~/.codex is isolation_unprovable; harness must not seal Full.
   const isolationProved =
+    activeWitnessBefore.isolation_provable &&
+    activeWitnessAfter.isolation_provable &&
     activeWitnessBefore.digest === activeWitnessAfter.digest;
   const extraGaps: string[] = [];
   if (!isolationProved) {
-    // Active ~/.codex changed or unprovable — block Full (no live witness seal).
-    extraGaps.push("isolation_active_codex_unproven_or_changed");
+    if (
+      !activeWitnessBefore.isolation_provable ||
+      !activeWitnessAfter.isolation_provable
+    ) {
+      extraGaps.push("isolation_active_codex_unprovable");
+    } else {
+      // Active ~/.codex changed during harness — block Full (no live witness seal).
+      extraGaps.push("isolation_active_codex_unproven_or_changed");
+    }
   }
 
   const active_home_witness_digest = activeWitnessBefore.digest;
@@ -675,16 +685,16 @@ export function runMacosScenarioHarness(
     active_home_witness_digest,
   });
 
-  // Isolation boolean claims stay true only when the witness proves untouched.
-  // Schema requires const true for a valid isolation object; when unproved we
-  // still emit the structure for inspection but extraGaps + missing live
-  // witness keep support_level at Preview.
+  // Isolation booleans must not be hard-coded true when isolationProved is false.
+  // Schema allows false; Full requires every bit true (validated in receipt).
+  // no_sudo / disposable / no_protected_write remain true by construction of
+  // this harness; active-profile claims track the witness proof.
   const isolation = {
-    active_codex_home_untouched: true as const,
-    disposable_targets_only: true as const,
-    no_sudo: true as const,
-    no_protected_write: true as const,
-    no_active_profile_mutation: true as const,
+    active_codex_home_untouched: isolationProved,
+    disposable_targets_only: true,
+    no_sudo: true,
+    no_protected_write: true,
+    no_active_profile_mutation: isolationProved,
     isolation_digest,
     active_home_witness_digest,
   };

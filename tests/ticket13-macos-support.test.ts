@@ -265,6 +265,148 @@ test("Ticket13: assertDisposableTarget refuses symlink targets", () => {
   if (!r.ok) assert.equal(r.code, "SYMLINK_REFUSED");
 });
 
+test("Ticket13: assertDisposableTarget refuses realpath of ~/.codex→temp and children", () => {
+  // When active ~/.codex is a symlink into temp, the real target (and any
+  // child under it) must also be ACTIVE_CODEX_PROFILE_REFUSED — not only the
+  // logical HOME/.codex path.
+  const tmp = makeTempDir("cg-t13-active-sym-");
+  const home = path.join(tmp, "home");
+  fs.mkdirSync(home, { recursive: true });
+  const realTarget = path.join(tmp, "real-codex-home");
+  fs.mkdirSync(realTarget, { recursive: true });
+  fs.writeFileSync(path.join(realTarget, "config.toml"), "x=1\n", "utf8");
+  const activeLink = path.join(home, ".codex");
+  fs.symlinkSync(realTarget, activeLink);
+
+  const opts = { requireTrustedRoot: false as const };
+
+  // Logical symlink path refused (active profile).
+  const rLink = assertDisposableTarget(activeLink, home, opts);
+  assert.equal(rLink.ok, false);
+  if (!rLink.ok) {
+    assert.ok(
+      rLink.code === "ACTIVE_CODEX_PROFILE_REFUSED" ||
+        rLink.code === "SYMLINK_REFUSED",
+      `unexpected code for link: ${rLink.code}`,
+    );
+  }
+
+  // Direct real target path must also be refused.
+  const rReal = assertDisposableTarget(realTarget, home, opts);
+  assert.equal(rReal.ok, false, "real target of active ~/.codex must be refused");
+  if (!rReal.ok) assert.equal(rReal.code, "ACTIVE_CODEX_PROFILE_REFUSED");
+
+  // Child under real target must be refused.
+  const child = path.join(realTarget, "sessions", "x");
+  fs.mkdirSync(path.dirname(child), { recursive: true });
+  fs.writeFileSync(child, "n\n", "utf8");
+  const rChild = assertDisposableTarget(child, home, opts);
+  assert.equal(rChild.ok, false, "child of active real target must be refused");
+  if (!rChild.ok) assert.equal(rChild.code, "ACTIVE_CODEX_PROFILE_REFUSED");
+
+  // Unrelated temp path under same tmp still allowed when trusted-root off.
+  const other = path.join(tmp, "unrelated");
+  fs.mkdirSync(other, { recursive: true });
+  const rOther = assertDisposableTarget(other, home, opts);
+  assert.equal(rOther.ok, true);
+});
+
+test("Ticket13: active ~/.codex symlink witness is isolation_unprovable", () => {
+  const tmp = makeTempDir("cg-t13-wit-sym-");
+  const home = path.join(tmp, "home");
+  fs.mkdirSync(home, { recursive: true });
+  const realTarget = path.join(tmp, "real-codex");
+  fs.mkdirSync(realTarget, { recursive: true });
+  fs.writeFileSync(path.join(realTarget, "a.toml"), "a=1\n", "utf8");
+  fs.symlinkSync(realTarget, path.join(home, ".codex"));
+
+  const w = captureActiveCodexHomeWitness(home);
+  assert.equal(w.present, true);
+  assert.equal(w.isolation_provable, false);
+  assert.match(w.digest, /^[0-9a-f]{64}$/);
+  // Stable unprovable marker (not leaf symlink metadata alone).
+  const w2 = captureActiveCodexHomeWitness(home);
+  assert.equal(w.digest, w2.digest);
+  // Mutating real target must not create a false "provable" Full path via leaf hash.
+  fs.writeFileSync(path.join(realTarget, "b.toml"), "b=2\n", "utf8");
+  const w3 = captureActiveCodexHomeWitness(home);
+  assert.equal(w3.isolation_provable, false);
+  // Digest remains the unprovable marker (we do not follow the link).
+  assert.equal(w3.digest, w.digest);
+
+  // Receipt with isolation false bits cannot claim Full.
+  const scenarios = syntheticScenarios("pass");
+  const isolation = {
+    active_codex_home_untouched: false,
+    disposable_targets_only: true,
+    no_sudo: true,
+    no_protected_write: true,
+    no_active_profile_mutation: false,
+    active_home_witness_digest: w.digest,
+    isolation_digest: isolationDigestOf({
+      scenario_count: scenarios.length,
+      platform: "macos",
+      arch: "arm64",
+      no_sudo: true,
+      disposable_only: true,
+      active_home_witness_digest: w.digest,
+    }),
+  };
+  const receipt = baseReceipt({
+    scenarios,
+    isolation,
+    support_level: "preview",
+    uncovered_gaps: ["isolation_active_codex_unprovable"],
+  });
+  receipt.support_level = "full";
+  receipt.uncovered_gaps = [];
+  const v = validatePlatformSupportReceipt(receipt);
+  assert.equal(v.ok, false);
+  assert.notEqual(v.support_level, "full");
+  assert.ok(
+    v.errors.includes("isolation_not_fully_proved") ||
+      v.errors.includes("full_requires_live_attestation") ||
+      v.errors.includes("support_level_full_without_proof"),
+  );
+});
+
+test("Ticket13: isolation false bits are schema-valid but block Full", () => {
+  const receipt = baseReceipt({
+    isolation: {
+      active_codex_home_untouched: false,
+      disposable_targets_only: true,
+      no_sudo: true,
+      no_protected_write: true,
+      no_active_profile_mutation: false,
+      active_home_witness_digest: captureActiveCodexHomeWitness(null).digest,
+      isolation_digest: isolationDigestOf({
+        scenario_count: MACOS_REQUIRED_SCENARIO_IDS.length,
+        platform: "macos",
+        arch: "arm64",
+        no_sudo: true,
+        disposable_only: true,
+        active_home_witness_digest: captureActiveCodexHomeWitness(null).digest,
+      }),
+    },
+    support_level: "preview",
+    uncovered_gaps: ["isolation_active_codex_unprovable"],
+  });
+  // Preview with false isolation bits is shape-ok (no isolation type errors).
+  const vPreview = validatePlatformSupportReceipt(receipt);
+  assert.ok(
+    !vPreview.errors.some((e) => e === "isolation.active_codex_home_untouched"),
+  );
+  assert.notEqual(vPreview.support_level, "full");
+
+  // Claiming Full with false isolation bits is refused.
+  receipt.support_level = "full";
+  receipt.uncovered_gaps = [];
+  const vFull = validatePlatformSupportReceipt(receipt);
+  assert.equal(vFull.ok, false);
+  assert.notEqual(vFull.support_level, "full");
+  assert.ok(vFull.errors.includes("isolation_not_fully_proved"));
+});
+
 test("Ticket13: assertDisposableTarget refuses untrusted non-temp roots", () => {
   // Repo source root is not a disposable write target without allowlist.
   const r = assertDisposableTarget(REPO, null, { requireTrustedRoot: true });
@@ -660,10 +802,54 @@ test("Ticket13: active home witness is stable for unchanged tree", () => {
   const b = captureActiveCodexHomeWitness(home);
   assert.equal(a.digest, b.digest);
   assert.match(a.digest, /^[0-9a-f]{64}$/);
+  assert.equal(a.isolation_provable, true);
   // Mutating active home changes witness.
   fs.writeFileSync(path.join(home, ".codex", "other.toml"), "y=2\n", "utf8");
   const c = captureActiveCodexHomeWitness(home);
   assert.notEqual(a.digest, c.digest);
+  assert.equal(c.isolation_provable, true);
   // Never embed home path in digest string itself (hex only).
   assert.equal(a.digest.includes(home), false);
 });
+
+test(
+  "Ticket13: ordinary directory active ~/.codex still allows harness Full",
+  { skip: !IS_DARWIN ? "requires darwin host" : false },
+  async () => {
+    // On a normal (non-symlink) active home, the real-machine harness still
+    // seals Full when all required scenarios pass and isolation is proved.
+    const home = process.env.HOME;
+    if (home) {
+      const active = path.join(home, ".codex");
+      let isSymlink = false;
+      try {
+        isSymlink = fs.lstatSync(active).isSymbolicLink();
+      } catch {
+        isSymlink = false;
+      }
+      if (isSymlink) {
+        // Host uses symlink active home — Full is correctly unreachable.
+        const w = captureActiveCodexHomeWitness(home);
+        assert.equal(w.isolation_provable, false);
+        return;
+      }
+    }
+    const { runMacosScenarioHarness } = await import(
+      "../src/harness/macos-scenario.js"
+    );
+    const outDir = path.join(makeTempDir("cg-t13-full-dir-"), "out");
+    fs.mkdirSync(outDir, { recursive: true });
+    const result = runMacosScenarioHarness({
+      outDir,
+      requirePackage: true,
+    });
+    assert.equal(result.validation_ok, true);
+    assert.equal(result.exit_code, 0);
+    assert.equal(result.receipt.support_level, "full");
+    assert.equal(result.receipt.isolation.active_codex_home_untouched, true);
+    assert.equal(result.receipt.isolation.no_active_profile_mutation, true);
+    assert.equal(result.receipt.isolation.disposable_targets_only, true);
+    assert.equal(result.receipt.isolation.no_sudo, true);
+    assert.equal(result.receipt.isolation.no_protected_write, true);
+  },
+);
