@@ -17,7 +17,7 @@ ChangeGuard is not a generic changelog summarizer, Issue chatbot, environment do
 - Tickets 05–09: `LOCAL_COMPLETE` on integrated HEAD `5aa12c6` (Wave 3 tip; Root full regression 212/212; final review `changeguard-wave3-final-review-r2` → `NO_P0_P1`)
 - Ticket 10: `LOCAL_COMPLETE` on integrated HEAD `3265acd` (commits `0829936` → `7ef87e6` → `26d58b4` → `3265acd`; Root full regression 260/260; final static review `changeguard-ticket10-regression-review-r7` → `NO_P0_P1`, empty patch)
 - Broader product: still `IN_PROGRESS` (Tickets 12, 15–17 not complete; Ticket 11 implemented surfaces are local-only with no real adapter by default; Tickets 13–14 platform surfaces are integrated as framework code)
-- Residual platform claims: macOS Full requires a Ticket 13 real-machine Scenario Harness receipt with live harness witness (see [docs/SUPPORT_MATRIX.md](docs/SUPPORT_MATRIX.md)); Windows Full remains Ticket 14 and stays **Preview** until a real Windows 11 host receipt covers W11-S01…S11; Linux·WSL Limited is Ticket 15; Ticket 06 CLI/Desktop **version** rollback stays `preview_only` / Desktop may be `limited`
+- Residual platform claims: macOS Full requires a Ticket 13 real-machine Scenario Harness receipt with live harness witness (see [docs/SUPPORT_MATRIX.md](docs/SUPPORT_MATRIX.md)); Windows Full remains Ticket 14 and stays **Preview** until a real Windows 11 host live harness covers W11-S01…S11 (external JSON alone cannot Full); Linux·WSL Limited is Ticket 15; Ticket 06 CLI/Desktop **version** rollback stays `preview_only` / Desktop may be `limited`
 - Ticket 10 residual: upstream capsules stay `preview_only` / `local_only` / `external_write: false`; immutable form snapshot date/commit/blob provenance recorded in [HANDOFF.md](HANDOFF.md)
 - Ticket 11 surfaces: separate `upstream-action-preview` / `upstream-action-confirm` (CLI + MCP) with capability-injected adapter; production default is `ADAPTER_UNAVAILABLE` and never simulates success or real GitHub/browser writes. Not marked complete here; no external submission claimed.
 - Ticket 13 surfaces: `platform-status` / `platform-receipt-validate` (CLI + MCP), macOS adapter/harness/receipt schema, and support matrix. Full is never claimed from external JSON alone — only with a real-machine Scenario Harness receipt that passes live validation.
@@ -164,10 +164,11 @@ node bin/changeguard.js platform-status --plan
 node bin/changeguard.js platform-status --receipt=fixtures/windows11/receipts/synthetic-preview.json
 ```
 
-**Status remains PREVIEW** until a real Windows 11 host receipt covers every
-critical scenario (W11-S01…S11). Synthetic / cross-platform / forged receipts
-never authorize FULL. This ticket does **not** claim `LOCAL_COMPLETE` or
-real-machine Full support.
+**Status remains PREVIEW** until a real Windows 11 host Scenario Harness covers
+every critical scenario (W11-S01…S11) **and** seals a process-local live
+witness. Synthetic / cross-platform / forged / external JSON receipts never
+authorize FULL (including complete self-reported `real_machine` objects). This
+ticket does **not** claim `LOCAL_COMPLETE` or real-machine Full support.
 
 ### Upstream draft routing (Ticket 10) — preview only
 

@@ -1,6 +1,11 @@
 /**
  * Platform support receipt parse + structural validation (Ticket 14).
  * Does not evaluate FULL/PREVIEW — see status.ts.
+ *
+ * Full elevation additionally requires a process-local live harness witness
+ * (WeakMap-sealed; not reconstructible from JSON or plain objects). See
+ * sealWindowsLiveHarnessWitness — production CLI/MCP never obtain one without
+ * a future controlled Windows harness run in-process.
  */
 import crypto from "node:crypto";
 import {
@@ -32,6 +37,36 @@ const PLATFORMS = new Set<PlatformReceiptPlatform>([
   "unknown",
 ]);
 
+/** Top-level keys allowed by schemas/platform-support-receipt.schema.json (Windows branch). */
+const RECEIPT_TOP_KEYS = new Set([
+  "schema_version",
+  "platform",
+  "os_family",
+  "os_version",
+  "os_build",
+  "arch",
+  "host_kind",
+  "codex_versions",
+  "instances_fingerprint",
+  "git_sha",
+  "collected_at",
+  "critical_scenarios",
+  "operator_attestation",
+]);
+
+const SCENARIO_KEYS = new Set([
+  "id",
+  "title",
+  "passed",
+  "evidence_digest",
+  "note",
+]);
+
+const ATTESTATION_KEYS = new Set([
+  "non_primary_profile",
+  "real_hardware",
+]);
+
 export class ReceiptValidationError extends Error {
   readonly code: string;
   constructor(code: string, message: string) {
@@ -43,6 +78,21 @@ export class ReceiptValidationError extends Error {
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function rejectExtraKeys(
+  obj: Record<string, unknown>,
+  allowed: Set<string>,
+  where: string,
+): void {
+  for (const key of Object.keys(obj)) {
+    if (!allowed.has(key)) {
+      throw new ReceiptValidationError(
+        "EXTRA_KEY",
+        `Unknown key at ${where}: ${key}`,
+      );
+    }
+  }
 }
 
 function boundString(v: unknown, field: string, max = MAX_STRING): string {
@@ -83,6 +133,7 @@ function parseScenario(raw: unknown): CriticalScenarioResult {
       "Scenario entry must be an object.",
     );
   }
+  rejectExtraKeys(raw, SCENARIO_KEYS, "critical_scenarios[]");
   const idRaw = boundString(raw.id, "scenario.id", 32);
   if (!isCriticalScenarioId(idRaw)) {
     throw new ReceiptValidationError(
@@ -136,6 +187,7 @@ function parseAttestation(
       "operator_attestation must be an object or null.",
     );
   }
+  rejectExtraKeys(raw, ATTESTATION_KEYS, "operator_attestation");
   if (
     typeof raw.non_primary_profile !== "boolean" ||
     typeof raw.real_hardware !== "boolean"
@@ -154,6 +206,7 @@ function parseAttestation(
 /**
  * Parse and structurally validate a platform support receipt.
  * Throws ReceiptValidationError on malformed input.
+ * Fail-closed on unknown extra keys (schema additionalProperties:false).
  */
 export function parsePlatformSupportReceipt(
   input: unknown,
@@ -164,6 +217,7 @@ export function parsePlatformSupportReceipt(
       "Receipt must be a JSON object.",
     );
   }
+  rejectExtraKeys(input, RECEIPT_TOP_KEYS, "receipt");
   if (input.schema_version !== 1) {
     throw new ReceiptValidationError(
       "SCHEMA_VERSION",
@@ -253,4 +307,147 @@ export function parsePlatformSupportReceipt(
 export function receiptDigest(receipt: PlatformSupportReceipt): string {
   const payload = JSON.stringify(receipt);
   return crypto.createHash("sha256").update(payload).digest("hex");
+}
+
+/** Stable binding over critical scenarios + evidence digests (path-free). */
+export function criticalScenariosBindingOf(
+  scenarios: readonly CriticalScenarioResult[],
+): string {
+  const rows = scenarios
+    .map(
+      (s) =>
+        `${s.id}|${s.passed ? "1" : "0"}|${s.evidence_digest ?? "-"}`,
+    )
+    .sort();
+  return crypto
+    .createHash("sha256")
+    .update(`w11-scenarios:v1:${rows.join("\n")}`, "utf8")
+    .digest("hex");
+}
+
+// ---------------------------------------------------------------------------
+// Process-local live harness witness (not serializable / not forgeable via JSON)
+// Mirrors Ticket 13 macOS live witness: WeakMap identity, not reconstructible
+// from receipt JSON, CLI/MCP reload, or plain-object fakes.
+// ---------------------------------------------------------------------------
+
+const WIN_LIVE_WITNESS_BRAND = Symbol(
+  "changeguard.windows_live_harness_witness",
+);
+
+/**
+ * Material sealed for a just-executed controlled Windows harness run.
+ * Must match the evaluated receipt binding field-for-field for Full.
+ */
+export interface WindowsLiveHarnessAttestation {
+  receipt_digest: string;
+  platform: string;
+  os_family: string;
+  os_version: string | null;
+  os_build: string | null;
+  arch: string;
+  host_kind: PlatformReceiptHostKind;
+  git_sha: string | null;
+  collected_at: string;
+  instances_fingerprint: string | null;
+  /** Digest of all critical scenario ids/pass/evidence_digest bindings. */
+  scenarios_binding: string;
+}
+
+export interface WindowsLiveHarnessWitness {
+  readonly [WIN_LIVE_WITNESS_BRAND]: true;
+}
+
+const windowsLiveWitnessStore = new WeakMap<
+  WindowsLiveHarnessWitness,
+  WindowsLiveHarnessAttestation
+>();
+
+/**
+ * Seal a process-local witness for a controlled Windows harness run.
+ * Production CLI/MCP and validate-receipt-only runners never call this;
+ * only a future in-process Windows Scenario Harness (or unit tests) may.
+ * The token is an opaque object; only this process's WeakMap can resolve it.
+ */
+export function sealWindowsLiveHarnessWitness(
+  attestation: WindowsLiveHarnessAttestation,
+): WindowsLiveHarnessWitness {
+  const token = { [WIN_LIVE_WITNESS_BRAND]: true as const };
+  windowsLiveWitnessStore.set(token, {
+    receipt_digest: attestation.receipt_digest,
+    platform: attestation.platform,
+    os_family: attestation.os_family,
+    os_version: attestation.os_version,
+    os_build: attestation.os_build,
+    arch: attestation.arch,
+    host_kind: attestation.host_kind,
+    git_sha: attestation.git_sha,
+    collected_at: attestation.collected_at,
+    instances_fingerprint: attestation.instances_fingerprint,
+    scenarios_binding: attestation.scenarios_binding,
+  });
+  return token;
+}
+
+export function isWindowsLiveHarnessWitness(
+  v: unknown,
+): v is WindowsLiveHarnessWitness {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    (v as WindowsLiveHarnessWitness)[WIN_LIVE_WITNESS_BRAND] === true &&
+    windowsLiveWitnessStore.has(v as WindowsLiveHarnessWitness)
+  );
+}
+
+export function readWindowsLiveHarnessAttestation(
+  witness: WindowsLiveHarnessWitness,
+): WindowsLiveHarnessAttestation | null {
+  return windowsLiveWitnessStore.get(witness) ?? null;
+}
+
+/** Build attestation material from a structurally validated receipt. */
+export function windowsLiveAttestationFromReceipt(
+  receipt: PlatformSupportReceipt,
+): WindowsLiveHarnessAttestation {
+  return {
+    receipt_digest: receiptDigest(receipt),
+    platform: receipt.platform,
+    os_family: receipt.os_family,
+    os_version: receipt.os_version,
+    os_build: receipt.os_build,
+    arch: receipt.arch,
+    host_kind: receipt.host_kind,
+    git_sha: receipt.git_sha,
+    collected_at: receipt.collected_at,
+    instances_fingerprint: receipt.instances_fingerprint,
+    scenarios_binding: criticalScenariosBindingOf(receipt.critical_scenarios),
+  };
+}
+
+/**
+ * True only when witness is process-local and every bound field matches the
+ * receipt. Plain objects / JSON clones never match.
+ */
+export function windowsLiveWitnessMatchesReceipt(
+  receipt: PlatformSupportReceipt,
+  witness: unknown,
+): boolean {
+  if (!isWindowsLiveHarnessWitness(witness)) return false;
+  const att = readWindowsLiveHarnessAttestation(witness);
+  if (!att) return false;
+  const expected = windowsLiveAttestationFromReceipt(receipt);
+  return (
+    att.receipt_digest === expected.receipt_digest &&
+    att.platform === expected.platform &&
+    att.os_family === expected.os_family &&
+    att.os_version === expected.os_version &&
+    att.os_build === expected.os_build &&
+    att.arch === expected.arch &&
+    att.host_kind === expected.host_kind &&
+    att.git_sha === expected.git_sha &&
+    att.collected_at === expected.collected_at &&
+    att.instances_fingerprint === expected.instances_fingerprint &&
+    att.scenarios_binding === expected.scenarios_binding
+  );
 }

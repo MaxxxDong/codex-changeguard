@@ -6,12 +6,18 @@
  * - never writes WindowsApps, Program Files, registry policy, or system security settings
  * - never elevates privileges
  * - only loads/validates a receipt JSON and evaluates PREVIEW/FULL
+ * - never seals a live harness witness (external JSON alone cannot Full)
  *
  * Real scenario execution remains operator-driven; this entry is the
- * load/validate/evaluate seam for future automation.
+ * load/validate/evaluate seam for future automation. A future controlled
+ * in-process Windows harness may call sealWindowsLiveHarnessWitness after
+ * a real run — production CLI/MCP and this plan do not.
  */
-import fs from "node:fs";
 import path from "node:path";
+import {
+  PathSafetyError,
+  readAbsoluteRegularFile,
+} from "../../core/path-safety.js";
 import { WINDOWS11_CRITICAL_SCENARIOS } from "./critical-scenarios.js";
 import { parsePlatformSupportReceipt } from "./receipt.js";
 import { windows11SupportStatus } from "./status.js";
@@ -50,8 +56,10 @@ export function realMachineRunnerPlan(): RealMachineRunnerPlan {
     ],
     notes: [
       "This entry validates operator-supplied receipts only.",
-      "FULL requires host_kind=real_machine on Windows 11 with all critical scenarios passed.",
+      "FULL requires host_kind=real_machine on Windows 11 with all critical scenarios passed AND a process-local live harness witness.",
+      "External JSON / file / CLI / MCP alone cannot authorize FULL (capped at PREVIEW).",
       "Synthetic and cross_platform_ci receipts remain PREVIEW.",
+      "No live witness is sealed by this validate-receipt-only runner.",
     ],
   };
 }
@@ -63,9 +71,52 @@ export interface LoadReceiptResult {
   error_message: string | null;
 }
 
+function pathSafetyToLoadError(e: PathSafetyError): {
+  error_code: string;
+  error_message: string;
+} {
+  switch (e.code) {
+    case "SYMLINK_ESCAPE":
+      return {
+        error_code: "SYMLINK_REFUSED",
+        error_message: "Symlink receipt path refused.",
+      };
+    case "TARGET_NOT_FOUND":
+    case "CANDIDATE_NOT_FOUND":
+      return {
+        error_code: "NOT_FOUND",
+        error_message: "Receipt file not found.",
+      };
+    case "SIZE_LIMIT":
+      return {
+        error_code: "SIZE_LIMIT",
+        error_message: "Receipt file exceeds size limit.",
+      };
+    case "INVALID_TARGET":
+    case "INVALID_CANDIDATE":
+    case "INVALID_PATH":
+      return {
+        error_code: "NOT_A_FILE",
+        error_message: "Receipt path is not a regular file.",
+      };
+    case "TOCTOU":
+      return {
+        error_code: "TOCTOU",
+        error_message: "Receipt path refused (path changed during read).",
+      };
+    default:
+      return {
+        error_code: e.code || "PATH_REFUSED",
+        error_message: e.message || "Receipt path refused.",
+      };
+  }
+}
+
 /**
  * Load a receipt file (JSON) and evaluate Windows 11 support status.
- * Read-only; refuses oversized files and symlink targets.
+ * Read-only; reuses path-safety invariants (parent not symlink, no leaf
+ * symlink segments, regular file, size limit). External file loads never
+ * receive a live witness — status remains at most PREVIEW.
  */
 export function loadAndEvaluateReceiptFile(
   receiptPath: string,
@@ -80,51 +131,25 @@ export function loadAndEvaluateReceiptFile(
       error_message: "Receipt path is required.",
     };
   }
-  const abs = path.resolve(receiptPath);
-  let st: fs.Stats;
-  try {
-    st = fs.lstatSync(abs);
-  } catch {
-    const status = windows11SupportStatus(null, options);
-    return {
-      ok: false,
-      status,
-      error_code: "NOT_FOUND",
-      error_message: "Receipt file not found.",
-    };
-  }
-  if (st.isSymbolicLink()) {
-    const status = windows11SupportStatus(null, options);
-    return {
-      ok: false,
-      status,
-      error_code: "SYMLINK_REFUSED",
-      error_message: "Symlink receipt path refused.",
-    };
-  }
-  if (!st.isFile()) {
-    const status = windows11SupportStatus(null, options);
-    return {
-      ok: false,
-      status,
-      error_code: "NOT_A_FILE",
-      error_message: "Receipt path is not a regular file.",
-    };
-  }
-  if (st.size > MAX_RECEIPT_BYTES) {
-    const status = windows11SupportStatus(null, options);
-    return {
-      ok: false,
-      status,
-      error_code: "SIZE_LIMIT",
-      error_message: "Receipt file exceeds size limit.",
-    };
-  }
+  // Normalize for stable error surfaces; actual open uses path-safety.
+  void path.resolve(receiptPath);
+
   let text: string;
   try {
-    text = fs.readFileSync(abs, "utf8");
-  } catch {
+    text = readAbsoluteRegularFile(receiptPath, MAX_RECEIPT_BYTES).toString(
+      "utf8",
+    );
+  } catch (e) {
     const status = windows11SupportStatus(null, options);
+    if (e instanceof PathSafetyError) {
+      const mapped = pathSafetyToLoadError(e);
+      return {
+        ok: false,
+        status,
+        error_code: mapped.error_code,
+        error_message: mapped.error_message,
+      };
+    }
     return {
       ok: false,
       status,
@@ -132,6 +157,7 @@ export function loadAndEvaluateReceiptFile(
       error_message: "Failed to read receipt file.",
     };
   }
+
   let json: unknown;
   try {
     json = JSON.parse(text) as unknown;
@@ -145,6 +171,7 @@ export function loadAndEvaluateReceiptFile(
     };
   }
   // Structural parse first so callers get clear errors; status also re-validates.
+  // Never pass a liveWitness here — file/CLI/MCP cannot upgrade to Full.
   try {
     parsePlatformSupportReceipt(json);
   } catch (e) {

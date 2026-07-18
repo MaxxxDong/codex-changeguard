@@ -130,9 +130,13 @@ Black-box + unit coverage in `tests/ticket14-windows11.test.ts`
 - managed / MSIX package / Program Files → `ADMIN_ACTION_REQUIRED` + IT handoff (no chmod/runas/elevation language)
 - platform status default PREVIEW with explicit critical-scenario gaps
 - synthetic, forged-full, non-Windows, and missing-critical receipts cannot authorize FULL
-- real-machine runner plan lists W11-S01…S11 and forbidden actions; validate-receipt-only mode
+- complete self-reported `real_machine` objects (memory/file/CLI/MCP/JSON clone) stay PREVIEW without a process-local live witness (`FULL_REQUIRES_LIVE_WITNESS`)
+- only a matching in-process `sealWindowsLiveHarnessWitness` unit seam can authorize FULL; any bound field mismatch → PREVIEW
+- top-level / scenario / attestation unknown keys fail closed; intermediate directory symlink receipt paths refused
+- real-machine runner plan lists W11-S01…S11 and forbidden actions; validate-receipt-only mode (no live witness seal)
 - CLI `platform-status` / MCP `changeguard_platform_status` PREVIEW equivalence
-- no LOCAL_COMPLETE / Full product claim without a real Windows 11 host receipt
+- T13 macOS live harness Full / external macOS JSON non-Full regression
+- no LOCAL_COMPLETE / Full product claim without a real Windows 11 host live harness
 
 ## Kill criteria
 

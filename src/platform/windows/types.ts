@@ -1,9 +1,9 @@
 /**
  * Platform support status + Scenario Harness receipt contracts (Ticket 14).
  *
- * FULL is never claimed from synthetic or cross-platform CI evidence.
- * Only an actual Windows 11 host receipt covering every critical scenario
- * may evaluate to FULL.
+ * FULL is never claimed from synthetic or cross-platform CI evidence, nor
+ * from external/self-reported real_machine JSON alone. Full requires a
+ * process-local live harness witness bound to a complete Windows 11 receipt.
  */
 
 /** Published support level for a platform. */

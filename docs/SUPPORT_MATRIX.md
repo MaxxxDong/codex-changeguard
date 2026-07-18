@@ -7,7 +7,7 @@ upgrade a platform to Full.
 | Platform | Declared aim | Current claim rule | Adapter status | Notes |
 | --- | --- | --- | --- | --- |
 | macOS | Full (first full path) | Full only when Ticket 13 real-machine receipt has every required scenario `pass` **and** current-process live harness witness validation succeeds; external/CLI/MCP/arbitrary JSON alone is at most **Preview** | Namespaced adapter in `src/platform/macos/` | Disposable temp fixtures only; never active `~/.codex` (logical or realpath; symlink fail-closed) |
-| Windows 11 | Full after Ticket 14 real-machine loop | **Preview** (current product claim). Framework integrated; Full only with a real Windows 11 `host_kind=real_machine` receipt covering W11-S01…S11 | Namespaced adapter in `src/instances/windows/` + `src/platform/windows/` | No admin bypass; signed `.exe/.dll/.sys` always refused; no WindowsApps / Program Files mutation; synthetic fixtures never Full |
+| Windows 11 | Full after Ticket 14 real-machine loop | **Preview** (current product claim). Framework integrated; Full only with a real Windows 11 `host_kind=real_machine` receipt covering W11-S01…S11 **and** a process-local live harness witness (external/CLI/MCP/JSON alone is at most Preview) | Namespaced adapter in `src/instances/windows/` + `src/platform/windows/` | No admin bypass; signed `.exe/.dll/.sys` always refused; no WindowsApps / Program Files mutation; synthetic fixtures never Full; no production path seals a Windows live witness yet |
 | Linux | Limited CLI | **Limited** / read-only generic until Ticket 15 | Registered PATH / package roots only | No Desktop full repair claim |
 | WSL | Limited CLI + IT handoff | **Limited** until Ticket 15 | Registered WSL paths | Enterprise policy → IT Handoff |
 

@@ -223,3 +223,40 @@ export function readBoundedFile(
     fs.closeSync(fd);
   }
 }
+
+/**
+ * Resolve and bound-read an absolute regular file using the same no-follow
+ * invariants as target + named-candidate walks:
+ * - parent directory must itself be real (not a symlink leaf)
+ * - every segment under the realpathed parent is non-symlink
+ * - leaf must be a regular file within maxBytes
+ *
+ * System-level ancestor firmlinks/symlinks (e.g. macOS `/var` → `/private/var`)
+ * are absorbed by realpath of the parent; a user-controlled intermediate
+ * directory that is itself a symlink is refused (parent-as-symlink gate).
+ */
+export function readAbsoluteRegularFile(
+  filePath: string,
+  maxBytes: number,
+): Buffer {
+  if (
+    typeof filePath !== "string" ||
+    filePath.length === 0 ||
+    filePath.length > 4096 ||
+    filePath.includes("\0")
+  ) {
+    throw new PathSafetyError("INVALID_PATH", "Invalid path.");
+  }
+  const abs = path.resolve(filePath);
+  const base = path.basename(abs);
+  if (!base || base === "." || base === "..") {
+    throw new PathSafetyError("INVALID_PATH", "Invalid path.");
+  }
+  const parent = path.dirname(abs);
+  const { targetReal } = resolveTargetDirectory(parent);
+  const meta = resolveNamedCandidate(targetReal, base);
+  if (meta.size > maxBytes) {
+    throw new PathSafetyError("SIZE_LIMIT", "File exceeds size limit.");
+  }
+  return readBoundedFile(meta.real, maxBytes, meta.preOpen);
+}

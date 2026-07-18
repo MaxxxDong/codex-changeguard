@@ -5,8 +5,11 @@
  * - Default / no receipt → PREVIEW with explicit gaps
  * - synthetic / cross_platform_ci → can never be FULL
  * - non-Windows platform receipt → cannot authorize Windows FULL
- * - FULL only when: real_machine + Windows 11 + all critical scenarios
- *   present, passed, with evidence digests + operator attestation
+ * - Structural completeness (real_machine + Windows 11 + all critical
+ *   scenarios + attestation) is necessary but not sufficient for FULL
+ * - FULL requires a matching process-local live harness witness sealed in
+ *   the same process (WeakMap). External JSON / CLI / MCP / plain objects
+ *   alone are capped at Preview (FULL_REQUIRES_LIVE_WITNESS).
  */
 import {
   WINDOWS11_CRITICAL_SCENARIOS,
@@ -16,6 +19,8 @@ import {
   parsePlatformSupportReceipt,
   receiptDigest,
   ReceiptValidationError,
+  windowsLiveWitnessMatchesReceipt,
+  type WindowsLiveHarnessWitness,
 } from "./receipt.js";
 import type {
   PlatformSupportGap,
@@ -49,12 +54,23 @@ function gap(
   return { code, message, scenario_id };
 }
 
+export interface EvaluatePlatformSupportOptions {
+  now?: () => Date;
+  expectedPlatform?: "windows";
+  /**
+   * Process-local witness from a controlled live Windows harness only.
+   * Never accept a JSON field or plain object as a substitute.
+   */
+  liveWitness?: WindowsLiveHarnessWitness;
+}
+
 /**
- * Evaluate support status. Never fabricates FULL from synthetic evidence.
+ * Evaluate support status. Never fabricates FULL from synthetic evidence
+ * or from external/self-reported real_machine JSON alone.
  */
 export function evaluatePlatformSupport(
   receiptOrUnknown: PlatformSupportReceipt | unknown | null,
-  options?: { now?: () => Date; expectedPlatform?: "windows" },
+  options?: EvaluatePlatformSupportOptions,
 ): PlatformSupportStatus {
   const now = options?.now ?? (() => new Date());
   const evaluated_at = now().toISOString();
@@ -89,23 +105,9 @@ export function evaluatePlatformSupport(
 
   let receipt: PlatformSupportReceipt;
   try {
-    // Accept already-parsed receipts or raw JSON.
-    if (
-      typeof receiptOrUnknown === "object" &&
-      receiptOrUnknown !== null &&
-      (receiptOrUnknown as PlatformSupportReceipt).schema_version === 1 &&
-      Array.isArray(
-        (receiptOrUnknown as PlatformSupportReceipt).critical_scenarios,
-      ) &&
-      typeof (receiptOrUnknown as PlatformSupportReceipt).host_kind === "string" &&
-      typeof (receiptOrUnknown as PlatformSupportReceipt).platform === "string" &&
-      typeof (receiptOrUnknown as PlatformSupportReceipt).os_family === "string"
-    ) {
-      // Re-parse to enforce bounds even for typed objects.
-      receipt = parsePlatformSupportReceipt(receiptOrUnknown);
-    } else {
-      receipt = parsePlatformSupportReceipt(receiptOrUnknown);
-    }
+    // Always re-parse to enforce bounds and extra-key fail-closed even for
+    // typed objects or prior parse results.
+    receipt = parsePlatformSupportReceipt(receiptOrUnknown);
   } catch (e) {
     const code =
       e instanceof ReceiptValidationError ? e.code : "INVALID_RECEIPT";
@@ -225,12 +227,38 @@ export function evaluatePlatformSupport(
     }
   }
 
-  // FULL requires real Windows 11 host + zero gaps.
-  const full_authorized =
+  // Structural completeness: real Windows 11 host + zero structural gaps.
+  // Still not Full without a matching process-local live witness.
+  const structurallyComplete =
     gaps.length === 0 &&
     receipt.host_kind === "real_machine" &&
     receipt.platform === "windows" &&
     isWindows11(receipt);
+
+  let liveWitnessOk = false;
+  if (structurallyComplete) {
+    const witness = options?.liveWitness;
+    if (witness && windowsLiveWitnessMatchesReceipt(receipt, witness)) {
+      liveWitnessOk = true;
+    } else if (witness !== undefined && witness !== null) {
+      // Present but not a matching process-local witness (plain object, wrong binding).
+      gaps.push(
+        gap(
+          "LIVE_WITNESS_MISMATCH",
+          "Live harness witness is missing, forged, or does not match this receipt binding.",
+        ),
+      );
+    } else {
+      gaps.push(
+        gap(
+          "FULL_REQUIRES_LIVE_WITNESS",
+          "FULL requires a process-local live Windows Scenario Harness witness; external JSON alone cannot authorize FULL.",
+        ),
+      );
+    }
+  }
+
+  const full_authorized = structurallyComplete && liveWitnessOk && gaps.length === 0;
 
   // Limited: discovery-only narrative for non-Windows or explicit limited
   // (Ticket 15 owns Linux/WSL limited; Windows path uses preview until full).
@@ -245,7 +273,7 @@ export function evaluatePlatformSupport(
   }
 
   const summary = full_authorized
-    ? "Windows 11 support is FULL: real-machine receipt covers all critical scenarios."
+    ? "Windows 11 support is FULL: live harness witness covers all critical scenarios."
     : `Windows 11 support is ${level.toUpperCase()}: ${gaps.length} gap(s); FULL not authorized.`;
 
   return {
@@ -267,7 +295,7 @@ export function evaluatePlatformSupport(
  */
 export function windows11SupportStatus(
   receipt: PlatformSupportReceipt | unknown | null,
-  options?: { now?: () => Date },
+  options?: Omit<EvaluatePlatformSupportOptions, "expectedPlatform">,
 ): PlatformSupportStatus {
   return evaluatePlatformSupport(receipt, {
     ...options,

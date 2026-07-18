@@ -274,7 +274,7 @@
     },
     {
       "title": "Windows11SupportReceipt",
-      "description": "Auditable Windows 11 support receipt (Ticket 14). FULL requires real_machine Windows 11 with all critical scenarios passed. Synthetic and cross_platform_ci can only support PREVIEW.",
+      "description": "Auditable Windows 11 support receipt (Ticket 14). FULL requires real_machine Windows 11 with all critical scenarios passed AND a process-local live harness witness; external JSON alone is at most PREVIEW. Synthetic and cross_platform_ci can only support PREVIEW.",
       "type": "object",
       "additionalProperties": false,
       "required": [

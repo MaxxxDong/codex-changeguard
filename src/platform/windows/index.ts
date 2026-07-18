@@ -2,7 +2,8 @@
  * Windows 11 platform support namespace (Ticket 14).
  *
  * Distinct from the macOS Scenario Harness receipt surface (Ticket 13).
- * FULL is never claimed from synthetic or cross-platform evidence.
+ * FULL is never claimed from synthetic, cross-platform, or external JSON alone;
+ * it requires a process-local live harness witness (unit/future harness seam only).
  */
 export type {
   PlatformSupportLevel as WindowsPlatformSupportLevel,
@@ -23,11 +24,20 @@ export {
 export {
   parsePlatformSupportReceipt,
   receiptDigest,
+  criticalScenariosBindingOf,
   ReceiptValidationError,
+  sealWindowsLiveHarnessWitness,
+  isWindowsLiveHarnessWitness,
+  readWindowsLiveHarnessAttestation,
+  windowsLiveAttestationFromReceipt,
+  windowsLiveWitnessMatchesReceipt,
+  type WindowsLiveHarnessAttestation,
+  type WindowsLiveHarnessWitness,
 } from "./receipt.js";
 export {
   evaluatePlatformSupport,
   windows11SupportStatus,
+  type EvaluatePlatformSupportOptions,
 } from "./status.js";
 export {
   realMachineRunnerPlan,

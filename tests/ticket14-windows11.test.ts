@@ -34,6 +34,20 @@ import {
   windows11SupportStatus,
   WINDOWS11_CRITICAL_SCENARIO_IDS,
   parsePlatformSupportReceipt,
+  sealWindowsLiveHarnessWitness,
+  windowsLiveAttestationFromReceipt,
+  isWindowsLiveHarnessWitness,
+  validatePlatformSupportReceipt,
+  sealLiveHarnessWitness,
+  buildPlatformSupportReceipt,
+  buildMacosCapabilities,
+  captureActiveCodexHomeWitness,
+  isolationDigestOf,
+  scenarioHashOf,
+  scenariosDigestOf,
+  hostCoarseFingerprintOf,
+  MACOS_REQUIRED_SCENARIO_IDS,
+  ReceiptValidationError,
 } from "../src/platform/index.js";
 import { diagnose } from "../src/core/diagnose.js";
 import {
@@ -502,17 +516,33 @@ test("platform status: default PREVIEW; synthetic/forged/non-windows never FULL"
     missing.status.gaps.some((g) => g.code === "MISSING_SCENARIO"),
   );
 
-  // Even a structurally "complete" real_machine receipt is only FULL when
-  // evaluated — we do not ship one in fixtures (no fabrication on this host).
-  // Prove the positive path with an in-memory object that would pass IF real.
-  const allPass = {
-    schema_version: 1 as const,
-    platform: "windows" as const,
+  // Structurally "complete" real_machine objects without a process-local live
+  // witness are capped at PREVIEW (external JSON alone cannot Full).
+  const allPass = buildForgedCompleteRealMachineReceipt();
+  const parsed = parsePlatformSupportReceipt(allPass);
+  const forgedMem = windows11SupportStatus(parsed);
+  assert.equal(forgedMem.full_authorized, false);
+  assert.equal(forgedMem.level, "preview");
+  assert.ok(
+    forgedMem.gaps.some((g) => g.code === "FULL_REQUIRES_LIVE_WITNESS"),
+  );
+  // Product language for *this* CI host remains PREVIEW without such a file.
+  const hostDefault = windows11SupportStatus(null);
+  assert.equal(hostDefault.level, "preview");
+});
+
+/** Complete real_machine shape used for adversarial Full-upgrade attempts. */
+function buildForgedCompleteRealMachineReceipt(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    schema_version: 1,
+    platform: "windows",
     os_family: "Windows 11",
     os_version: "11",
     os_build: "22631",
     arch: "x64",
-    host_kind: "real_machine" as const,
+    host_kind: "real_machine",
     codex_versions: ["0.50.0"],
     instances_fingerprint: "e".repeat(64),
     git_sha: "c62b9b2e6c50fbd4cc31358a2371c6a888857808",
@@ -528,17 +558,9 @@ test("platform status: default PREVIEW; synthetic/forged/non-windows never FULL"
       non_primary_profile: true,
       real_hardware: true,
     },
+    ...overrides,
   };
-  const parsed = parsePlatformSupportReceipt(allPass);
-  const full = windows11SupportStatus(parsed);
-  // Validator allows FULL only for complete real-machine evidence objects;
-  // this is unit-level capability proof, not a product claim for this host.
-  assert.equal(full.full_authorized, true);
-  assert.equal(full.level, "full");
-  // Product language for *this* CI host remains PREVIEW without such a file.
-  const hostDefault = windows11SupportStatus(null);
-  assert.equal(hostDefault.level, "preview");
-});
+}
 
 test("real-machine runner entry is safe: plan only, no elevation language", () => {
   const plan = realMachineRunnerPlan();
@@ -1113,4 +1135,287 @@ test("P1: CLI/MCP write-scope equivalence under Windows host injection", async (
   }
 
   void userTarget; // reserved for future LOCALAPPDATA allow CLI wiring
+});
+
+// ---------------------------------------------------------------------------
+// Ticket 14 P1 — live harness witness gate (external JSON cannot Full)
+// ---------------------------------------------------------------------------
+
+test("P1 live witness: forged complete real_machine object is PREVIEW", () => {
+  const forged = buildForgedCompleteRealMachineReceipt();
+  const status = windows11SupportStatus(forged);
+  assert.equal(status.level, "preview");
+  assert.equal(status.full_authorized, false);
+  assert.ok(
+    status.gaps.some((g) => g.code === "FULL_REQUIRES_LIVE_WITNESS"),
+    JSON.stringify(status.gaps.map((g) => g.code)),
+  );
+});
+
+test("P1 live witness: file/CLI/MCP forged complete receipt stay PREVIEW", async () => {
+  const tmp = makeTempDir("cg-t14-forge-");
+  const receiptPath = path.join(tmp, "forged-complete.json");
+  writeJson(receiptPath, buildForgedCompleteRealMachineReceipt());
+
+  const fileEval = loadAndEvaluateReceiptFile(receiptPath);
+  assert.equal(fileEval.ok, true);
+  assert.equal(fileEval.status.full_authorized, false);
+  assert.equal(fileEval.status.level, "preview");
+  assert.ok(
+    fileEval.status.gaps.some((g) => g.code === "FULL_REQUIRES_LIVE_WITNESS"),
+  );
+
+  const cli = runCliJson([
+    "platform-status",
+    `--receipt=${receiptPath}`,
+  ]);
+  assert.equal(cli.exitCode, 0);
+  const cliStatus = (
+    cli.result as { status: { full_authorized: boolean; level: string; gaps: Array<{ code: string }> } }
+  ).status;
+  assert.equal(cliStatus.full_authorized, false);
+  assert.equal(cliStatus.level, "preview");
+  assert.ok(
+    cliStatus.gaps.some((g) => g.code === "FULL_REQUIRES_LIVE_WITNESS"),
+  );
+
+  const client = new McpTestClient({ serverEntry: mcpServerEntry() });
+  try {
+    client.start();
+    const mcp = (await client.callTool("changeguard_platform_status", {
+      receipt: receiptPath,
+    })) as {
+      ok: boolean;
+      status: {
+        full_authorized: boolean;
+        level: string;
+        gaps: Array<{ code: string }>;
+      };
+    };
+    assert.equal(mcp.ok, true);
+    assert.equal(mcp.status.full_authorized, false);
+    assert.equal(mcp.status.level, "preview");
+    assert.ok(
+      mcp.status.gaps.some((g) => g.code === "FULL_REQUIRES_LIVE_WITNESS"),
+    );
+  } finally {
+    await client.close();
+  }
+});
+
+test("P1 live witness: only matching process-local seal can Full; clones/fakes cannot", () => {
+  const raw = buildForgedCompleteRealMachineReceipt();
+  const receipt = parsePlatformSupportReceipt(raw);
+  const att = windowsLiveAttestationFromReceipt(receipt);
+  const witness = sealWindowsLiveHarnessWitness(att);
+  assert.equal(isWindowsLiveHarnessWitness(witness), true);
+
+  const live = windows11SupportStatus(receipt, { liveWitness: witness });
+  assert.equal(live.full_authorized, true, JSON.stringify(live.gaps));
+  assert.equal(live.level, "full");
+
+  // JSON clone of receipt cannot carry witness → PREVIEW.
+  const clone = JSON.parse(JSON.stringify(receipt)) as unknown;
+  const cloneStatus = windows11SupportStatus(clone);
+  assert.equal(cloneStatus.full_authorized, false);
+  assert.equal(cloneStatus.level, "preview");
+
+  // Plain-object fake witness ignored.
+  const fakeWitness = { ...att, forged: true };
+  const fakeStatus = windows11SupportStatus(receipt, {
+    // @ts-expect-error intentional forged witness shape
+    liveWitness: fakeWitness,
+  });
+  assert.equal(fakeStatus.full_authorized, false);
+  assert.equal(fakeStatus.level, "preview");
+  assert.ok(
+    fakeStatus.gaps.some(
+      (g) =>
+        g.code === "LIVE_WITNESS_MISMATCH" ||
+        g.code === "FULL_REQUIRES_LIVE_WITNESS",
+    ),
+  );
+
+  // Any bound field change → PREVIEW.
+  const mutated = parsePlatformSupportReceipt(
+    buildForgedCompleteRealMachineReceipt({
+      collected_at: "2026-07-18T12:00:00.000Z",
+    }),
+  );
+  const mismatch = windows11SupportStatus(mutated, { liveWitness: witness });
+  assert.equal(mismatch.full_authorized, false);
+  assert.equal(mismatch.level, "preview");
+  assert.ok(
+    mismatch.gaps.some((g) => g.code === "LIVE_WITNESS_MISMATCH"),
+  );
+
+  // Evidence digest change invalidates scenarios_binding.
+  const scenariosMut = buildForgedCompleteRealMachineReceipt();
+  (scenariosMut.critical_scenarios as Array<{ evidence_digest: string }>)[0]!
+    .evidence_digest = "a".repeat(64);
+  const mutScenarios = parsePlatformSupportReceipt(scenariosMut);
+  const mismatchSc = windows11SupportStatus(mutScenarios, {
+    liveWitness: witness,
+  });
+  assert.equal(mismatchSc.full_authorized, false);
+  assert.ok(
+    mismatchSc.gaps.some((g) => g.code === "LIVE_WITNESS_MISMATCH"),
+  );
+});
+
+test("P1 receipt parser: top-level / scenario / attestation extra keys fail closed", () => {
+  assert.throws(
+    () =>
+      parsePlatformSupportReceipt(
+        buildForgedCompleteRealMachineReceipt({ live: true }),
+      ),
+    (e: unknown) =>
+      e instanceof ReceiptValidationError && e.code === "EXTRA_KEY",
+  );
+  assert.throws(
+    () =>
+      parsePlatformSupportReceipt(
+        buildForgedCompleteRealMachineReceipt({ full_authorized: true }),
+      ),
+    (e: unknown) =>
+      e instanceof ReceiptValidationError && e.code === "EXTRA_KEY",
+  );
+
+  const badScenario = buildForgedCompleteRealMachineReceipt();
+  (badScenario.critical_scenarios as Array<Record<string, unknown>>)[0]!
+    .extra_flag = true;
+  assert.throws(
+    () => parsePlatformSupportReceipt(badScenario),
+    (e: unknown) =>
+      e instanceof ReceiptValidationError && e.code === "EXTRA_KEY",
+  );
+
+  const badAtt = buildForgedCompleteRealMachineReceipt({
+    operator_attestation: {
+      non_primary_profile: true,
+      real_hardware: true,
+      operator_name: "alice",
+    },
+  });
+  assert.throws(
+    () => parsePlatformSupportReceipt(badAtt),
+    (e: unknown) =>
+      e instanceof ReceiptValidationError && e.code === "EXTRA_KEY",
+  );
+
+  // evaluatePlatformSupport surfaces EXTRA_KEY as PREVIEW gap.
+  const status = windows11SupportStatus(
+    buildForgedCompleteRealMachineReceipt({ forged_full: true }),
+  );
+  assert.equal(status.full_authorized, false);
+  assert.ok(status.gaps.some((g) => g.code === "EXTRA_KEY"));
+});
+
+test("P1 path safety: intermediate directory symlink receipt path refused", () => {
+  const tmp = makeTempDir("cg-t14-sym-");
+  const realDir = path.join(tmp, "real");
+  const linkDir = path.join(tmp, "link");
+  fs.mkdirSync(realDir, { recursive: true });
+  const receiptFile = path.join(realDir, "receipt.json");
+  writeJson(receiptFile, buildForgedCompleteRealMachineReceipt());
+  fs.symlinkSync(realDir, linkDir);
+
+  // Parent directory is a symlink → refuse (shared path-safety invariant).
+  const viaLink = loadAndEvaluateReceiptFile(
+    path.join(linkDir, "receipt.json"),
+  );
+  assert.equal(viaLink.ok, false);
+  assert.equal(viaLink.error_code, "SYMLINK_REFUSED");
+  assert.equal(viaLink.status.full_authorized, false);
+
+  // Leaf symlink also refused.
+  const leafLink = path.join(tmp, "leaf-link.json");
+  fs.symlinkSync(receiptFile, leafLink);
+  const viaLeaf = loadAndEvaluateReceiptFile(leafLink);
+  assert.equal(viaLeaf.ok, false);
+  assert.equal(viaLeaf.error_code, "SYMLINK_REFUSED");
+
+  // Direct real path still loads (but stays PREVIEW without live witness).
+  const direct = loadAndEvaluateReceiptFile(receiptFile);
+  assert.equal(direct.ok, true);
+  assert.equal(direct.status.level, "preview");
+  assert.equal(direct.status.full_authorized, false);
+});
+
+test("P1 regression: T13 macOS live witness still Full; external macOS JSON not Full", () => {
+  const scenarios = MACOS_REQUIRED_SCENARIO_IDS.map((id) => ({
+    scenario_id: id,
+    scenario_hash: scenarioHashOf(id),
+    status: "pass" as const,
+    outcome_summary: "unit pass",
+    duration_ms: 1,
+    required: true,
+  }));
+  const caps = buildMacosCapabilities({
+    platform: "macos",
+    arch: "arm64",
+    probeHost: false,
+  });
+  const active_home_witness_digest =
+    captureActiveCodexHomeWitness(null).digest;
+  const isolation = {
+    active_codex_home_untouched: true as const,
+    disposable_targets_only: true as const,
+    no_sudo: true as const,
+    no_protected_write: true as const,
+    no_active_profile_mutation: true as const,
+    active_home_witness_digest,
+    isolation_digest: isolationDigestOf({
+      scenario_count: scenarios.length,
+      platform: "macos",
+      arch: "arm64",
+      no_sudo: true,
+      disposable_only: true,
+      active_home_witness_digest,
+    }),
+  };
+  const receipt = buildPlatformSupportReceipt({
+    platform: "macos",
+    arch: "arm64",
+    coarse_os_version: "15.0",
+    changeguard_version: "0.1.0",
+    changeguard_commit: "abc1234",
+    codex_version_provenance: {
+      available: false,
+      version: null,
+      provenance: "unavailable",
+    },
+    capabilities: caps,
+    scenarios,
+    isolation,
+    started_at: "2026-07-18T00:00:00.000Z",
+    ended_at: "2026-07-18T00:00:01.000Z",
+  });
+
+  const witness = sealLiveHarnessWitness({
+    scenarios_digest: scenariosDigestOf(receipt.scenarios),
+    isolation_digest: receipt.isolation.isolation_digest,
+    receipt_id: receipt.receipt_id,
+    changeguard_commit: receipt.changeguard_commit,
+    host_fingerprint: hostCoarseFingerprintOf({
+      platform: receipt.platform,
+      arch: receipt.arch,
+      coarse_os_version: receipt.coarse_os_version,
+    }),
+    started_at: receipt.started_at,
+    ended_at: receipt.ended_at,
+    platform: receipt.platform,
+    arch: receipt.arch,
+  });
+  const live = validatePlatformSupportReceipt(receipt, {
+    liveWitness: witness,
+  });
+  assert.equal(live.ok, true, JSON.stringify(live.errors));
+  assert.equal(live.support_level, "full");
+
+  const external = validatePlatformSupportReceipt(
+    JSON.parse(JSON.stringify(receipt)),
+  );
+  assert.notEqual(external.support_level, "full");
+  assert.equal(external.support_level, "preview");
 });

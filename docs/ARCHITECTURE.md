@@ -330,11 +330,11 @@ Crash metadata accepts only allowlisted structured fields (`src/instances/window
 
 | Level | Rule |
 | --- | --- |
-| **PREVIEW** (default) | No receipt, synthetic receipt, cross-platform CI, non-Windows receipt, or any missing/failed critical scenario |
-| **FULL** | Only an actual Windows 11 `host_kind=real_machine` receipt covering **all** critical scenarios W11-S01…W11-S11 with evidence digests and operator attestation |
+| **PREVIEW** (default) | No receipt, synthetic receipt, cross-platform CI, non-Windows receipt, any missing/failed critical scenario, or complete real_machine JSON **without** a matching process-local live harness witness |
+| **FULL** | Only an actual Windows 11 `host_kind=real_machine` receipt covering **all** critical scenarios W11-S01…W11-S11 with evidence digests and operator attestation **and** a process-local live harness witness sealed in the same process (WeakMap; not reconstructible from JSON). External/CLI/MCP/file JSON alone is capped at Preview (`FULL_REQUIRES_LIVE_WITNESS`) |
 | **LIMITED** | Non-Windows Linux/WSL receipts (Ticket 15 narrative); not a Windows Full substitute |
 
-Public seams: `changeguard platform-status [--probe-host=…] [--receipt=<path>] [--plan]`, MCP `changeguard_platform_status` (unified with Ticket 13 capability fields; Windows evaluation under `status`). Schema: `schemas/platform-support-receipt.schema.json` is a oneOf of macOS harness receipts and Windows 11 support receipts. The Windows real-machine runner entry (`src/platform/windows/runner.ts`) validates receipts only — it never executes Codex binaries, never writes WindowsApps/Program Files/registry policy, and never elevates. Synthetic fixtures under `fixtures/windows11/receipts/` can only support PREVIEW.
+Public seams: `changeguard platform-status [--probe-host=…] [--receipt=<path>] [--plan]`, MCP `changeguard_platform_status` (unified with Ticket 13 capability fields; Windows evaluation under `status`). Schema: `schemas/platform-support-receipt.schema.json` is a oneOf of macOS harness receipts and Windows 11 support receipts. The Windows real-machine runner entry (`src/platform/windows/runner.ts`) validates receipts only — it never executes Codex binaries, never writes WindowsApps/Program Files/registry policy, never elevates, and never seals a live witness. Synthetic fixtures under `fixtures/windows11/receipts/` can only support PREVIEW. Runtime receipt parse fail-closes on unknown extra keys (top-level, scenarios, attestation) to match `additionalProperties: false`.
 
 Each public identity includes:
 

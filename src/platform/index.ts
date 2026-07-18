@@ -62,7 +62,7 @@ export {
   type PlatformStatusOptions,
 } from "./status.js";
 
-// Ticket 14 — Windows 11 namespace (synthetic fixtures remain PREVIEW).
+// Ticket 14 — Windows 11 namespace (external JSON alone remains PREVIEW).
 export type {
   WindowsPlatformSupportLevel,
   PlatformReceiptHostKind,
@@ -75,6 +75,9 @@ export type {
   WindowsPlatformSupportStatus,
   RealMachineRunnerPlan,
   LoadReceiptResult,
+  WindowsLiveHarnessAttestation,
+  WindowsLiveHarnessWitness,
+  EvaluatePlatformSupportOptions,
 } from "./windows/index.js";
 export {
   WINDOWS11_CRITICAL_SCENARIOS,
@@ -82,9 +85,15 @@ export {
   isCriticalScenarioId,
   parsePlatformSupportReceipt,
   receiptDigest,
+  criticalScenariosBindingOf,
   ReceiptValidationError,
   evaluatePlatformSupport,
   windows11SupportStatus,
   realMachineRunnerPlan,
   loadAndEvaluateReceiptFile,
+  sealWindowsLiveHarnessWitness,
+  isWindowsLiveHarnessWitness,
+  readWindowsLiveHarnessAttestation,
+  windowsLiveAttestationFromReceipt,
+  windowsLiveWitnessMatchesReceipt,
 } from "./windows/index.js";
