@@ -1,0 +1,12 @@
+{
+  "exception_code": "0xC0000005",
+  "faulting_module": "chrome.dll",
+  "faulting_symbol": "CrBrowserMain",
+  "offset_bucket": "0x2e08f46",
+  "interaction_phase": "neutral_dom_ready",
+  "page_capability": "neutral",
+  "concurrency_context": "single",
+  "gpu_child_exit_code": null,
+  "gpu_relaunch_code": null,
+  "dump_contents_present": false
+}

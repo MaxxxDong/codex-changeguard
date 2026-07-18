@@ -220,12 +220,30 @@ export interface SystemEnumerateCaps {
   pathEntries?: string[];
   /** Explicit Desktop-bundled binary absolute paths to consider. */
   desktopPaths?: string[];
+  /**
+   * Desktop-bundled CLI absolute paths (Ticket 14).
+   * Distinct from Desktop app: surface=cli, separate identity.
+   */
+  desktopCliPaths?: string[];
   /** Registered package-manager install roots (not broad search). */
   packageRoots?: string[];
   /** Windows MSIX / App Execution Alias candidate absolute paths. */
   msixPaths?: string[];
   /** WSL / Linux registered candidate absolute paths. */
   wslPaths?: string[];
+  /**
+   * When platform=windows, also emit registered wslPaths as independent
+   * WSL identities (Ticket 14 host coexistence). Default true on windows.
+   */
+  includeHostWsl?: boolean;
+  /**
+   * Explicit multi-profile specs (Ticket 14). Aliases only on public results.
+   */
+  userProfiles?: Array<{
+    profile_root_alias: string;
+    config_root_alias: string | null;
+    root_abs?: string;
+  }>;
   /** Cap on PATH directories inspected (default 64). */
   maxPathEntries?: number;
   /** Cap on total candidates (default MAX_INSTANCES). */

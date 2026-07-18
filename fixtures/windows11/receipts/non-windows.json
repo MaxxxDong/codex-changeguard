@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "platform": "macos",
+  "os_family": "macOS",
+  "os_version": "15",
+  "os_build": null,
+  "arch": "arm64",
+  "host_kind": "real_machine",
+  "codex_versions": ["0.50.0"],
+  "instances_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "git_sha": null,
+  "collected_at": "2026-07-18T00:00:00.000Z",
+  "critical_scenarios": [
+    { "id": "W11-S01", "passed": true, "evidence_digest": "c111111111111111111111111111111111111111111111111111111111111111", "title": "Multi-identity scan without collapse", "note": null },
+    { "id": "W11-S02", "passed": true, "evidence_digest": "c222222222222222222222222222222222222222222222222222222222222222", "title": "Windows + WSL coexistence", "note": null },
+    { "id": "W11-S03", "passed": true, "evidence_digest": "c333333333333333333333333333333333333333333333333333333333333333", "title": "Crash metadata classification", "note": null },
+    { "id": "W11-S04", "passed": true, "evidence_digest": "c444444444444444444444444444444444444444444444444444444444444444", "title": "Cross-family repair refusal", "note": null },
+    { "id": "W11-S05", "passed": true, "evidence_digest": "c555555555555555555555555555555555555555555555555555555555555555", "title": "User-owned repair verified", "note": null },
+    { "id": "W11-S06", "passed": true, "evidence_digest": "c666666666666666666666666666666666666666666666666666666666666666", "title": "Induced verification auto-rollback", "note": null },
+    { "id": "W11-S07", "passed": true, "evidence_digest": "c777777777777777777777777777777777777777777777777777777777777777", "title": "Explicit rollback", "note": null },
+    { "id": "W11-S08", "passed": true, "evidence_digest": "c888888888888888888888888888888888888888888888888888888888888888", "title": "Managed/admin handoff", "note": null },
+    { "id": "W11-S09", "passed": true, "evidence_digest": "c999999999999999999999999999999999999999999999999999999999999999", "title": "SessionStart Windows hook", "note": null },
+    { "id": "W11-S10", "passed": true, "evidence_digest": "caaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "title": "CLI/MCP equivalence and boundary", "note": null },
+    { "id": "W11-S11", "passed": true, "evidence_digest": "cbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "title": "No forbidden writes", "note": null }
+  ],
+  "operator_attestation": {
+    "non_primary_profile": true,
+    "real_hardware": true
+  }
+}

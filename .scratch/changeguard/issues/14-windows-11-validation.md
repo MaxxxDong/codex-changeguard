@@ -6,9 +6,15 @@
 
 **Status:** ready-for-agent
 
-- [ ] Windows 适配器区分 MSIX、Desktop 内置 CLI、PATH CLI、WSL 和不同用户 Profile。
-- [ ] 只读取允许的崩溃元数据与日志窗口，不修改 WindowsApps、Program Files、注册表策略或系统安全设置。
-- [ ] Browser 崩溃家族在真实 Windows 11 环境保持可区分，错误候选无法进入修复授权。
-- [ ] 用户拥有的缓存或控制文件支持备份、原子变更、验证和实际回滚。
-- [ ] 无管理员权限可完成受支持路径；管理员或受管策略要求转为明确的 IT Handoff。
-- [ ] Full 状态必须由真实机器 Scenario Harness 回执支持；缺少任何关键路径时保持 Preview 并列出缺口。
+Implementation note (framework on clean baseline; **not** `LOCAL_COMPLETE`, **not** Full):
+namespaced Windows adapter + platform-support receipt/validator land with synthetic
+CI coverage. Platform level remains **PREVIEW** until a real Windows 11 host
+receipt covers W11-S01…S11. No fabricated Full claim.
+
+- [x] Windows 适配器区分 MSIX、Desktop 内置 CLI、PATH CLI、WSL 和不同用户 Profile（注入 caps / 合成布局）。
+- [x] 只读取允许的崩溃元数据与日志窗口，不修改 WindowsApps、Program Files、注册表策略或系统安全设置（策略 + dump 拒绝）。
+- [x] Browser 崩溃家族保持可区分，错误候选无法进入修复授权（fixture 回归；真机复验仍缺）。
+- [x] 用户拥有的缓存或控制文件支持备份、原子变更、验证和实际回滚（绑定精确 instance + Ticket 02 engine）。
+- [x] 无管理员权限可完成受支持路径；管理员或受管策略要求转为明确的 IT Handoff。
+- [x] Full 状态必须由真实机器 Scenario Harness 回执支持；缺少任何关键路径时保持 Preview 并列出缺口（校验器强制；本机默认 PREVIEW）。
+- [ ] 真实 Windows 11 主机完整 W11-S01…S11 回执（门禁 Full；本任务无真机，故意不采集）。

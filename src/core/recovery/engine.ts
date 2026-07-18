@@ -9,6 +9,7 @@
  * Apply receives a self-contained authorization token; backup paths come only
  * from registered constants — never from mutable token/session path fields.
  */
+import path from "node:path";
 import { MAX_ARTIFACT_BYTES } from "../limits.js";
 import { measureProtectedProcessAst, sha256Buffer } from "../measure.js";
 import { isPluginCacheTarget } from "../plugin-cache/index.js";
@@ -73,6 +74,7 @@ import type {
   AdminHandoff,
   ApplyOptions,
   BackupReceipt,
+  PreviewOptions,
   RepairCapsule,
   RepairResult,
   VerificationReport,
@@ -82,6 +84,10 @@ import {
   registeredBackupRel,
   RECOVERY_SESSION_REL,
 } from "./types.js";
+import {
+  evaluateWindowsWriteGate,
+  type WindowsWriteGateContext,
+} from "./windows-write-gate.js";
 
 const CAPSULE_ID = "protected-process-shim-experimental-v1";
 /** Upper bound on authorization token string length (base64url envelope). */
@@ -282,14 +288,66 @@ function buildCapsule(input: {
   };
 }
 
+function windowsGateContextFrom(
+  opts: PreviewOptions | ApplyOptions | undefined,
+  writePaths?: WindowsWriteGateContext["writePaths"],
+): WindowsWriteGateContext {
+  return {
+    hostPlatform: opts?.hostPlatform,
+    userOwnedRoots: opts?.userOwnedRoots,
+    managed: opts?.managed,
+    writePaths: writePaths ?? opts?.writePaths,
+  };
+}
+
+function refuseWindowsWriteScope(
+  operation: "preview" | "apply",
+  targetReal: string,
+  opts?: PreviewOptions | ApplyOptions,
+  writePaths?: WindowsWriteGateContext["writePaths"],
+  extra: Partial<RepairResult> = {},
+): RepairResult | null {
+  const gate = evaluateWindowsWriteGate(
+    targetReal,
+    windowsGateContextFrom(opts, writePaths),
+  );
+  if (!gate.blocked) return null;
+  return fail(operation, gate.error_code, gate.error_message, {
+    admin_handoff: gate.admin_handoff,
+    user_resolution: userReceipt(
+      "ADMIN_ACTION_REQUIRED",
+      "Windows target requires administrator/IT action; local mutation refused.",
+    ),
+    upstream_contribution: upstreamReceipt(
+      "NONE",
+      "No local repair; IT handoff only.",
+    ),
+    evidence: [
+      {
+        kind: "windows_write_scope",
+        detail: `scope=${gate.classification.scope} policy_class=${gate.classification.policy_class}`,
+        measured: true,
+      },
+    ],
+    ...extra,
+  });
+}
+
 /**
  * Preview a Repair Capsule for the isolated target.
  * Tries Ticket 08 plugin-cache when inventory is present, then protected-process,
  * then Ticket 07 config set/remove.
  * Completely read-only over the entire target tree — no .changeguard writes.
  * Returns a self-contained authorization token for cross-process apply.
+ *
+ * On trusted Windows hosts, write-scope classification runs first (target dir +
+ * optional artifact paths): admin/forbidden/unknown fail closed with
+ * ADMIN_ACTION_REQUIRED + IT handoff.
  */
-export function previewRepair(targetPath: string): RepairResult {
+export function previewRepair(
+  targetPath: string,
+  options: PreviewOptions = {},
+): RepairResult {
   let targetReal: string;
   try {
     ({ targetReal } = resolveTargetDirectory(targetPath));
@@ -297,6 +355,10 @@ export function previewRepair(targetPath: string): RepairResult {
     if (e instanceof PathSafetyError) return fail("preview", e.code, e.message);
     return fail("preview", "TARGET_ERROR", "Target refused.");
   }
+
+  // Ticket 14: Windows write-scope gate (shared CLI/MCP recovery path).
+  const winRefuse = refuseWindowsWriteScope("preview", targetReal, options);
+  if (winRefuse) return winRefuse;
 
   // Ticket 08 plugin-cache pack takes precedence when inventory is present.
   if (isPluginCacheTarget(targetReal)) {
@@ -1194,6 +1256,9 @@ function runVerification(
  * Apply one experimental repair after exact scope-consistent authorization.
  * On verification failure, automatically restores original bytes.
  * No state write occurs until authorization and live preconditions pass.
+ *
+ * On trusted Windows hosts, write-scope classification runs on the target
+ * directory and the live artifact write path before any mutation.
  */
 export function applyRepair(targetPath: string, options: ApplyOptions): RepairResult {
   const auth =
@@ -1209,6 +1274,10 @@ export function applyRepair(targetPath: string, options: ApplyOptions): RepairRe
     if (e instanceof PathSafetyError) return fail("apply", e.code, e.message);
     return fail("apply", "TARGET_ERROR", "Target refused.");
   }
+
+  // Ticket 14: Windows write-scope gate before any mutation (target dir).
+  const winRefuseEarly = refuseWindowsWriteScope("apply", targetReal, options);
+  if (winRefuseEarly) return winRefuseEarly;
 
   // Decode self-contained token (no target-local preview file).
   let capsule: RepairCapsule;
@@ -1228,6 +1297,21 @@ export function applyRepair(targetPath: string, options: ApplyOptions): RepairRe
 
   // Ticket 08 plugin-cache apply path.
   if (isPluginCacheCapsuleId(capsule.capsule_id)) {
+    // Classify capsule artifact write path when resolvable.
+    const cacheRel = pluginCacheArtifactRel();
+    const winRefuseCache = refuseWindowsWriteScope(
+      "apply",
+      targetReal,
+      options,
+      [
+        {
+          absPath: path.join(targetReal, cacheRel),
+          alias: capsule.target_path_alias,
+        },
+      ],
+      { capsule },
+    );
+    if (winRefuseCache) return winRefuseCache;
     return applyPluginCacheAuthorized(targetReal, capsule);
   }
 
@@ -1237,6 +1321,21 @@ export function applyRepair(targetPath: string, options: ApplyOptions): RepairRe
     return fail("apply", liveResult.code, liveResult.message, { capsule });
   }
   const live = liveResult.live;
+
+  // Classify the actual artifact write path under the target.
+  const winRefuseArtifact = refuseWindowsWriteScope(
+    "apply",
+    targetReal,
+    options,
+    [
+      {
+        absPath: path.join(targetReal, live.target_rel),
+        alias: capsule.target_path_alias,
+      },
+    ],
+    { capsule },
+  );
+  if (winRefuseArtifact) return winRefuseArtifact;
 
   const evidence: MeasuredEvidence[] = [
     {

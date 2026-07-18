@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "platform": "windows",
+  "os_family": "Windows 11",
+  "os_version": "11",
+  "os_build": "22631",
+  "arch": "x64",
+  "host_kind": "synthetic",
+  "codex_versions": ["0.50.0"],
+  "instances_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "git_sha": null,
+  "collected_at": "2026-07-18T00:00:00.000Z",
+  "critical_scenarios": [
+    {
+      "id": "W11-S01",
+      "title": "Multi-identity scan without collapse",
+      "passed": true,
+      "evidence_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+      "note": null
+    },
+    {
+      "id": "W11-S02",
+      "title": "Windows + WSL coexistence",
+      "passed": true,
+      "evidence_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+      "note": null
+    }
+  ],
+  "operator_attestation": null
+}

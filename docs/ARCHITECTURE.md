@@ -309,6 +309,33 @@ Production system defaults inspect only known Codex locations and PATH entries u
 
 Platform / env / filesystem capability injection supports deterministic macOS / Windows / Linux / WSL tests.
 
+### 9.1.1 Windows 11 adapter (Ticket 14)
+
+On `platform=windows`, enumeration delegates to the namespaced Windows adapter (`src/instances/windows/`). Injected env/fs capabilities distinguish **without collapsing identities**:
+
+| Kind | `install_source` | `surface` | Notes |
+| --- | --- | --- | --- |
+| MSIX / App Execution Alias | `windows_msix` | `desktop` | User-local WindowsApps **alias** only; no Program Files\WindowsApps package-store crawl or write |
+| Desktop app | `desktop_bundled` | `desktop` | Registered `%LOCALAPPDATA%\Programs\Codex\…` layouts |
+| Desktop-bundled CLI | `desktop_bundled` | `cli` | Distinct path + `DESKTOP_CLI_PROFILE`; not the same row as the app |
+| PATH CLI | `path` | `cli` | Hard-capped PATH dirs; adjacent metadata only |
+| WSL CLI on Windows host | `wsl` | `cli` | `platform=wsl` with independent profile aliases; coexistence does not merge with native rows |
+| Additional user profiles | path/config markers | `cli` | Explicit `userProfiles` caps; aliases only on public results |
+
+Repair binding still requires exactly one `instance_id` (+ optional fingerprint). User-owned cache/control under injected user roots may proceed through the Ticket 02 engine (backup → atomic apply → verify → rollback). MSIX package, Program Files, signed binaries, and managed policy classify as `ADMIN_ACTION_REQUIRED` with IT handoff facts — never chmod, UAC, or registry-policy guidance.
+
+Crash metadata accepts only allowlisted structured fields (`src/instances/windows/crash-metadata.ts`); dump bodies are refused. Browser crash-family classification remains Ticket 09.
+
+### 9.1.2 Platform support status (Ticket 14)
+
+| Level | Rule |
+| --- | --- |
+| **PREVIEW** (default) | No receipt, synthetic receipt, cross-platform CI, non-Windows receipt, or any missing/failed critical scenario |
+| **FULL** | Only an actual Windows 11 `host_kind=real_machine` receipt covering **all** critical scenarios W11-S01…W11-S11 with evidence digests and operator attestation |
+| **LIMITED** | Non-Windows Linux/WSL receipts (Ticket 15 narrative); not a Windows Full substitute |
+
+Public seams: `changeguard platform-status [--receipt=<path>] [--plan]`, MCP `changeguard_platform_status`. Schema: `schemas/platform-support-receipt.schema.json`. The real-machine runner entry (`src/platform/runner.ts`) validates receipts only — it never executes Codex binaries, never writes WindowsApps/Program Files/registry policy, and never elevates. Synthetic fixtures under `fixtures/windows11/receipts/` can only support PREVIEW.
+
 Each public identity includes:
 
 - stable `instance_id` and `path_hash` / `path_alias` (raw user paths are never exported)

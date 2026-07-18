@@ -67,6 +67,15 @@ export function runCliDiagnose(target: string): {
   };
 }
 
+export interface CliHarnessOptions {
+  /**
+   * Extra env for the CLI child process. Tests may inject trusted host
+   * platform via CHANGEGUARD_ALLOW_HOST_PLATFORM_INJECTION=1 +
+   * CHANGEGUARD_TRUSTED_HOST_PLATFORM (not product CLI flags / JSON).
+   */
+  env?: NodeJS.ProcessEnv;
+}
+
 /** Invoke Rescue CLI and parse JSON stdout (shared by diagnose + recovery). */
 export function runCliJson(
   args: string[],
@@ -96,12 +105,27 @@ export function runCliJson(
   };
 }
 
-export function runCliRepairPreview(target: string) {
-  return runCliJson(["repair-preview", target]);
+/** Dual-key env that injects a trusted Windows host into CLI/MCP children. */
+export function windowsHostTestEnv(): NodeJS.ProcessEnv {
+  return {
+    CHANGEGUARD_ALLOW_HOST_PLATFORM_INJECTION: "1",
+    CHANGEGUARD_TRUSTED_HOST_PLATFORM: "win32",
+  };
 }
 
-export function runCliRepairApply(target: string, authorization: string) {
-  return runCliJson(["repair-apply", target, authorization]);
+export function runCliRepairPreview(
+  target: string,
+  opts: CliHarnessOptions = {},
+) {
+  return runCliJson(["repair-preview", target], opts);
+}
+
+export function runCliRepairApply(
+  target: string,
+  authorization: string,
+  opts: CliHarnessOptions = {},
+) {
+  return runCliJson(["repair-apply", target, authorization], opts);
 }
 
 export function runCliVerify(target: string) {

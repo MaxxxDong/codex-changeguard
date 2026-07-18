@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "required_generation": 5,
+  "required_version": "1.2.0",
+  "components": [
+    {
+      "alias": "PLUGIN_CACHE_ENTRY",
+      "expected_sha256": "e9b37c7d5dd50227412c634236cbcc448633de592ebbf79f545193c877e50adb",
+      "version": "1.2.0",
+      "provenance": "bundled"
+    }
+  ],
+  "rebuild_source": {
+    "alias": "TRUSTED_PLUGIN_ENTRY",
+    "verified": true,
+    "expected_sha256": "e9b37c7d5dd50227412c634236cbcc448633de592ebbf79f545193c877e50adb",
+    "version": "1.2.0"
+  }
+}

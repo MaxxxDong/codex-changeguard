@@ -9,6 +9,11 @@ import { fileURLToPath } from "node:url";
 export interface McpClientOptions {
   serverEntry?: string;
   timeoutMs?: number;
+  /**
+   * Extra env for the MCP server child. Tests may inject trusted host
+   * platform (dual-key harness env), never product tool JSON.
+   */
+  env?: NodeJS.ProcessEnv;
 }
 
 export class McpTestClient {
@@ -24,6 +29,7 @@ export class McpTestClient {
   >();
   private readonly timeoutMs: number;
   private readonly serverEntry: string;
+  private readonly extraEnv: NodeJS.ProcessEnv;
   /** Accumulates partial stdout chunks until a full NDJSON line is available. */
   private partialStdout = "";
   private initialized = false;
@@ -33,13 +39,14 @@ export class McpTestClient {
     const here = path.dirname(fileURLToPath(import.meta.url));
     this.serverEntry =
       opts.serverEntry ?? path.join(here, "server.js");
+    this.extraEnv = opts.env ?? {};
   }
 
   start(): void {
     if (this.child) return;
     this.child = spawn(process.execPath, [this.serverEntry], {
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, NO_COLOR: "1" },
+      env: { ...process.env, NO_COLOR: "1", ...this.extraEnv },
     });
     // Handle partial stdout chunks manually so incomplete frames wait for more data.
     this.child.stdout.setEncoding("utf8");

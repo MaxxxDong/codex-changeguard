@@ -118,6 +118,22 @@ Coverage in `tests/ticket13-macos-support.test.ts` + `scripts/run-macos-harness.
 - tokens, cookies, account identifiers, passwords, one-time codes, and full browser storage never enter the fingerprint or disclosure manifest
 - the resolver distinguishes service incident, network/security control, authentication-method mismatch, local session state, and unresolved account-side failure
 
+## Ticket 14 Scenario Harness (Windows 11 adapter + platform status)
+
+Black-box + unit coverage in `tests/ticket14-windows11.test.ts`
+(fixtures under `fixtures/windows11/`; host may be macOS CI with injected caps):
+
+- Windows adapter distinguishes MSIX, Desktop app, Desktop-bundled CLI, PATH CLI, WSL, and multi-profile rows without collapsing `instance_id`s
+- system adapter delegates `platform=windows` to the namespaced adapter; never executes candidates
+- crash metadata window accepts allowlisted fields only; dump bodies refused; Ticket 09 families stay distinct; wrong candidates cannot reach repair authorization
+- user-owned repair binds exact instance fingerprint and reuses Ticket 02 backup/atomic apply/verify/rollback on isolated targets
+- managed / MSIX package / Program Files → `ADMIN_ACTION_REQUIRED` + IT handoff (no chmod/runas/elevation language)
+- platform status default PREVIEW with explicit critical-scenario gaps
+- synthetic, forged-full, non-Windows, and missing-critical receipts cannot authorize FULL
+- real-machine runner plan lists W11-S01…S11 and forbidden actions; validate-receipt-only mode
+- CLI `platform-status` / MCP `changeguard_platform_status` PREVIEW equivalence
+- no LOCAL_COMPLETE / Full product claim without a real Windows 11 host receipt
+
 ## Kill criteria
 
 Stop or downscope the current implementation if any condition remains after the first implementation day:

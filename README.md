@@ -145,7 +145,28 @@ Compatible fixtures rank the correct `openai/codex#…` Issue in the Top 3;
 title similarity alone cannot create high confidence. Without a verified fix,
 diagnosis returns `UPSTREAM_BLOCKED` (or `INCONCLUSIVE`) and never authorizes a
 symptom-level Repair Capsule. Active crash probes require disposable isolation.
-Windows real-machine Full support remains Ticket 14.
+
+### Windows 11 adapter + platform status (Ticket 14) — PREVIEW
+
+Namespaced Windows adapter (`src/instances/windows/`) distinguishes MSIX, Desktop
+app, Desktop-bundled CLI, PATH CLI, WSL, and multi-profile identities under
+injected env/fs capabilities. User-owned cache/control repair binds an exact
+instance and reuses the Ticket 02 engine; managed/admin/MSIX package targets
+return `ADMIN_ACTION_REQUIRED` with IT handoff only.
+
+Platform support is evaluated from auditable receipts
+(`schemas/platform-support-receipt.schema.json`):
+
+```bash
+node bin/changeguard.js platform-status
+node bin/changeguard.js platform-status --plan
+node bin/changeguard.js platform-status --receipt=fixtures/windows11/receipts/synthetic-preview.json
+```
+
+**Status remains PREVIEW** until a real Windows 11 host receipt covers every
+critical scenario (W11-S01…S11). Synthetic / cross-platform / forged receipts
+never authorize FULL. This ticket does **not** claim `LOCAL_COMPLETE` or
+real-machine Full support.
 
 ### Upstream draft routing (Ticket 10) — preview only
 
