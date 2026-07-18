@@ -888,11 +888,105 @@ test("Ticket13: multi-instance fixture inventory scans without raw paths", () =>
 
 // ---- Real-machine harness (darwin only) ----
 
+/** Isolation gaps the harness may emit when active-home proof is unavailable. */
+const ACTIVE_HOME_ISOLATION_GAPS = new Set([
+  "isolation_active_codex_unproven_or_changed",
+  "isolation_active_codex_unprovable",
+]);
+
+/**
+ * Assert public harness receipt/summary against the truthful active-home contract:
+ * scenarios + leak-free validation always; Full only when isolation is proved;
+ * otherwise Preview with the exact isolation gap and nonzero exit (never forged Full).
+ */
+function assertTruthfulActiveHomeHarnessContract(
+  result: {
+    receipt: PlatformSupportReceipt;
+    validation_ok: boolean;
+    exit_code: number;
+    receipt_abs: string;
+  },
+  summary: Record<string, unknown>,
+): void {
+  assert.equal(result.validation_ok, true, JSON.stringify(summary));
+  assert.ok(fs.existsSync(result.receipt_abs));
+  const disk = JSON.parse(
+    fs.readFileSync(result.receipt_abs, "utf8"),
+  ) as PlatformSupportReceipt;
+  assert.equal(disk.platform, "macos");
+  assert.equal(disk.network_used, false);
+  assert.equal(disk.assertions.no_sudo, true);
+  assert.equal(disk.assertions.no_active_profile, true);
+  assert.equal(disk.assertions.no_protected_write, true);
+  assert.equal(disk.isolation.no_sudo, true);
+  assert.equal(disk.isolation.disposable_targets_only, true);
+  assert.equal(disk.isolation.no_protected_write, true);
+  assert.equal(disk.scenarios.length, MACOS_REQUIRED_SCENARIO_IDS.length);
+  for (const id of MACOS_REQUIRED_SCENARIO_IDS) {
+    const s = disk.scenarios.find((x) => x.scenario_id === id);
+    assert.ok(s, `missing scenario ${id}`);
+    assert.equal(s!.status, "pass", `${id}: ${s!.outcome_summary}`);
+    assert.match(s!.scenario_hash, /^[0-9a-f]{64}$/);
+    assert.equal(s!.scenario_hash, scenarioHashOf(id));
+  }
+  assert.equal(findReceiptLeaks(JSON.stringify(disk)).length, 0);
+  assertNoLeakText(JSON.stringify(summary));
+  assert.match(disk.isolation.isolation_digest, /^[0-9a-f]{64}$/);
+  assert.match(disk.isolation.active_home_witness_digest, /^[0-9a-f]{64}$/);
+  assert.equal(summary.support_level, disk.support_level);
+  assert.equal(summary.validation_ok, true);
+
+  const gaps = disk.uncovered_gaps;
+  const isolationGaps = gaps.filter((g) => ACTIVE_HOME_ISOLATION_GAPS.has(g));
+
+  if (disk.support_level === "full") {
+    // Active-home isolation remained provable for this run.
+    assert.equal(gaps.length, 0, JSON.stringify(gaps));
+    assert.equal(result.exit_code, 0);
+    assert.equal(summary.ok, true);
+    assert.equal(disk.isolation.active_codex_home_untouched, true);
+    assert.equal(disk.isolation.no_active_profile_mutation, true);
+    assert.deepEqual(summary.uncovered_gaps, []);
+  } else {
+    // Concurrent/unprovable active-home evidence → truthful Preview, never Full.
+    assert.equal(
+      disk.support_level,
+      "preview",
+      `unexpected support_level with passing scenarios: ${disk.support_level}`,
+    );
+    assert.notEqual(result.exit_code, 0);
+    assert.equal(summary.ok, false);
+    assert.ok(
+      isolationGaps.length >= 1,
+      `Preview must include isolation gap; gaps=${JSON.stringify(gaps)}`,
+    );
+    for (const g of gaps) {
+      assert.ok(
+        ACTIVE_HOME_ISOLATION_GAPS.has(g),
+        `unexpected non-isolation gap when scenarios pass: ${g}`,
+      );
+    }
+    assert.equal(disk.isolation.active_codex_home_untouched, false);
+    assert.equal(disk.isolation.no_active_profile_mutation, false);
+    assert.notEqual(disk.support_level, "full");
+  }
+
+  // Reloaded disk JSON without live witness must not validate as Full.
+  const reval = validatePlatformSupportReceipt(disk);
+  assert.notEqual(reval.support_level, "full");
+  assert.ok(
+    reval.errors.includes("full_requires_live_attestation") ||
+      reval.support_level === "preview",
+  );
+}
+
 test(
   "Ticket13: real-machine macOS Scenario Harness produces truthful receipt",
   { skip: !IS_DARWIN ? "requires darwin host" : false },
   async () => {
     // Dynamic import after build — harness uses child_process.
+    // Real host ~/.codex may churn (mtime/ctime) independently of the harness;
+    // the public contract is conditional Full vs isolation Preview, not a forced Full.
     const { runMacosScenarioHarness, publicHarnessSummary } = await import(
       "../src/harness/macos-scenario.js"
     );
@@ -903,39 +997,7 @@ test(
       requirePackage: true,
     });
     const summary = publicHarnessSummary(result);
-    assert.equal(result.validation_ok, true, JSON.stringify(summary));
-    assert.ok(fs.existsSync(result.receipt_abs));
-    const disk = JSON.parse(
-      fs.readFileSync(result.receipt_abs, "utf8"),
-    ) as PlatformSupportReceipt;
-    assert.equal(disk.platform, "macos");
-    assert.equal(disk.network_used, false);
-    assert.equal(disk.assertions.no_sudo, true);
-    assert.equal(disk.assertions.no_active_profile, true);
-    assert.equal(disk.assertions.no_protected_write, true);
-    assert.equal(disk.isolation.no_sudo, true);
-    assert.equal(disk.scenarios.length, MACOS_REQUIRED_SCENARIO_IDS.length);
-    for (const id of MACOS_REQUIRED_SCENARIO_IDS) {
-      const s = disk.scenarios.find((x) => x.scenario_id === id);
-      assert.ok(s, `missing scenario ${id}`);
-      assert.equal(s!.status, "pass", `${id}: ${s!.outcome_summary}`);
-      assert.match(s!.scenario_hash, /^[0-9a-f]{64}$/);
-      assert.equal(s!.scenario_hash, scenarioHashOf(id));
-    }
-    assert.equal(disk.support_level, "full");
-    assert.equal(disk.uncovered_gaps.length, 0);
-    assert.equal(findReceiptLeaks(JSON.stringify(disk)).length, 0);
-    assert.equal(result.exit_code, 0);
-    // Summary must not embed username/temp paths.
-    assertNoLeakText(JSON.stringify(summary));
-    // Active profile never used as target — isolation digest present.
-    assert.match(disk.isolation.isolation_digest, /^[0-9a-f]{64}$/);
-    assert.match(disk.isolation.active_home_witness_digest, /^[0-9a-f]{64}$/);
-
-    // Reloaded disk JSON without live witness must not validate as Full.
-    const reval = validatePlatformSupportReceipt(disk);
-    assert.notEqual(reval.support_level, "full");
-    assert.ok(reval.errors.includes("full_requires_live_attestation"));
+    assertTruthfulActiveHomeHarnessContract(result, summary);
   },
 );
 
@@ -1060,40 +1122,118 @@ test(
   "Ticket13: ordinary directory active ~/.codex still allows harness Full",
   { skip: !IS_DARWIN ? "requires darwin host" : false },
   async () => {
-    // On a normal (non-symlink) active home, the real-machine harness still
-    // seals Full when all required scenarios pass and isolation is proved.
-    const home = process.env.HOME;
-    if (home) {
-      const active = path.join(home, ".codex");
-      let isSymlink = false;
-      try {
-        isSymlink = fs.lstatSync(active).isSymbolicLink();
-      } catch {
-        isSymlink = false;
-      }
-      if (isSymlink) {
-        // Host uses symlink active home — Full is correctly unreachable.
-        const w = captureActiveCodexHomeWitness(home);
-        assert.equal(w.isolation_provable, false);
-        return;
-      }
-    }
-    const { runMacosScenarioHarness } = await import(
+    // Deterministic Full path: stable temporary HOME/.codex (ordinary directory).
+    // Never target or mutate the real user profile; HOME is restored in finally.
+    const { runMacosScenarioHarness, publicHarnessSummary } = await import(
       "../src/harness/macos-scenario.js"
     );
-    const outDir = path.join(makeTempDir("cg-t13-full-dir-"), "out");
+    const tmpRoot = makeTempDir("cg-t13-full-dir-");
+    const stableHome = path.join(tmpRoot, "home");
+    const stableCodex = path.join(stableHome, ".codex");
+    fs.mkdirSync(stableCodex, { recursive: true });
+    fs.writeFileSync(path.join(stableCodex, "config.toml"), "x=1\n", "utf8");
+    // Precondition: ordinary directory witness is isolation-provable and stable.
+    const w0 = captureActiveCodexHomeWitness(stableHome);
+    assert.equal(w0.present, true);
+    assert.equal(w0.isolation_provable, true);
+    assert.equal(captureActiveCodexHomeWitness(stableHome).digest, w0.digest);
+
+    const outDir = path.join(tmpRoot, "out");
     fs.mkdirSync(outDir, { recursive: true });
-    const result = runMacosScenarioHarness({
-      outDir,
-      requirePackage: true,
-    });
-    assert.equal(result.validation_ok, true);
-    assert.equal(result.exit_code, 0);
+    const prevHome = process.env.HOME;
+    let result: Awaited<
+      ReturnType<
+        typeof import("../src/harness/macos-scenario.js").runMacosScenarioHarness
+      >
+    >;
+    try {
+      process.env.HOME = stableHome;
+      result = runMacosScenarioHarness({
+        outDir,
+        requirePackage: true,
+      });
+    } finally {
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+    }
+
+    const summary = publicHarnessSummary(result);
+    assert.equal(result.validation_ok, true, JSON.stringify(summary));
+    assert.equal(result.exit_code, 0, JSON.stringify(summary));
     assert.equal(result.receipt.support_level, "full");
+    assert.equal(result.receipt.uncovered_gaps.length, 0);
     assert.equal(result.receipt.isolation.active_codex_home_untouched, true);
     assert.equal(result.receipt.isolation.no_active_profile_mutation, true);
     assert.equal(result.receipt.isolation.disposable_targets_only, true);
     assert.equal(result.receipt.isolation.no_sudo, true);
     assert.equal(result.receipt.isolation.no_protected_write, true);
+    assert.equal(summary.support_level, "full");
+    assert.equal(summary.ok, true);
+    assert.equal(findReceiptLeaks(JSON.stringify(result.receipt)).length, 0);
+    assertNoLeakText(JSON.stringify(summary));
+    // Stable temp profile must remain an ordinary directory after the run.
+    assert.equal(fs.lstatSync(stableCodex).isSymbolicLink(), false);
+    assert.equal(fs.lstatSync(stableCodex).isDirectory(), true);
+  },
+);
+
+test(
+  "Ticket13: symlink active ~/.codex harness seals truthful Preview not Full",
+  { skip: !IS_DARWIN ? "requires darwin host" : false },
+  async () => {
+    // Deterministic Preview path via temporary HOME with symlink ~/.codex.
+    // Real user profile is never used as the active-home target.
+    const { runMacosScenarioHarness, publicHarnessSummary } = await import(
+      "../src/harness/macos-scenario.js"
+    );
+    const tmpRoot = makeTempDir("cg-t13-sym-home-");
+    const home = path.join(tmpRoot, "home");
+    const realTarget = path.join(tmpRoot, "real-codex");
+    fs.mkdirSync(home, { recursive: true });
+    fs.mkdirSync(realTarget, { recursive: true });
+    fs.writeFileSync(path.join(realTarget, "config.toml"), "x=1\n", "utf8");
+    fs.symlinkSync(realTarget, path.join(home, ".codex"));
+
+    const outDir = path.join(tmpRoot, "out");
+    fs.mkdirSync(outDir, { recursive: true });
+    const prevHome = process.env.HOME;
+    let result: Awaited<
+      ReturnType<
+        typeof import("../src/harness/macos-scenario.js").runMacosScenarioHarness
+      >
+    >;
+    try {
+      process.env.HOME = home;
+      result = runMacosScenarioHarness({
+        outDir,
+        requirePackage: true,
+      });
+    } finally {
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+    }
+
+    const summary = publicHarnessSummary(result);
+    assert.equal(result.validation_ok, true, JSON.stringify(summary));
+    assert.notEqual(result.exit_code, 0);
+    assert.equal(result.receipt.support_level, "preview");
+    assert.ok(
+      result.receipt.uncovered_gaps.includes(
+        "isolation_active_codex_unprovable",
+      ),
+      JSON.stringify(result.receipt.uncovered_gaps),
+    );
+    assert.equal(result.receipt.isolation.active_codex_home_untouched, false);
+    assert.equal(result.receipt.isolation.no_active_profile_mutation, false);
+    assert.equal(summary.support_level, "preview");
+    assert.equal(summary.ok, false);
+    assert.equal(findReceiptLeaks(JSON.stringify(result.receipt)).length, 0);
+    assertNoLeakText(JSON.stringify(summary));
+    // All required scenarios still pass under unprovable isolation.
+    for (const id of MACOS_REQUIRED_SCENARIO_IDS) {
+      const s = result.receipt.scenarios.find((x) => x.scenario_id === id);
+      assert.ok(s, `missing scenario ${id}`);
+      assert.equal(s!.status, "pass", `${id}: ${s!.outcome_summary}`);
+    }
   },
 );
