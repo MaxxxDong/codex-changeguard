@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "name": "repro-log.txt",
+      "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "byte_length": 128,
+      "media_type": "text/plain",
+      "secrets_redacted": true,
+      "paths_redacted": true,
+      "session_excluded": true
+    }
+  ]
+}

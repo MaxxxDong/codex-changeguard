@@ -89,6 +89,8 @@ Upstream Submission Capsules are **preview artifacts**, not submissions.
 - Optional form-definition refresh uses the same official host/repo allowlist (`github.com` / `api.github.com` / `raw.githubusercontent.com` + `openai/codex` only) and requires disclosure approved **plus** an injected transport. Production CLI/MCP never inject transport. Failed injected refresh falls back to bundled immutable snapshot labeling (never mislabeled live/transport_refresh).
 - `codex doctor --json` is orchestrator-supplied only; never collected by executing codex or shell. Inclusion manifest lists sanitized fields before any later Ticket 11 export.
 - Ticket 11 confirmation is mandatory before any external write; Ticket 10 never emits `SUBMITTED` / `POSTED`.
+- Ticket 11 never requests, stores, or displays access tokens, cookies, or session material. Auth capability is only `gh_authenticated` or `visible_browser_authenticated` (host-reported). Production seams inject no real adapter (`ADAPTER_UNAVAILABLE`); cancellation/auth-unavailable remain pure draft and never simulate success.
+- Ticket 11 action confirmations bind capsule integrity, privacy result, canonical target, body/attachment manifests, incident digest, evidence delta hash, and a one-shot nonce/expiry. Blocked/gate-failed Ticket 10 capsules cannot become actions. Attachments require secrets/paths redacted and session excluded.
 
 ## Probe safety
 

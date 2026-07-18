@@ -16,9 +16,10 @@ ChangeGuard is not a generic changelog summarizer, Issue chatbot, environment do
 - Tickets 01–04: `LOCAL_COMPLETE` on integrated commit `c20ddc5` (Ticket 01 first closed on `d7d917b`; Wave 2 tip `c20ddc5`)
 - Tickets 05–09: `LOCAL_COMPLETE` on integrated HEAD `5aa12c6` (Wave 3 tip; Root full regression 212/212; final review `changeguard-wave3-final-review-r2` → `NO_P0_P1`)
 - Ticket 10: `LOCAL_COMPLETE` on integrated HEAD `3265acd` (commits `0829936` → `7ef87e6` → `26d58b4` → `3265acd`; Root full regression 260/260; final static review `changeguard-ticket10-regression-review-r7` → `NO_P0_P1`, empty patch)
-- Broader product: still `IN_PROGRESS` (Tickets 11–17 not complete)
+- Broader product: still `IN_PROGRESS` (Tickets 12–17 not complete; Ticket 11 implemented surfaces are local-only with no real adapter by default)
 - Residual platform claims: real-machine Full/Preview/Limited matrix remains with Tickets 13–15; Ticket 06 CLI/Desktop **version** rollback stays `preview_only` / Desktop may be `limited`
-- Ticket 10 residual: upstream capsules stay `preview_only` / `local_only` / `external_write: false`; immutable form snapshot date/commit/blob provenance recorded in [HANDOFF.md](HANDOFF.md); Ticket 11 still required for confirmed external writes
+- Ticket 10 residual: upstream capsules stay `preview_only` / `local_only` / `external_write: false`; immutable form snapshot date/commit/blob provenance recorded in [HANDOFF.md](HANDOFF.md)
+- Ticket 11 surfaces: separate `upstream-action-preview` / `upstream-action-confirm` (CLI + MCP) with capability-injected adapter; production default is `ADAPTER_UNAVAILABLE` and never simulates success or real GitHub/browser writes. Not marked `LOCAL_COMPLETE` here; no external submission claimed.
 - Registration and external submission: `NOT_STARTED`; Gate C not authorized; no public publication, upload, or real external GitHub writes
 - Exact local-verification evidence: [HANDOFF.md](HANDOFF.md)
 
@@ -33,7 +34,7 @@ ChangeGuard is not a generic changelog summarizer, Issue chatbot, environment do
 - [Schemas](schemas/)
 - [Synthetic fixtures](fixtures/)
 
-## Public surfaces (Tickets 01–10)
+## Public surfaces (Tickets 01–11)
 
 Rescue CLI and MCP share the same cores. A clean source checkout is not runnable
 until dependencies are installed and the project is built (or packaged):
@@ -155,10 +156,31 @@ via an inclusion manifest — ChangeGuard never executes codex or opens producti
 network sockets. Capsules are `preview_only` / `local_only` with `external_write: false`
 and require separate Ticket 11 confirmation before any real write.
 
+### Confirmed upstream actions (Ticket 11) — adapter-gated
+
+`changeguard upstream-action-preview` / `changeguard_upstream_action_preview` binds one
+action (`create_issue`, `comment_with_delta`, `react_upvote`, `subscribe`,
+`attachment_upload`) to a valid Ticket 10 `PREVIEW_READY` capsule (integrity,
+privacy, recommendation, content hash). Blocked/gate-failed capsules never become
+actions. Preview emits a one-shot confirmation (`ua1.…`) binding canonical target,
+body/attachment manifest, incident fingerprint digest, evidence delta hash,
+capsule content hash, privacy result, nonce, and expiry.
+
+`changeguard upstream-action-confirm` / `changeguard_upstream_action_confirm` accepts
+`decision=confirm|cancel`. Cancel remains pure draft. Production injects no real
+`gh`/browser adapter (auth capability `unavailable`); confirm returns
+`ADAPTER_UNAVAILABLE` and never simulates success. Host integration may inject an
+adapter that reports only `gh_authenticated` or `visible_browser_authenticated`
+(never request/store/display tokens, cookies, or sessions). Idempotency keys prevent
+duplicate same-diagnosis actions; ambiguous timeout queries remote by the same key
+and stops with `UNCERTAIN_NO_RETRY` rather than blind retry. Success yields a minimal
+Upstream Contribution Receipt (action, canonical URL, timestamp, receipt/idempotency
+hashes only).
+
 ## Plugin surfaces
 
-- Skill commands for update scanning, incident diagnosis, page analysis, Impact Card, and recovery preview
-- A local-facts MCP server with explicit tool approval (`changeguard_diagnose`, `changeguard_impact`, `changeguard_analyze_page`, `changeguard_upstream_preview`, `changeguard_lifecycle`, repair/scan tools)
+- Skill commands for update scanning, incident diagnosis, page analysis, Impact Card, recovery preview, and upstream action preview/confirm
+- A local-facts MCP server with explicit tool approval (`changeguard_diagnose`, `changeguard_impact`, `changeguard_analyze_page`, `changeguard_upstream_preview`, `changeguard_upstream_action_preview`, `changeguard_upstream_action_confirm`, `changeguard_lifecycle`, repair/scan tools)
 - An optional trusted `SessionStart` hook that notices version-fingerprint changes (Ticket 03)
 - A manual scan path that always works when hooks are disabled or untrusted
 

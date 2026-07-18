@@ -880,6 +880,131 @@ if (
   fail("Packaged PREVIEW_BLOCKED capsule must not export raw injection text.");
 }
 
+// Ticket 11: packaged upstream-action-preview / confirm (no real adapter).
+const capsulePath = path.join(outside, "ticket11-capsule.json");
+fs.writeFileSync(
+  capsulePath,
+  JSON.stringify(readyUpResult.capsule, null, 2),
+  "utf8",
+);
+const actionPreview = spawnSync(
+  process.execPath,
+  [
+    path.join(packageDir, "bin/changeguard.js"),
+    "upstream-action-preview",
+    fixtureDest,
+    `--capsule=${capsulePath}`,
+    "--action=create_issue",
+  ],
+  {
+    cwd: outside,
+    encoding: "utf8",
+    env: { ...process.env, NO_COLOR: "1" },
+  },
+);
+if (actionPreview.status !== 0) {
+  fail(
+    `Packaged upstream-action-preview must exit 0 for PREVIEW_READY capsule; status=${actionPreview.status}\n${actionPreview.stdout}\n${actionPreview.stderr}`,
+  );
+}
+let actionPreviewResult;
+try {
+  actionPreviewResult = JSON.parse(actionPreview.stdout);
+} catch {
+  fail("Packaged upstream-action-preview stdout is not JSON.");
+}
+if (
+  !actionPreviewResult.ok ||
+  actionPreviewResult.status !== "PREVIEW_READY" ||
+  actionPreviewResult.external_write !== false ||
+  actionPreviewResult.network_used !== false ||
+  actionPreviewResult.auth_capability?.kind !== "unavailable" ||
+  typeof actionPreviewResult.confirmation_token !== "string" ||
+  !actionPreviewResult.confirmation_token.startsWith("ua1.")
+) {
+  fail(
+    `Packaged upstream-action-preview contract failed: ${JSON.stringify(actionPreviewResult)}`,
+  );
+}
+
+const actionConfirm = spawnSync(
+  process.execPath,
+  [
+    path.join(packageDir, "bin/changeguard.js"),
+    "upstream-action-confirm",
+    fixtureDest,
+    `--confirmation=${actionPreviewResult.confirmation_token}`,
+    "--decision=confirm",
+  ],
+  {
+    cwd: outside,
+    encoding: "utf8",
+    env: { ...process.env, NO_COLOR: "1" },
+  },
+);
+if (actionConfirm.status === 0) {
+  fail(
+    "Packaged upstream-action-confirm without real adapter must exit nonzero (never simulate success).",
+  );
+}
+let actionConfirmResult;
+try {
+  actionConfirmResult = JSON.parse(actionConfirm.stdout);
+} catch {
+  fail("Packaged upstream-action-confirm stdout is not JSON.");
+}
+if (
+  actionConfirmResult.ok !== false ||
+  actionConfirmResult.status !== "ADAPTER_UNAVAILABLE" ||
+  actionConfirmResult.external_write !== false ||
+  actionConfirmResult.receipt !== null
+) {
+  fail(
+    `Packaged upstream-action-confirm must stay pure draft: ${JSON.stringify(actionConfirmResult)}`,
+  );
+}
+
+// Blocked Ticket 10 capsule cannot become actions.
+const blockedCapsulePath = path.join(outside, "ticket11-blocked-capsule.json");
+fs.writeFileSync(
+  blockedCapsulePath,
+  JSON.stringify(blockedCapsule, null, 2),
+  "utf8",
+);
+const blockedAction = spawnSync(
+  process.execPath,
+  [
+    path.join(packageDir, "bin/changeguard.js"),
+    "upstream-action-preview",
+    fixtureDest,
+    `--capsule=${blockedCapsulePath}`,
+    "--action=create_issue",
+  ],
+  {
+    cwd: outside,
+    encoding: "utf8",
+    env: { ...process.env, NO_COLOR: "1" },
+  },
+);
+if (blockedAction.status === 0) {
+  fail("Blocked capsule upstream-action-preview must exit nonzero.");
+}
+let blockedActionResult;
+try {
+  blockedActionResult = JSON.parse(blockedAction.stdout);
+} catch {
+  fail("Blocked capsule upstream-action-preview stdout is not JSON.");
+}
+if (
+  blockedActionResult.ok !== false ||
+  blockedActionResult.status !== "BLOCKED_CAPSULE" ||
+  blockedActionResult.external_write !== false
+) {
+  fail(
+    `Blocked capsule must not become actions: ${JSON.stringify(blockedActionResult)}`,
+  );
+}
+
 console.log(
   JSON.stringify(
     {
@@ -910,6 +1035,10 @@ console.log(
       ticket10_upstream_preview_ready_exit_0: true,
       ticket10_upstream_preview_blocked_nonzero: true,
       ticket10_upstream_preview_no_network: true,
+      ticket11_action_preview_ready_exit_0: true,
+      ticket11_action_confirm_adapter_unavailable: true,
+      ticket11_blocked_capsule_refused: true,
+      ticket11_no_real_adapter: true,
     },
     null,
     2,

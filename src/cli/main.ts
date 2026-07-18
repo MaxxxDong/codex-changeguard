@@ -5,6 +5,8 @@
  *   changeguard impact <isolated-target> [--disclose-approved|--disclose-refused]
  *   changeguard analyze-page <isolated-target> --envelope=<page.json> [--disclose-approved|--disclose-refused]
  *   changeguard upstream-preview <isolated-target> --request=<request.json> [--disclose-approved|--disclose-refused]
+ *   changeguard upstream-action-preview <isolated-target> --capsule=<capsule.json> --action=<kind> [--attachments=<manifest.json>]
+ *   changeguard upstream-action-confirm <isolated-target> --confirmation=<ua1.…|path> --decision=confirm|cancel
  *   changeguard repair-preview <isolated-target>
  *   changeguard repair-apply <isolated-target> <authorization-token>
  *   changeguard verify <isolated-target>
@@ -13,6 +15,8 @@
  *   changeguard scan-system                    (production registered system adapter)
  *   changeguard session-start <inventory-root> [--hook-trust=…]  (manual fixture path)
  *   changeguard lifecycle <operation> <isolated-target> [--key=value …]
+ *
+ * Ticket 11 production seams inject no real gh/browser adapter (capability unavailable).
  */
 import fs from "node:fs";
 import { diagnose } from "../core/diagnose.js";
@@ -48,6 +52,14 @@ import type {
   UpstreamPreviewResult,
 } from "../upstream/types.js";
 import { MAX_UPSTREAM_REQUEST_BYTES } from "../upstream/limits.js";
+import {
+  confirmUpstreamAction,
+  previewUpstreamAction,
+  MAX_ACTION_REQUEST_BYTES,
+  MAX_CONFIRMATION_BYTES,
+  type ActionConfirmResult,
+  type ActionPreviewResult,
+} from "../upstream/actions/index.js";
 
 function printJson(value: unknown, exitCode: number): never {
   const text = assertNoLeakPaths(redactText(JSON.stringify(value, null, 2)));
@@ -75,11 +87,74 @@ function usageDiagnosis(): DiagnosisResult {
     evidence: [],
     error_code: "USAGE",
     error_message:
-      "Usage: changeguard diagnose|impact|analyze-page|upstream-preview|repair-preview|repair-apply|verify|rollback|scan|scan-system|session-start|lifecycle …",
+      "Usage: changeguard diagnose|impact|analyze-page|upstream-preview|upstream-action-preview|upstream-action-confirm|repair-preview|repair-apply|verify|rollback|scan|scan-system|session-start|lifecycle …",
     network_used: false,
     target_mutated: false,
     repair_applied: false,
   };
+}
+
+function actionPreviewUsageError(): never {
+  const result: ActionPreviewResult = {
+    schema_version: 1,
+    ok: false,
+    status: "INVALID_INPUT",
+    action: null,
+    canonical_target: null,
+    body_manifest: null,
+    attachment_manifest: null,
+    privacy: null,
+    incident_fingerprint_digest: null,
+    evidence_delta_hash: null,
+    capsule_content_sha256: null,
+    capsule_id: null,
+    confirmation_token: null,
+    confirmation: null,
+    idempotency_key: null,
+    auth_capability: {
+      kind: "unavailable",
+      detail: "Usage error.",
+      authenticated: false,
+    },
+    local_incident: null,
+    network_used: false,
+    target_mutated: false,
+    repair_applied: false,
+    repair_authorized: false,
+    external_write: false,
+    error_code: "USAGE",
+    error_message:
+      "Usage: changeguard upstream-action-preview <isolated-target> --capsule=<capsule.json> --action=<kind> [--attachments=<manifest.json>]",
+  };
+  printJson(result, 2);
+}
+
+function actionConfirmUsageError(): never {
+  const result: ActionConfirmResult = {
+    schema_version: 1,
+    ok: false,
+    status: "INVALID_CONFIRMATION",
+    action: null,
+    decision: null,
+    receipt: null,
+    idempotency_key: null,
+    auth_capability: {
+      kind: "unavailable",
+      detail: "Usage error.",
+      authenticated: false,
+    },
+    confirmation_id: null,
+    local_incident: null,
+    network_used: false,
+    target_mutated: false,
+    repair_applied: false,
+    repair_authorized: false,
+    external_write: false,
+    error_code: "USAGE",
+    error_message:
+      "Usage: changeguard upstream-action-confirm <isolated-target> --confirmation=<ua1.…|path> --decision=confirm|cancel",
+  };
+  printJson(result, 2);
 }
 
 function upstreamUsageError(): never {
@@ -509,6 +584,256 @@ function runUpstreamPreview(
   }
 }
 
+function parseUpstreamActionPreviewArgs(args: string[]): {
+  target: string;
+  capsulePath: string;
+  action: string;
+  attachmentsPath: string | null;
+} | null {
+  const positional: string[] = [];
+  let capsulePath: string | null = null;
+  let action: string | null = null;
+  let attachmentsPath: string | null = null;
+  for (const a of args) {
+    if (a.startsWith("--capsule=")) {
+      const v = a.slice("--capsule=".length);
+      if (v.length === 0) return null;
+      capsulePath = v;
+      continue;
+    }
+    if (a.startsWith("--action=")) {
+      const v = a.slice("--action=".length);
+      if (v.length === 0) return null;
+      action = v;
+      continue;
+    }
+    if (a.startsWith("--attachments=")) {
+      const v = a.slice("--attachments=".length);
+      if (v.length === 0) return null;
+      attachmentsPath = v;
+      continue;
+    }
+    if (a.startsWith("-")) return null;
+    positional.push(a);
+  }
+  if (positional.length !== 1 || !capsulePath || !action) return null;
+  return {
+    target: positional[0]!,
+    capsulePath,
+    action,
+    attachmentsPath,
+  };
+}
+
+function parseUpstreamActionConfirmArgs(args: string[]): {
+  target: string;
+  confirmation: string;
+  decision: string;
+} | null {
+  const positional: string[] = [];
+  let confirmation: string | null = null;
+  let decision: string | null = null;
+  for (const a of args) {
+    if (a.startsWith("--confirmation=")) {
+      const v = a.slice("--confirmation=".length);
+      if (v.length === 0) return null;
+      confirmation = v;
+      continue;
+    }
+    if (a.startsWith("--decision=")) {
+      const v = a.slice("--decision=".length);
+      if (v.length === 0) return null;
+      decision = v;
+      continue;
+    }
+    if (a.startsWith("-")) return null;
+    positional.push(a);
+  }
+  if (positional.length !== 1 || !confirmation || !decision) return null;
+  return {
+    target: positional[0]!,
+    confirmation,
+    decision,
+  };
+}
+
+function runUpstreamActionPreview(parsed: {
+  target: string;
+  capsulePath: string;
+  action: string;
+  attachmentsPath: string | null;
+}): void {
+  try {
+    if (!fs.existsSync(parsed.capsulePath)) {
+      printJson(
+        {
+          schema_version: 1,
+          ok: false,
+          status: "INVALID_INPUT",
+          error_code: "CAPSULE_NOT_FOUND",
+          error_message: "Capsule file not found.",
+          network_used: false,
+          target_mutated: false,
+          external_write: false,
+        },
+        1,
+      );
+    }
+    const raw = fs.readFileSync(parsed.capsulePath, "utf8");
+    if (Buffer.byteLength(raw, "utf8") > MAX_ACTION_REQUEST_BYTES) {
+      printJson(
+        {
+          schema_version: 1,
+          ok: false,
+          status: "INVALID_INPUT",
+          error_code: "SIZE_LIMIT",
+          error_message: "Capsule exceeds size limit.",
+          network_used: false,
+          external_write: false,
+        },
+        1,
+      );
+    }
+    let capsule: unknown;
+    try {
+      capsule = JSON.parse(raw);
+    } catch {
+      printJson(
+        {
+          schema_version: 1,
+          ok: false,
+          status: "INVALID_INPUT",
+          error_code: "MALFORMED_JSON",
+          error_message: "Capsule JSON is malformed.",
+          network_used: false,
+          external_write: false,
+        },
+        1,
+      );
+    }
+    let attachment_manifest: unknown = undefined;
+    if (parsed.attachmentsPath) {
+      if (!fs.existsSync(parsed.attachmentsPath)) {
+        printJson(
+          {
+            schema_version: 1,
+            ok: false,
+            status: "INVALID_INPUT",
+            error_code: "ATTACHMENTS_NOT_FOUND",
+            error_message: "Attachments file not found.",
+            network_used: false,
+            external_write: false,
+          },
+          1,
+        );
+      }
+      const araw = fs.readFileSync(parsed.attachmentsPath, "utf8");
+      if (Buffer.byteLength(araw, "utf8") > MAX_ACTION_REQUEST_BYTES) {
+        printJson(
+          {
+            schema_version: 1,
+            ok: false,
+            status: "INVALID_INPUT",
+            error_code: "SIZE_LIMIT",
+            error_message: "Attachments exceed size limit.",
+            network_used: false,
+            external_write: false,
+          },
+          1,
+        );
+      }
+      try {
+        attachment_manifest = JSON.parse(araw);
+      } catch {
+        printJson(
+          {
+            schema_version: 1,
+            ok: false,
+            status: "INVALID_INPUT",
+            error_code: "MALFORMED_JSON",
+            error_message: "Attachments JSON is malformed.",
+            network_used: false,
+            external_write: false,
+          },
+          1,
+        );
+      }
+    }
+    // Production: no real adapter — capability unavailable; never simulates write.
+    const result: ActionPreviewResult = previewUpstreamAction({
+      targetPath: parsed.target,
+      capsule,
+      action: parsed.action,
+      attachment_manifest,
+      adapter: null,
+    });
+    printJson(result, result.ok ? 0 : 1);
+  } catch {
+    printJson(
+      {
+        schema_version: 1,
+        ok: false,
+        status: "INVALID_INPUT",
+        error_code: "INTERNAL",
+        error_message: "Upstream action preview failed.",
+        network_used: false,
+        external_write: false,
+      },
+      1,
+    );
+  }
+}
+
+function runUpstreamActionConfirm(parsed: {
+  target: string;
+  confirmation: string;
+  decision: string;
+}): void {
+  try {
+    let token = parsed.confirmation;
+    // Allow file path to token (when value is a readable path and not ua1.…).
+    if (!token.startsWith("ua1.") && fs.existsSync(token)) {
+      const raw = fs.readFileSync(token, "utf8").trim();
+      if (Buffer.byteLength(raw, "utf8") > MAX_CONFIRMATION_BYTES) {
+        printJson(
+          {
+            schema_version: 1,
+            ok: false,
+            status: "INVALID_CONFIRMATION",
+            error_code: "SIZE_LIMIT",
+            error_message: "Confirmation exceeds size limit.",
+            network_used: false,
+            external_write: false,
+          },
+          1,
+        );
+      }
+      token = raw;
+    }
+    // Production: no real adapter — never requests tokens or simulates success.
+    const result: ActionConfirmResult = confirmUpstreamAction({
+      targetPath: parsed.target,
+      confirmation_token: token,
+      decision: parsed.decision,
+      adapter: null,
+    });
+    printJson(result, result.ok ? 0 : 1);
+  } catch {
+    printJson(
+      {
+        schema_version: 1,
+        ok: false,
+        status: "FAILED",
+        error_code: "INTERNAL",
+        error_message: "Upstream action confirm failed.",
+        network_used: false,
+        external_write: false,
+      },
+      1,
+    );
+  }
+}
+
 function runAnalyzePage(
   target: string,
   envelopePath: string,
@@ -728,6 +1053,24 @@ export function runCli(argv: string[]): void {
         parsed.requestPath,
         parsed.disclosure_decision,
       );
+      return;
+    }
+
+    if (cmd === "upstream-action-preview") {
+      const parsed = parseUpstreamActionPreviewArgs(rest);
+      if (!parsed) {
+        actionPreviewUsageError();
+      }
+      runUpstreamActionPreview(parsed);
+      return;
+    }
+
+    if (cmd === "upstream-action-confirm") {
+      const parsed = parseUpstreamActionConfirmArgs(rest);
+      if (!parsed) {
+        actionConfirmUsageError();
+      }
+      runUpstreamActionConfirm(parsed);
       return;
     }
 

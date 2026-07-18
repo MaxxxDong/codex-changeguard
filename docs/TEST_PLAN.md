@@ -233,6 +233,23 @@ Black-box and contract coverage in `tests/ticket10-upstream-preview.test.ts`:
 - package-smoke invokes packaged `upstream-preview` for PREVIEW_READY (exit 0) and PREVIEW_BLOCKED (nonzero, null drafts, no raw injection) from outside repo cwd
 - capsule never `SUBMITTED`/`POSTED`; `external_write: false`; schema `preview_only`
 
+## Ticket 11 Scenario Harness (confirmed upstream actions)
+
+Black-box and contract coverage in `tests/ticket11-upstream-actions.test.ts`:
+
+- capsule gate: only integrity-valid `PREVIEW_READY` capsules with privacy + maintainer gate + actionable recommendation; blocked/injection and content-hash tamper refused
+- each action preview: `create_issue`, `comment_with_delta`, `react_upvote`, `subscribe`, `attachment_upload`
+- attachment privacy failure refused; wrong recommendation/action pairing refused
+- success via controlled remote double → minimal Upstream Contribution Receipt (no body/secrets/repair status)
+- cancellation remains pure draft; nonce consumed (no later confirm)
+- auth unavailable / default unavailable adapter never simulate success
+- invalid / expired / replayed confirmation refused
+- idempotency: exact same diagnosis/action returns `DUPLICATE_EXISTING` with existing receipt
+- timeout found → existing receipt; timeout not-found/uncertain → `UNCERTAIN_NO_RETRY` (no blind retry)
+- CLI/MCP `upstream-action-preview` / `changeguard_upstream_action_preview` equivalence; production path `network_used: false`, auth `unavailable`
+- target tree hash unchanged; no token/cookie leakage in JSON
+- package-smoke: packaged action-preview exit 0, confirm without adapter → `ADAPTER_UNAVAILABLE`, blocked capsule refused
+
 ## Initial commands
 
 ```bash
@@ -253,6 +270,9 @@ node bin/changeguard.js impact fixtures/impact-local --disclose-refused
 # node bin/changeguard.js analyze-page fixtures/protected-process --envelope=fixtures/page-evidence/valid-protected-process.json --disclose-refused
 # Ticket 10 (upstream draft preview only; no external write):
 # node bin/changeguard.js upstream-preview fixtures/protected-process --request=fixtures/upstream/request-new-incident-cli.json --disclose-refused
+# Ticket 11 (confirmed actions; production injects no real adapter):
+# node bin/changeguard.js upstream-action-preview <target> --capsule=<capsule.json> --action=create_issue
+# node bin/changeguard.js upstream-action-confirm <target> --confirmation=<ua1.…> --decision=cancel
 # Ticket 02 (isolated disposable copy only):
 # node bin/changeguard.js repair-preview <isolated-target>
 # node bin/changeguard.js repair-apply <isolated-target> <authorization_binding>

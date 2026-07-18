@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-changeguard/upstream-action-receipt.schema.json",
+  "title": "UpstreamActionReceipt",
+  "description": "Ticket 11 minimal Upstream Contribution Receipt after a confirmed remote action. No local repair status, secrets, or body text.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "action",
+    "canonical_url",
+    "timestamp",
+    "receipt_hash",
+    "idempotency_key",
+    "remote_receipt_id"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "upstream_contribution_action" },
+    "action": {
+      "enum": [
+        "create_issue",
+        "comment_with_delta",
+        "react_upvote",
+        "subscribe",
+        "attachment_upload"
+      ]
+    },
+    "canonical_url": {
+      "type": "string",
+      "maxLength": 512,
+      "pattern": "^https://"
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 64
+    },
+    "receipt_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "pattern": "^idk_[a-f0-9]{64}$"
+    },
+    "remote_receipt_id": {
+      "type": ["string", "null"],
+      "maxLength": 128
+    }
+  }
+}

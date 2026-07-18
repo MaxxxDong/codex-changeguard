@@ -5,7 +5,8 @@
  * multi-instance scan / SessionStart tools (state writes only under PLUGIN_DATA)
  * + Ticket 05 untrusted page-evidence analysis (orchestrator-supplied envelope)
  * + Ticket 06 lifecycle (KNOWN_GOOD / retention / A-B / canary / supersession)
- * + Ticket 10 upstream draft preview (local-only capsule; never external write).
+ * + Ticket 10 upstream draft preview (local-only capsule; never external write)
+ * + Ticket 11 confirmed upstream action preview/confirm (no real adapter by default).
  *
  * Wire protocol: newline-delimited JSON-RPC 2.0 over stdio.
  * Request frames are accumulated as bounded bytes (not unbounded readline).
@@ -44,11 +45,21 @@ import type {
   UpstreamPreviewResult,
 } from "../upstream/types.js";
 import { MAX_UPSTREAM_REQUEST_BYTES } from "../upstream/limits.js";
+import {
+  confirmUpstreamAction,
+  previewUpstreamAction,
+  MAX_ACTION_REQUEST_BYTES,
+  MAX_CONFIRMATION_BYTES,
+  type ActionConfirmResult,
+  type ActionPreviewResult,
+} from "../upstream/actions/index.js";
 
 const TOOL_DIAGNOSE = "changeguard_diagnose";
 const TOOL_IMPACT = "changeguard_impact";
 const TOOL_ANALYZE_PAGE = "changeguard_analyze_page";
 const TOOL_UPSTREAM_PREVIEW = "changeguard_upstream_preview";
+const TOOL_UPSTREAM_ACTION_PREVIEW = "changeguard_upstream_action_preview";
+const TOOL_UPSTREAM_ACTION_CONFIRM = "changeguard_upstream_action_confirm";
 const TOOL_REPAIR_PREVIEW = "changeguard_repair_preview";
 const TOOL_REPAIR_APPLY = "changeguard_repair_apply";
 const TOOL_VERIFY = "changeguard_verify";
@@ -63,6 +74,8 @@ const KNOWN_TOOLS = new Set([
   TOOL_IMPACT,
   TOOL_ANALYZE_PAGE,
   TOOL_UPSTREAM_PREVIEW,
+  TOOL_UPSTREAM_ACTION_PREVIEW,
+  TOOL_UPSTREAM_ACTION_CONFIRM,
   TOOL_REPAIR_PREVIEW,
   TOOL_REPAIR_APPLY,
   TOOL_VERIFY,
@@ -190,6 +203,63 @@ function toolSchemas() {
             enum: ["approved", "refused", "not_requested"],
             description:
               "Disclosure for optional official form refresh. Default not_requested. Production MCP never injects transport (transport_calls: 0).",
+          },
+        },
+      },
+    },
+    {
+      name: TOOL_UPSTREAM_ACTION_PREVIEW,
+      description:
+        "Ticket 11: separately preview one confirmed upstream action (create_issue, comment_with_delta, react_upvote, subscribe, attachment_upload) bound to a valid Ticket 10 PREVIEW_READY capsule. Emits a one-shot confirmation binding. Production injects no real adapter; never requests tokens/cookies/session.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["target", "capsule", "action"],
+        properties: {
+          target: targetProp,
+          capsule: {
+            type: "object",
+            description:
+              "Ticket 10 UpstreamSubmissionCapsule. Only PREVIEW_READY capsules with valid integrity/privacy/recommendation may become actions.",
+          },
+          action: {
+            type: "string",
+            enum: [
+              "create_issue",
+              "comment_with_delta",
+              "react_upvote",
+              "subscribe",
+              "attachment_upload",
+            ],
+            description: "Separately previewed action kind.",
+          },
+          attachment_manifest: {
+            type: "object",
+            description:
+              "Optional attachment manifest (required for attachment_upload). Privacy flags must all be true; no tokens/paths.",
+          },
+        },
+      },
+    },
+    {
+      name: TOOL_UPSTREAM_ACTION_CONFIRM,
+      description:
+        "Ticket 11: confirm or cancel a one-shot upstream action confirmation. Cancellation/auth unavailable remain pure draft and never simulate success. Production injects no real gh/browser adapter (ADAPTER_UNAVAILABLE). Host may inject adapter outside this server.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["target", "confirmation_token", "decision"],
+        properties: {
+          target: targetProp,
+          confirmation_token: {
+            type: "string",
+            description:
+              "One-shot confirmation token from upstream-action-preview (ua1.…). Not an access token.",
+          },
+          decision: {
+            type: "string",
+            enum: ["confirm", "cancel"],
+            description: "User decision for this exact bound action.",
           },
         },
       },
@@ -376,6 +446,8 @@ function handleToolsCall(params: unknown): {
     | ImpactAssessmentResult
     | PageAnalysisResult
     | UpstreamPreviewResult
+    | ActionPreviewResult
+    | ActionConfirmResult
     | RepairResult
     | ScanResult
     | LifecycleResult;
@@ -543,6 +615,97 @@ function handleToolsCall(params: unknown): {
       request: a.request,
       disclosure_decision,
       transport: null,
+    });
+    return { payload, ok: payload.ok };
+  }
+
+  if (p.name === TOOL_UPSTREAM_ACTION_PREVIEW) {
+    const allowed = new Set([
+      "target",
+      "capsule",
+      "action",
+      "attachment_manifest",
+    ]);
+    for (const k of Object.keys(a)) {
+      if (!allowed.has(k)) {
+        throw Object.assign(new Error("Unknown or extra arguments."), {
+          code: "EXTRA_ARGS",
+        });
+      }
+    }
+    const target = requireTarget(a);
+    if (a.capsule === undefined || a.capsule === null) {
+      throw Object.assign(new Error("Invalid capsule."), {
+        code: "INVALID_ARGS",
+      });
+    }
+    let capsuleSerialized: string;
+    try {
+      capsuleSerialized = JSON.stringify(a.capsule);
+    } catch {
+      throw Object.assign(new Error("Invalid capsule."), {
+        code: "INVALID_ARGS",
+      });
+    }
+    if (
+      Buffer.byteLength(capsuleSerialized, "utf8") > MAX_ACTION_REQUEST_BYTES
+    ) {
+      throw Object.assign(new Error("Capsule exceeds size limit."), {
+        code: "SIZE_LIMIT",
+      });
+    }
+    if (typeof a.action !== "string") {
+      throw Object.assign(new Error("Invalid action."), {
+        code: "INVALID_ARGS",
+      });
+    }
+    // MCP never injects a real gh/browser adapter — capability unavailable by default.
+    const payload: ActionPreviewResult = previewUpstreamAction({
+      targetPath: target,
+      capsule: a.capsule,
+      action: a.action,
+      attachment_manifest: a.attachment_manifest,
+      adapter: null,
+    });
+    return { payload, ok: payload.ok };
+  }
+
+  if (p.name === TOOL_UPSTREAM_ACTION_CONFIRM) {
+    const allowed = new Set(["target", "confirmation_token", "decision"]);
+    for (const k of Object.keys(a)) {
+      if (!allowed.has(k)) {
+        throw Object.assign(new Error("Unknown or extra arguments."), {
+          code: "EXTRA_ARGS",
+        });
+      }
+    }
+    const target = requireTarget(a);
+    if (
+      typeof a.confirmation_token !== "string" ||
+      a.confirmation_token.length === 0
+    ) {
+      throw Object.assign(new Error("Invalid confirmation_token."), {
+        code: "INVALID_ARGS",
+      });
+    }
+    if (
+      Buffer.byteLength(a.confirmation_token, "utf8") > MAX_CONFIRMATION_BYTES
+    ) {
+      throw Object.assign(new Error("Confirmation token exceeds size limit."), {
+        code: "SIZE_LIMIT",
+      });
+    }
+    if (a.decision !== "confirm" && a.decision !== "cancel") {
+      throw Object.assign(new Error("Invalid decision."), {
+        code: "INVALID_ARGS",
+      });
+    }
+    // MCP never injects a real adapter — cancel works; confirm → ADAPTER_UNAVAILABLE.
+    const payload: ActionConfirmResult = confirmUpstreamAction({
+      targetPath: target,
+      confirmation_token: a.confirmation_token,
+      decision: a.decision,
+      adapter: null,
     });
     return { payload, ok: payload.ok };
   }

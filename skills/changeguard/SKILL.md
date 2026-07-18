@@ -223,15 +223,49 @@ Both call `previewUpstream()` and return the same Upstream Submission Capsule. P
 - executing `codex doctor` or arbitrary shell to collect diagnostics
 - claiming `SUBMITTED` / `POSTED` status
 
+## Ticket 11 — confirmed upstream actions (adapter-gated)
+
+### Public seams (same core)
+
+1. Rescue CLI: `changeguard upstream-action-preview <isolated-target> --capsule=<capsule.json> --action=<kind> [--attachments=<manifest.json>]`
+2. Rescue CLI: `changeguard upstream-action-confirm <isolated-target> --confirmation=<ua1.…|path> --decision=confirm|cancel`
+3. MCP: `changeguard_upstream_action_preview` / `changeguard_upstream_action_confirm`
+
+Both call `previewUpstreamAction` / `confirmUpstreamAction`. Production injects no real
+`gh`/browser adapter; capability is `unavailable` by default.
+
+### Action kinds (separately previewed + confirmed)
+
+`create_issue` | `comment_with_delta` | `react_upvote` | `subscribe` | `attachment_upload`
+
+### Orchestration steps
+
+1. Obtain a fresh Ticket 10 `PREVIEW_READY` capsule (blocked/gate-failed never become actions).
+2. Preview exactly one action; present target, body/attachment manifest, privacy result, and one-shot confirmation token (`ua1.…` — not an access token).
+3. On user cancel: `decision=cancel` → pure draft (`CANCELLED`); never claim remote success.
+4. On user confirm: production path returns `ADAPTER_UNAVAILABLE` unless the host injects an adapter reporting `gh_authenticated` or `visible_browser_authenticated` (never request/store/display tokens, cookies, or sessions).
+5. On success, present only the minimal Upstream Contribution Receipt (action, URL, timestamp, receipt/idempotency hashes). Keep local repair status separate.
+6. On ambiguous timeout, the core queries by idempotency key; if not conclusive, status is `UNCERTAIN_NO_RETRY` — do not blind-retry.
+
+### Forbidden in Ticket 11
+
+- simulating success when auth/adapter is unavailable
+- blind retry after ambiguous timeout
+- promoting blocked/gate-failed capsules to actions
+- requesting, storing, or displaying access tokens, cookies, or sessions
+- arbitrary shell / child_process / un-injected `gh` execution from production seams
+- claiming registration, Gate C, external submission completion, or `LOCAL_COMPLETE` without separate authorization
+
 ## Planned commands
 
 - `/changeguard scan`: compare installed and last-seen Codex fingerprints via the shared instance core (Ticket 03)
 - `/changeguard diagnose`: build an incident fingerprint via the shared core (Ticket 01 + Ticket 07 config faults + Ticket 08 plugin-cache mechanisms on isolated targets)
 - `/changeguard diagnose <URL>` / analyze-page: untrusted page-evidence applicability (Ticket 05)
 - `/changeguard impact`: official-evidence Impact Card via the shared core (Ticket 04)
-- `/changeguard upstream-preview`: local-only Upstream Submission Capsule (Ticket 10; Ticket 11 performs confirmed writes)
+- `/changeguard upstream-preview`: local-only Upstream Submission Capsule (Ticket 10)
+- `/changeguard upstream-action-preview` / `upstream-action-confirm`: Ticket 11 confirmed actions (adapter-gated; production default unavailable)
 - `/changeguard repro-pack`: show the disclosure manifest and export a redacted evidence package after confirmation
 - `/changeguard recovery-preview` / repair-preview: build a Repair Capsule (Ticket 02 protected-process; Ticket 07 config set/remove; Ticket 08 plugin-cache)
 - `/changeguard verify` / `/changeguard rollback`: recovery seams (Tickets 02 / 07 / 08)
 
-Confirmed upstream writes remain Ticket 11. This Skill freezes the safety contract and routes diagnosis/repair/scan/impact/page/upstream-preview through the shared core only.
+This Skill freezes the safety contract and routes diagnosis/repair/scan/impact/page/upstream-preview/upstream-action through the shared core only.

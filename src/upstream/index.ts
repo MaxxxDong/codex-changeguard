@@ -80,3 +80,6 @@ export { evaluateMaintainerValueGate } from "./maintainer-gate.js";
 export { parseUpstreamRequest, UpstreamRequestError } from "./request.js";
 export { previewUpstream } from "./preview.js";
 export type { UpstreamPreviewOptions } from "./preview.js";
+
+/** Ticket 11 confirmed upstream actions (namespaced). */
+export * as actions from "./actions/index.js";

@@ -512,6 +512,62 @@ Schema: `schemas/upstream-submission-capsule.schema.json`. Synthetic fixtures: `
 
 The playbook never reads or exports cookie values, tokens, passwords, one-time codes, or full browser storage. A changed public IP is a hypothesis, not a permitted root-cause claim.
 
+## 10c. Confirmed upstream actions (Ticket 11)
+
+Shared core: `src/upstream/actions/` (`previewUpstreamAction`, `confirmUpstreamAction`).
+Public seams:
+
+- Rescue CLI: `changeguard upstream-action-preview <target> --capsule=<capsule.json> --action=<kind> [--attachments=<manifest.json>]`
+- Rescue CLI: `changeguard upstream-action-confirm <target> --confirmation=<ua1.…|path> --decision=confirm|cancel`
+- MCP: `changeguard_upstream_action_preview` / `changeguard_upstream_action_confirm`
+
+### Capsule eligibility
+
+Only Ticket 10 capsules that pass all of the following may become actions:
+
+- `mode: preview_only`, `locality: local_only`, `external_write: false`, `requires_ticket11_confirmation: true`
+- `status: PREVIEW_READY` (never `PREVIEW_BLOCKED`, `GATE_FAILED`, or `ROUTED_PRIVATE`)
+- `privacy_review.passed` and secrets/paths/session flags true; no injection quarantine
+- `maintainer_value_gate.passed`
+- `capsule_content_sha256` recomputes to the same integrity digest
+- recommendation maps to an allowlisted action set (`open_new` → create_issue/attachment_upload; `comment_with_delta` → comment/attachment; `subscribe_or_upvote` → react_upvote/subscribe). `blocked` / private / support recommendations never become actions.
+
+### Action kinds (separately previewed + confirmed)
+
+`create_issue` | `comment_with_delta` | `react_upvote` | `subscribe` | `attachment_upload`
+
+Each confirmation binds: exact canonical target, action, body/attachment manifest,
+incident fingerprint digest, evidence delta hash, `capsule_content_sha256`, privacy
+result, one-shot nonce, and expiry (`ua1.…` token; not an access token).
+
+### Auth capability and adapter
+
+- Capability kinds: `gh_authenticated` | `visible_browser_authenticated` | `unavailable`
+- Production CLI/MCP inject null adapter → `createUnavailableAdapter()`; never child_process/`gh`, never tokens/cookies/sessions
+- Host integration supplies `UpstreamActionAdapter` (`getAuthCapability`, `execute`, `queryByIdempotencyKey`)
+- Cancellation or auth/adapter unavailable remains pure draft (`external_write: false`); never simulates success
+
+### Idempotency and timeout
+
+Idempotency key = SHA-256 over canonical target + incident digest + evidence delta +
+action + body/attachment content hashes. Exact same diagnosis/action/content cannot
+execute twice (`DUPLICATE_EXISTING` returns the existing receipt).
+
+Ambiguous timeout: query remote with the same idempotency key. Found → return existing
+receipt. Not found / uncertain → `UNCERTAIN_NO_RETRY` (never blind retry).
+
+### Upstream Contribution Receipt
+
+On success (or found duplicate), emit a separate minimal receipt
+(`kind: upstream_contribution_action`): action, canonical URL, timestamp,
+`receipt_hash`, `idempotency_key`, optional `remote_receipt_id`. No local repair
+status, secrets, or body text. Schema: `schemas/upstream-action-receipt.schema.json`.
+
+Scenario Harness uses an in-memory controlled remote double
+(`createFakeRemoteAdapter`) covering success, cancel, auth failure, invalid/expired/
+replayed confirmation, timeout found/not-found/uncertain, duplicate, attachment
+privacy, blocked capsule, CLI/MCP equivalence, and default no-network path.
+
 ## 11. Competition MVP
 
 ### Must
