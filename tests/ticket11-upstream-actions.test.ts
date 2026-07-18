@@ -8,6 +8,8 @@
  * no target mutation / leak / network in the default path.
  */
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -16,11 +18,14 @@ import {
 } from "../src/upstream/index.js";
 import {
   _resetConsumedNoncesForTests,
+  claimConfirmationForExecute,
   confirmUpstreamAction,
   computeBindingSha256,
   computeConfirmationMac,
   CONFIRMATION_LEDGER_CAPACITY,
   CONFIRMATION_LEDGER_KEY_FILE,
+  CONFIRMATION_LEDGER_LOCK_NAME,
+  CONFIRMATION_LEDGER_LOCK_STALE_MS,
   CONFIRMATION_LEDGER_STATE_FILE,
   CONFIRMATION_TOKEN_PREFIX,
   createFakeRemoteAdapter,
@@ -76,6 +81,77 @@ function writeJson(dir: string, name: string, value: unknown): string {
   const p = path.join(dir, name);
   fs.writeFileSync(p, JSON.stringify(value, null, 2), "utf8");
   return p;
+}
+
+/** Test-only: install a live exclusive lock under the ledger root. */
+function forceLiveLockForTests(
+  root: string,
+  owner: string = crypto.randomBytes(16).toString("hex"),
+  nowMs: number = Date.now(),
+): string {
+  const lockDir = path.join(root, CONFIRMATION_LEDGER_LOCK_NAME);
+  try {
+    if (fs.existsSync(lockDir)) {
+      try {
+        fs.unlinkSync(path.join(lockDir, "owner.json"));
+      } catch {
+        /* best-effort */
+      }
+      // Free the name via rename (production lock release pattern).
+      fs.renameSync(
+        lockDir,
+        path.join(
+          root,
+          `.${CONFIRMATION_LEDGER_LOCK_NAME}.testfree.${Date.now()}`,
+        ),
+      );
+    }
+  } catch {
+    /* best-effort */
+  }
+  fs.mkdirSync(lockDir, { recursive: false, mode: 0o700 });
+  fs.writeFileSync(
+    path.join(lockDir, "owner.json"),
+    `${JSON.stringify({ owner, pid: process.pid, created_at_ms: nowMs })}\n`,
+    { flag: "wx", mode: 0o600 },
+  );
+  return owner;
+}
+
+/** Test-only: install a stale lock (old created_at_ms) for reclaim tests. */
+function forceStaleLockForTests(
+  root: string,
+  ageMs: number = CONFIRMATION_LEDGER_LOCK_STALE_MS + 5_000,
+  nowMs: number = Date.now(),
+): string {
+  const owner = crypto.randomBytes(16).toString("hex");
+  const lockDir = path.join(root, CONFIRMATION_LEDGER_LOCK_NAME);
+  try {
+    if (fs.existsSync(lockDir)) {
+      try {
+        fs.unlinkSync(path.join(lockDir, "owner.json"));
+      } catch {
+        /* best-effort */
+      }
+      fs.renameSync(
+        lockDir,
+        path.join(
+          root,
+          `.${CONFIRMATION_LEDGER_LOCK_NAME}.testfree.${Date.now()}`,
+        ),
+      );
+    }
+  } catch {
+    /* best-effort */
+  }
+  fs.mkdirSync(lockDir, { recursive: false, mode: 0o700 });
+  const created = nowMs - ageMs;
+  fs.writeFileSync(
+    path.join(lockDir, "owner.json"),
+    `${JSON.stringify({ owner, pid: 1, created_at_ms: created })}\n`,
+    { flag: "wx", mode: 0o600 },
+  );
+  return owner;
 }
 
 function assertNoSecrets(text: string): void {
@@ -1393,4 +1469,505 @@ test("hmac key never appears in token, receipt, or confirm result", () => {
   assert.equal(confirm.status, "EXECUTED");
   assert.equal(JSON.stringify(confirm).includes(keyHex), false);
   assert.equal(JSON.stringify(confirm.receipt).includes(keyHex), false);
+});
+
+// --- P1 r3: exclusive in_flight claim, crash-safety, lock reclaim ---
+
+test("claim: concurrent Promise confirm executeCalls strictly 1", async () => {
+  _resetConsumedNoncesForTests(LEDGER_ROOT);
+  const target = copyFixtureToTemp(PROTECTED, makeTempDir("cg-t11-conc-"));
+  const capsule = makeCapsule("request-new-incident-cli.json", target);
+  const fake = createFakeRemoteAdapter({ mode: "success", nowIso: NOW_ISO });
+  const instrumented = instrumentActionAdapter(fake);
+  const preview = previewUpstreamAction({
+    targetPath: target,
+    capsule,
+    action: "create_issue",
+    adapter: instrumented,
+    nowMs: NOW_FRESH,
+    nonce: "66".repeat(16),
+    ledgerRoot: LEDGER_ROOT,
+  });
+  const token = preview.confirmation_token!;
+  const results = await Promise.all([
+    Promise.resolve().then(() =>
+      confirmUpstreamAction({
+        targetPath: target,
+        confirmation_token: token,
+        decision: "confirm",
+        adapter: instrumented,
+        nowMs: NOW_FRESH,
+        ledgerRoot: LEDGER_ROOT,
+      }),
+    ),
+    Promise.resolve().then(() =>
+      confirmUpstreamAction({
+        targetPath: target,
+        confirmation_token: token,
+        decision: "confirm",
+        adapter: instrumented,
+        nowMs: NOW_FRESH,
+        ledgerRoot: LEDGER_ROOT,
+      }),
+    ),
+  ]);
+  const executed = results.filter((r) => r.status === "EXECUTED");
+  const blocked = results.filter(
+    (r) =>
+      r.status === "REPLAYED_CONFIRMATION" ||
+      r.status === "IN_FLIGHT_NO_RETRY",
+  );
+  assert.equal(executed.length, 1);
+  assert.equal(blocked.length, 1);
+  assert.equal(instrumented.executeCalls, 1);
+  assert.equal(executed[0]!.external_write, true);
+  assert.equal(blocked[0]!.external_write, false);
+});
+
+test("claim: dual-process concurrent confirm only one EXECUTED", async () => {
+  _resetConsumedNoncesForTests(LEDGER_ROOT);
+  const target = copyFixtureToTemp(PROTECTED, makeTempDir("cg-t11-dual-"));
+  const capsule = makeCapsule("request-new-incident-cli.json", target);
+  const preview = previewUpstreamAction({
+    targetPath: target,
+    capsule,
+    action: "create_issue",
+    adapter: createFakeRemoteAdapter({ mode: "success", nowIso: NOW_ISO }),
+    nowMs: NOW_FRESH,
+    nonce: "77".repeat(16),
+    ledgerRoot: LEDGER_ROOT,
+  });
+  const token = preview.confirmation_token!;
+  const outDir = makeTempDir("cg-t11-dual-out-");
+  const outA = path.join(outDir, "a.json");
+  const outB = path.join(outDir, "b.json");
+  const actionsEntry = path.join(
+    REPO_ROOT,
+    "dist",
+    "upstream",
+    "actions",
+    "index.js",
+  );
+  assert.ok(
+    fs.existsSync(actionsEntry),
+    "dist actions entry must exist (npm test builds first)",
+  );
+
+  function spawnConfirm(outPath: string) {
+    const script = `
+import { confirmUpstreamAction, createFakeRemoteAdapter } from ${JSON.stringify(actionsEntry)};
+import fs from "node:fs";
+const r = confirmUpstreamAction({
+  targetPath: ${JSON.stringify(target)},
+  confirmation_token: ${JSON.stringify(token)},
+  decision: "confirm",
+  adapter: createFakeRemoteAdapter({ mode: "success", nowIso: ${JSON.stringify(NOW_ISO)} }),
+  nowMs: ${NOW_FRESH},
+  ledgerRoot: ${JSON.stringify(LEDGER_ROOT)},
+});
+fs.writeFileSync(${JSON.stringify(outPath)}, JSON.stringify({
+  status: r.status,
+  external_write: r.external_write,
+  ok: r.ok,
+}));
+`;
+    return spawn(process.execPath, ["--input-type=module", "-e", script], {
+      env: {
+        ...process.env,
+        NO_COLOR: "1",
+        CHANGEGUARD_CONFIRMATION_STATE_DIR: LEDGER_ROOT,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  }
+
+  const childA = spawnConfirm(outA);
+  const childB = spawnConfirm(outB);
+  const [codeA, codeB] = await Promise.all([
+    new Promise<number>((resolve) => {
+      childA.on("close", (c) => resolve(c ?? 1));
+    }),
+    new Promise<number>((resolve) => {
+      childB.on("close", (c) => resolve(c ?? 1));
+    }),
+  ]);
+  assert.equal(codeA, 0, "child A exit");
+  assert.equal(codeB, 0, "child B exit");
+  const ra = JSON.parse(fs.readFileSync(outA, "utf8")) as {
+    status: string;
+    external_write: boolean;
+  };
+  const rb = JSON.parse(fs.readFileSync(outB, "utf8")) as {
+    status: string;
+    external_write: boolean;
+  };
+  const statuses = [ra.status, rb.status].sort();
+  const executed = [ra, rb].filter((r) => r.status === "EXECUTED");
+  const blocked = [ra, rb].filter(
+    (r) =>
+      r.status === "REPLAYED_CONFIRMATION" ||
+      r.status === "IN_FLIGHT_NO_RETRY",
+  );
+  assert.equal(
+    executed.length,
+    1,
+    `expected one EXECUTED, got ${statuses.join(",")}`,
+  );
+  assert.equal(blocked.length, 1);
+  assert.equal(executed[0]!.external_write, true);
+  assert.equal(blocked[0]!.external_write, false);
+});
+
+test("claim: execute throw → UNCERTAIN_NO_RETRY; second confirm never executes", () => {
+  _resetConsumedNoncesForTests(LEDGER_ROOT);
+  const target = copyFixtureToTemp(PROTECTED, makeTempDir("cg-t11-throw-"));
+  const capsule = makeCapsule("request-new-incident-cli.json", target);
+  let executeCalls = 0;
+  const adapter = {
+    getAuthCapability: () => ({
+      kind: "gh_authenticated" as const,
+      detail: "test",
+      authenticated: true,
+    }),
+    execute: () => {
+      executeCalls += 1;
+      throw new Error("adapter boom after claim");
+    },
+    queryByIdempotencyKey: () => ({
+      outcome: "uncertain" as const,
+      receipt: null,
+      error_code: null,
+      error_message: null,
+    }),
+  };
+  const preview = previewUpstreamAction({
+    targetPath: target,
+    capsule,
+    action: "create_issue",
+    adapter,
+    nowMs: NOW_FRESH,
+    nonce: "88".repeat(16),
+    ledgerRoot: LEDGER_ROOT,
+  });
+  const first = confirmUpstreamAction({
+    targetPath: target,
+    confirmation_token: preview.confirmation_token!,
+    decision: "confirm",
+    adapter,
+    nowMs: NOW_FRESH,
+    ledgerRoot: LEDGER_ROOT,
+  });
+  assert.equal(first.status, "UNCERTAIN_NO_RETRY");
+  assert.equal(first.external_write, false);
+  assert.equal(executeCalls, 1);
+  const entry = openConfirmationLedger(LEDGER_ROOT).getEntry(
+    "88".repeat(16),
+    NOW_FRESH,
+  );
+  assert.ok(entry);
+  assert.ok(
+    entry!.status === "terminal_uncertain" || entry!.status === "in_flight",
+  );
+  const second = confirmUpstreamAction({
+    targetPath: target,
+    confirmation_token: preview.confirmation_token!,
+    decision: "confirm",
+    adapter,
+    nowMs: NOW_FRESH,
+    ledgerRoot: LEDGER_ROOT,
+  });
+  assert.ok(
+    second.status === "REPLAYED_CONFIRMATION" ||
+      second.status === "IN_FLIGHT_NO_RETRY",
+  );
+  assert.equal(second.external_write, false);
+  assert.equal(executeCalls, 1);
+});
+
+test("claim: crash after claim (in_flight) second confirm never executes", () => {
+  _resetConsumedNoncesForTests(LEDGER_ROOT);
+  const target = copyFixtureToTemp(PROTECTED, makeTempDir("cg-t11-crash-"));
+  const capsule = makeCapsule("request-new-incident-cli.json", target);
+  const fake = createFakeRemoteAdapter({ mode: "success", nowIso: NOW_ISO });
+  const instrumented = instrumentActionAdapter(fake);
+  const preview = previewUpstreamAction({
+    targetPath: target,
+    capsule,
+    action: "create_issue",
+    adapter: instrumented,
+    nowMs: NOW_FRESH,
+    nonce: "99".repeat(16),
+    ledgerRoot: LEDGER_ROOT,
+  });
+  // Simulate process crash after exclusive claim, before/during execute.
+  const claim = claimConfirmationForExecute(
+    "99".repeat(16),
+    LEDGER_ROOT,
+    NOW_FRESH,
+  );
+  assert.equal(claim.ok, true);
+  const mid = openConfirmationLedger(LEDGER_ROOT).getEntry(
+    "99".repeat(16),
+    NOW_FRESH,
+  );
+  assert.equal(mid!.status, "in_flight");
+  const again = confirmUpstreamAction({
+    targetPath: target,
+    confirmation_token: preview.confirmation_token!,
+    decision: "confirm",
+    adapter: instrumented,
+    nowMs: NOW_FRESH,
+    ledgerRoot: LEDGER_ROOT,
+  });
+  assert.ok(
+    again.status === "IN_FLIGHT_NO_RETRY" ||
+      again.status === "REPLAYED_CONFIRMATION",
+  );
+  assert.equal(again.external_write, false);
+  assert.equal(instrumented.executeCalls, 0);
+});
+
+test("claim: incomplete success receipt stays terminal; no second execute", () => {
+  _resetConsumedNoncesForTests(LEDGER_ROOT);
+  const target = copyFixtureToTemp(PROTECTED, makeTempDir("cg-t11-incomp-"));
+  const capsule = makeCapsule("request-new-incident-cli.json", target);
+  let executeCalls = 0;
+  const adapter = {
+    getAuthCapability: () => ({
+      kind: "gh_authenticated" as const,
+      detail: "test",
+      authenticated: true,
+    }),
+    execute: () => {
+      executeCalls += 1;
+      return {
+        outcome: "success" as const,
+        canonical_url: null,
+        remote_receipt_id: null,
+        timestamp: null,
+        existing_idempotency_key: null,
+        error_code: null,
+        error_message: null,
+      };
+    },
+    queryByIdempotencyKey: () => ({
+      outcome: "uncertain" as const,
+      receipt: null,
+      error_code: null,
+      error_message: null,
+    }),
+  };
+  const preview = previewUpstreamAction({
+    targetPath: target,
+    capsule,
+    action: "create_issue",
+    adapter,
+    nowMs: NOW_FRESH,
+    nonce: "ab".repeat(16),
+    ledgerRoot: LEDGER_ROOT,
+  });
+  const first = confirmUpstreamAction({
+    targetPath: target,
+    confirmation_token: preview.confirmation_token!,
+    decision: "confirm",
+    adapter,
+    nowMs: NOW_FRESH,
+    ledgerRoot: LEDGER_ROOT,
+  });
+  assert.equal(first.status, "UNCERTAIN_NO_RETRY");
+  assert.equal(executeCalls, 1);
+  const second = confirmUpstreamAction({
+    targetPath: target,
+    confirmation_token: preview.confirmation_token!,
+    decision: "confirm",
+    adapter,
+    nowMs: NOW_FRESH,
+    ledgerRoot: LEDGER_ROOT,
+  });
+  assert.ok(
+    second.status === "REPLAYED_CONFIRMATION" ||
+      second.status === "IN_FLIGHT_NO_RETRY",
+  );
+  assert.equal(executeCalls, 1);
+});
+
+test("claim: markConsumed failure leaves in_flight; still no second execute", () => {
+  _resetConsumedNoncesForTests(LEDGER_ROOT);
+  const target = copyFixtureToTemp(PROTECTED, makeTempDir("cg-t11-markfail-"));
+  const capsule = makeCapsule("request-new-incident-cli.json", target);
+  const fake = createFakeRemoteAdapter({ mode: "success", nowIso: NOW_ISO });
+  const instrumented = instrumentActionAdapter(fake);
+  const preview = previewUpstreamAction({
+    targetPath: target,
+    capsule,
+    action: "create_issue",
+    adapter: instrumented,
+    nowMs: NOW_FRESH,
+    nonce: "cd".repeat(16),
+    ledgerRoot: LEDGER_ROOT,
+  });
+  // Claim + simulate mark path by forcing in_flight after a "successful" remote
+  // without consume (crash between remote write and markConsumed).
+  const claim = claimConfirmationForExecute(
+    "cd".repeat(16),
+    LEDGER_ROOT,
+    NOW_FRESH,
+  );
+  assert.equal(claim.ok, true);
+  // Leave as in_flight (markConsumed never ran). Replay must not execute.
+  const again = confirmUpstreamAction({
+    targetPath: target,
+    confirmation_token: preview.confirmation_token!,
+    decision: "confirm",
+    adapter: instrumented,
+    nowMs: NOW_FRESH,
+    ledgerRoot: LEDGER_ROOT,
+  });
+  assert.ok(
+    again.status === "IN_FLIGHT_NO_RETRY" ||
+      again.status === "REPLAYED_CONFIRMATION",
+  );
+  assert.equal(instrumented.executeCalls, 0);
+  const ent = openConfirmationLedger(LEDGER_ROOT).getEntry(
+    "cd".repeat(16),
+    NOW_FRESH,
+  );
+  assert.equal(ent!.status, "in_flight");
+});
+
+test("lock: stale lock is reclaimed safely; claim proceeds", () => {
+  _resetConsumedNoncesForTests(LEDGER_ROOT);
+  forceStaleLockForTests(
+    LEDGER_ROOT,
+    CONFIRMATION_LEDGER_LOCK_STALE_MS + 10_000,
+    Date.now(),
+  );
+  const lockPath = path.join(LEDGER_ROOT, CONFIRMATION_LEDGER_LOCK_NAME);
+  assert.ok(fs.existsSync(lockPath));
+  const target = copyFixtureToTemp(PROTECTED, makeTempDir("cg-t11-stale-"));
+  const capsule = makeCapsule("request-new-incident-cli.json", target);
+  const fake = createFakeRemoteAdapter({ mode: "success", nowIso: NOW_ISO });
+  const instrumented = instrumentActionAdapter(fake);
+  const preview = previewUpstreamAction({
+    targetPath: target,
+    capsule,
+    action: "create_issue",
+    adapter: instrumented,
+    nowMs: NOW_FRESH,
+    nonce: "ef".repeat(16),
+    ledgerRoot: LEDGER_ROOT,
+  });
+  // preview's register reclaims stale lock; confirm must also succeed.
+  const confirm = confirmUpstreamAction({
+    targetPath: target,
+    confirmation_token: preview.confirmation_token!,
+    decision: "confirm",
+    adapter: instrumented,
+    nowMs: NOW_FRESH,
+    ledgerRoot: LEDGER_ROOT,
+  });
+  assert.equal(confirm.status, "EXECUTED");
+  assert.equal(instrumented.executeCalls, 1);
+});
+
+test("lock: live lock is refused fail-closed (no execute)", () => {
+  _resetConsumedNoncesForTests(LEDGER_ROOT);
+  const target = copyFixtureToTemp(PROTECTED, makeTempDir("cg-t11-livelock-"));
+  const capsule = makeCapsule("request-new-incident-cli.json", target);
+  const fake = createFakeRemoteAdapter({ mode: "success", nowIso: NOW_ISO });
+  const instrumented = instrumentActionAdapter(fake);
+  const preview = previewUpstreamAction({
+    targetPath: target,
+    capsule,
+    action: "create_issue",
+    adapter: instrumented,
+    nowMs: NOW_FRESH,
+    nonce: "10".repeat(16),
+    ledgerRoot: LEDGER_ROOT,
+  });
+  // Install a live lock held by a fake owner; claim must fail closed.
+  forceLiveLockForTests(LEDGER_ROOT, "aa".repeat(16), Date.now());
+  const confirm = confirmUpstreamAction({
+    targetPath: target,
+    confirmation_token: preview.confirmation_token!,
+    decision: "confirm",
+    adapter: instrumented,
+    nowMs: NOW_FRESH,
+    ledgerRoot: LEDGER_ROOT,
+  });
+  assert.ok(
+    confirm.status === "IN_FLIGHT_NO_RETRY" ||
+      confirm.status === "INVALID_CONFIRMATION" ||
+      confirm.status === "REPLAYED_CONFIRMATION",
+  );
+  assert.equal(confirm.external_write, false);
+  assert.equal(instrumented.executeCalls, 0);
+  // Cleanup live lock so later tests are not blocked.
+  try {
+    const lockDir = path.join(LEDGER_ROOT, CONFIRMATION_LEDGER_LOCK_NAME);
+    try {
+      fs.unlinkSync(path.join(lockDir, "owner.json"));
+    } catch {
+      /* best-effort */
+    }
+    fs.renameSync(
+      lockDir,
+      path.join(
+        LEDGER_ROOT,
+        `.${CONFIRMATION_LEDGER_LOCK_NAME}.testfree.${Date.now()}`,
+      ),
+    );
+  } catch {
+    /* best-effort */
+  }
+});
+
+test("ledger: in_flight is recognized; prune never demotes to registered", () => {
+  const root = makeTempDir("cg-t11-inflight-schema-");
+  const ledger = openConfirmationLedger(root);
+  const expires_at = new Date(NOW_FRESH + 60_000).toISOString();
+  const nonce = "12".repeat(16);
+  ledger.register(
+    {
+      nonce,
+      confirmation_id: "uac_" + "2".repeat(24),
+      binding_sha256: "a".repeat(64),
+      expires_at,
+      registered_at_ms: NOW_FRESH,
+      action: "create_issue",
+      canonical_target: "https://github.com/openai/codex/issues",
+      idempotency_key: "idk_" + "a".repeat(64),
+    },
+    NOW_FRESH,
+  );
+  const claim = ledger.claimForExecute(nonce, { nowMs: NOW_FRESH });
+  assert.equal(claim.ok, true);
+  const mid = ledger.getEntry(nonce, NOW_FRESH);
+  assert.equal(mid!.status, "in_flight");
+  // Capacity pressure with many consumed entries must not rewrite in_flight → registered.
+  for (let i = 0; i < CONFIRMATION_LEDGER_CAPACITY; i++) {
+    const n = (i + 1).toString(16).padStart(32, "0");
+    try {
+      ledger.register(
+        {
+          nonce: n,
+          confirmation_id: `uac_${i.toString(16).padStart(24, "0")}`,
+          binding_sha256: "b".repeat(64),
+          expires_at,
+          registered_at_ms: NOW_FRESH + i + 1,
+          action: "create_issue",
+          canonical_target: "https://github.com/openai/codex/issues",
+          idempotency_key: `idk_${i.toString(16).padStart(64, "0")}`,
+        },
+        NOW_FRESH + i + 1,
+      );
+      ledger.markConsumed(n, NOW_FRESH + i + 1);
+    } catch {
+      /* capacity may refuse further registered — acceptable */
+    }
+  }
+  const still = ledger.getEntry(nonce, NOW_FRESH);
+  assert.ok(still, "unexpired in_flight must survive capacity pressure");
+  assert.equal(still!.status, "in_flight");
+  assert.notEqual(still!.status, "registered");
 });

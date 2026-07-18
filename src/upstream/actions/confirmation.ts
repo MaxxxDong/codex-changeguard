@@ -16,6 +16,7 @@ import {
   LedgerError,
   openConfirmationLedger,
   _resetConfirmationLedgerForTests,
+  type ClaimForExecuteResult,
 } from "./ledger.js";
 import { computeIdempotencyKey } from "./idempotency.js";
 import { isOfficialCanonicalTarget } from "./manifest.js";
@@ -31,6 +32,7 @@ export type ConfirmationErrorCode =
   | "INVALID_CONFIRMATION"
   | "EXPIRED_CONFIRMATION"
   | "REPLAYED_CONFIRMATION"
+  | "IN_FLIGHT_CONFIRMATION"
   | "MALFORMED_CONFIRMATION"
   | "UNREGISTERED_CONFIRMATION";
 
@@ -613,7 +615,14 @@ export function parseConfirmationToken(
       "Ledger binding_sha256 mismatch.",
     );
   }
-  if (
+  if (entry.status === "in_flight") {
+    if (!opts?.allowConsumed) {
+      throw new ConfirmationError(
+        "IN_FLIGHT_CONFIRMATION",
+        "Confirmation in_flight (exclusive claim held; no retry).",
+      );
+    }
+  } else if (
     entry.status === "consumed" ||
     entry.status === "terminal_uncertain"
   ) {
@@ -637,6 +646,23 @@ export function parseConfirmationToken(
   }
 
   return binding;
+}
+
+/**
+ * Exclusive claim before adapter.execute: registered → in_flight CAS.
+ * Losers must not execute (IN_FLIGHT_NO_RETRY / REPLAYED).
+ */
+export function claimConfirmationForExecute(
+  nonce: string,
+  ledgerOrRoot?: ConfirmationLedger | string | null,
+  nowMs?: number,
+  binding_sha256?: string,
+): ClaimForExecuteResult {
+  const ledger =
+    ledgerOrRoot instanceof ConfirmationLedger
+      ? ledgerOrRoot
+      : openConfirmationLedger(ledgerOrRoot);
+  return ledger.claimForExecute(nonce, { binding_sha256, nowMs });
 }
 
 /** Mark nonce consumed after success / cancel / found-duplicate. */
@@ -677,6 +703,39 @@ export function markConfirmationTerminalUncertain(
       return;
     }
     throw e;
+  }
+}
+
+/**
+ * Best-effort terminal_uncertain after possible remote side effects.
+ * Never restores registered; leave in_flight if mark fails (safe terminal).
+ */
+export function tryMarkConfirmationTerminalUncertain(
+  nonce: string,
+  ledgerOrRoot?: ConfirmationLedger | string | null,
+  nowMs?: number,
+): void {
+  try {
+    markConfirmationTerminalUncertain(nonce, ledgerOrRoot, nowMs);
+  } catch {
+    /* leave in_flight claim as crash-safe terminal */
+  }
+}
+
+/**
+ * Best-effort consumed mark after confirmed success/duplicate.
+ * If mark fails, durable in_flight remains the safe terminal (no second execute).
+ */
+export function tryConsumeConfirmationNonce(
+  nonce: string,
+  ledgerOrRoot?: ConfirmationLedger | string | null,
+  nowMs?: number,
+): boolean {
+  try {
+    consumeConfirmationNonce(nonce, ledgerOrRoot, nowMs);
+    return true;
+  } catch {
+    return false;
   }
 }
 

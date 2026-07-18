@@ -30,6 +30,8 @@ export {
   CONFIRMATION_TTL_MS,
   CONFIRMATION_LEDGER_CAPACITY,
   CONFIRMATION_LEDGER_KEY_FILE,
+  CONFIRMATION_LEDGER_LOCK_NAME,
+  CONFIRMATION_LEDGER_LOCK_STALE_MS,
   CONFIRMATION_LEDGER_STATE_FILE,
   FORBIDDEN_ACTION_KEYS,
   MAX_ACTION_REQUEST_BYTES,
@@ -66,8 +68,11 @@ export {
 export {
   mintConfirmation,
   parseConfirmationToken,
+  claimConfirmationForExecute,
   consumeConfirmationNonce,
   markConfirmationTerminalUncertain,
+  tryConsumeConfirmationNonce,
+  tryMarkConfirmationTerminalUncertain,
   computeBindingSha256,
   computeConfirmationMac,
   revalidateConfirmationBinding,
@@ -87,7 +92,12 @@ export {
   resolveConfirmationStateRoot,
   LedgerError,
 } from "./ledger.js";
-export type { LedgerEntry, LedgerEntryStatus, LedgerErrorCode } from "./ledger.js";
+export type {
+  ClaimForExecuteResult,
+  LedgerEntry,
+  LedgerEntryStatus,
+  LedgerErrorCode,
+} from "./ledger.js";
 
 export {
   buildBodyManifest,

@@ -3,10 +3,11 @@ import { assertNoLeakPaths, redactText } from "../../core/redact.js";
 import { createUnavailableAdapter } from "./adapter.js";
 import {
   ConfirmationError,
-  consumeConfirmationNonce,
-  markConfirmationTerminalUncertain,
+  claimConfirmationForExecute,
   openConfirmationLedger,
   parseConfirmationToken,
+  tryConsumeConfirmationNonce,
+  tryMarkConfirmationTerminalUncertain,
   ConfirmationLedger,
 } from "./confirmation.js";
 import { receiptHash } from "./idempotency.js";
@@ -94,6 +95,8 @@ function resolveLedger(options: ActionConfirmOptions): ConfirmationLedger {
  * Confirm or cancel a separately previewed upstream action.
  * Cancellation / auth unavailable remain pure draft — never simulate success.
  * Ambiguous timeout queries remote by idempotency key; never blind-retries.
+ * Before adapter.execute, exclusive claim CAS persists registered → in_flight
+ * (crash-safe; concurrent losers never execute).
  * Cancel / success / uncertain permanently terminate the nonce in the durable ledger.
  */
 export function confirmUpstreamAction(
@@ -146,6 +149,9 @@ export function confirmUpstreamAction(
       } else if (e.code === "REPLAYED_CONFIRMATION") {
         status = "REPLAYED_CONFIRMATION";
         code = e.code;
+      } else if (e.code === "IN_FLIGHT_CONFIRMATION") {
+        status = "IN_FLIGHT_NO_RETRY";
+        code = e.code;
       } else if (e.code === "UNREGISTERED_CONFIRMATION") {
         status = "INVALID_CONFIRMATION";
         code = e.code;
@@ -165,8 +171,18 @@ export function confirmUpstreamAction(
   }
 
   // Cancellation: pure draft; consume nonce so it cannot be confirmed later.
+  // Cancel does not claim/execute — registered → consumed under ledger lock.
   if (decision === "cancel") {
-    consumeConfirmationNonce(binding.nonce, ledger, options.nowMs);
+    tryConsumeConfirmationNonce(binding.nonce, ledger, options.nowMs);
+    // If consume failed, try terminal_uncertain rather than leave registered.
+    const still = ledger.getEntry(binding.nonce, options.nowMs);
+    if (still && still.status === "registered") {
+      tryMarkConfirmationTerminalUncertain(
+        binding.nonce,
+        ledger,
+        options.nowMs,
+      );
+    }
     return emptyConfirm({
       ok: true,
       status: "CANCELLED",
@@ -205,6 +221,7 @@ export function confirmUpstreamAction(
 
   // Auth / adapter unavailable: pure draft, never simulate success.
   // Nonce stays registered so a later confirm can proceed when capability exists.
+  // Must NOT claim before this gate (claim would block legitimate retry).
   if (
     !auth_capability.authenticated ||
     auth_capability.kind === "unavailable"
@@ -232,7 +249,57 @@ export function confirmUpstreamAction(
     });
   }
 
-  // Execute via injected adapter only (host owns real gh/browser).
+  // --- Exclusive claim BEFORE adapter.execute (cross-process CAS) ---
+  const claim = claimConfirmationForExecute(
+    binding.nonce,
+    ledger,
+    options.nowMs,
+    binding.binding_sha256,
+  );
+  if (!claim.ok) {
+    let status: ActionConfirmStatus = "REPLAYED_CONFIRMATION";
+    let code = "REPLAYED_CONFIRMATION";
+    if (claim.reason === "in_flight" || claim.reason === "lock_busy") {
+      status = "IN_FLIGHT_NO_RETRY";
+      code =
+        claim.reason === "lock_busy"
+          ? "LEDGER_LOCK_BUSY"
+          : "IN_FLIGHT_NO_RETRY";
+    } else if (claim.reason === "expired") {
+      status = "EXPIRED_CONFIRMATION";
+      code = "EXPIRED_CONFIRMATION";
+    } else if (
+      claim.reason === "not_registered" ||
+      claim.reason === "binding_mismatch" ||
+      claim.reason === "invalid_status" ||
+      claim.reason === "io"
+    ) {
+      status = "INVALID_CONFIRMATION";
+      code = `CLAIM_${claim.reason.toUpperCase()}`;
+    }
+    return emptyConfirm({
+      ok: false,
+      status,
+      action: binding.action,
+      decision,
+      confirmation_id: binding.confirmation_id,
+      idempotency_key: binding.idempotency_key,
+      auth_capability,
+      local_incident,
+      error_code: code,
+      error_message:
+        claim.reason === "in_flight"
+          ? "Confirmation already in_flight; refuse concurrent execute."
+          : claim.reason === "lock_busy"
+            ? "Confirmation ledger lock busy; fail-closed without execute."
+            : "Confirmation claim refused; no execute.",
+    });
+  }
+
+  // From here: durable claim is in_flight. Never restore registered.
+  // Any path that may have produced remote side effects stays claimed
+  // (in_flight or terminal_uncertain) and never allows a second execute.
+
   let exec;
   try {
     exec = adapter.execute({
@@ -244,9 +311,15 @@ export function confirmUpstreamAction(
       confirmation_id: binding.confirmation_id,
     });
   } catch {
+    // Execute threw: side effects unknown — keep claim, UNCERTAIN_NO_RETRY.
+    tryMarkConfirmationTerminalUncertain(
+      binding.nonce,
+      ledger,
+      options.nowMs,
+    );
     return emptyConfirm({
       ok: false,
-      status: "FAILED",
+      status: "UNCERTAIN_NO_RETRY",
       action: binding.action,
       decision,
       confirmation_id: binding.confirmation_id,
@@ -256,14 +329,21 @@ export function confirmUpstreamAction(
       network_used: true,
       external_write: false,
       error_code: "ADAPTER_EXECUTE_ERROR",
-      error_message: "Adapter execute threw; no success claimed.",
+      error_message:
+        "Adapter execute threw after claim; refuse retry (UNCERTAIN_NO_RETRY).",
     });
   }
 
   if (exec.outcome === "auth_unavailable") {
+    // Post-claim auth failure: do not restore registered; keep terminal claim.
+    tryMarkConfirmationTerminalUncertain(
+      binding.nonce,
+      ledger,
+      options.nowMs,
+    );
     return emptyConfirm({
       ok: false,
-      status: "AUTH_UNAVAILABLE",
+      status: "UNCERTAIN_NO_RETRY",
       action: binding.action,
       decision,
       confirmation_id: binding.confirmation_id,
@@ -272,14 +352,15 @@ export function confirmUpstreamAction(
       local_incident,
       network_used: true,
       external_write: false,
-      error_code: exec.error_code ?? "AUTH_UNAVAILABLE",
+      error_code: exec.error_code ?? "AUTH_UNAVAILABLE_AFTER_CLAIM",
       error_message:
-        exec.error_message ?? "Auth unavailable; pure draft retained.",
+        exec.error_message ??
+        "Auth unavailable after exclusive claim; refuse retry.",
     });
   }
 
   if (exec.outcome === "duplicate_existing") {
-    consumeConfirmationNonce(binding.nonce, ledger, options.nowMs);
+    tryConsumeConfirmationNonce(binding.nonce, ledger, options.nowMs);
     const url = exec.canonical_url ?? binding.canonical_target;
     const ts = exec.timestamp ?? new Date(options.nowMs ?? Date.now()).toISOString();
     const receipt = buildReceipt({
@@ -310,7 +391,11 @@ export function confirmUpstreamAction(
     try {
       query = adapter.queryByIdempotencyKey(binding.idempotency_key);
     } catch {
-      markConfirmationTerminalUncertain(binding.nonce, ledger, options.nowMs);
+      tryMarkConfirmationTerminalUncertain(
+        binding.nonce,
+        ledger,
+        options.nowMs,
+      );
       return emptyConfirm({
         ok: false,
         status: "UNCERTAIN_NO_RETRY",
@@ -329,7 +414,7 @@ export function confirmUpstreamAction(
     }
 
     if (query.outcome === "found" && query.receipt) {
-      consumeConfirmationNonce(binding.nonce, ledger, options.nowMs);
+      tryConsumeConfirmationNonce(binding.nonce, ledger, options.nowMs);
       return emptyConfirm({
         ok: true,
         status: "DUPLICATE_EXISTING",
@@ -347,7 +432,11 @@ export function confirmUpstreamAction(
 
     // not_found or uncertain → stop UNCERTAIN_NO_RETRY (never blind retry)
     // Persist terminal_uncertain so the same token cannot re-execute.
-    markConfirmationTerminalUncertain(binding.nonce, ledger, options.nowMs);
+    tryMarkConfirmationTerminalUncertain(
+      binding.nonce,
+      ledger,
+      options.nowMs,
+    );
     return emptyConfirm({
       ok: false,
       status: "UNCERTAIN_NO_RETRY",
@@ -368,6 +457,12 @@ export function confirmUpstreamAction(
   }
 
   if (exec.outcome === "failed") {
+    // Post-claim remote failure: keep claim (may have partial side effects).
+    tryMarkConfirmationTerminalUncertain(
+      binding.nonce,
+      ledger,
+      options.nowMs,
+    );
     return emptyConfirm({
       ok: false,
       status: "FAILED",
@@ -386,7 +481,11 @@ export function confirmUpstreamAction(
 
   // success
   if (!exec.canonical_url || !exec.timestamp) {
-    markConfirmationTerminalUncertain(binding.nonce, ledger, options.nowMs);
+    tryMarkConfirmationTerminalUncertain(
+      binding.nonce,
+      ledger,
+      options.nowMs,
+    );
     return emptyConfirm({
       ok: false,
       status: "UNCERTAIN_NO_RETRY",
@@ -404,7 +503,8 @@ export function confirmUpstreamAction(
     });
   }
 
-  consumeConfirmationNonce(binding.nonce, ledger, options.nowMs);
+  // markConsumed may fail; durable in_flight remains safe terminal (no second execute).
+  tryConsumeConfirmationNonce(binding.nonce, ledger, options.nowMs);
   const receipt = buildReceipt({
     action: binding.action,
     canonical_url: exec.canonical_url,

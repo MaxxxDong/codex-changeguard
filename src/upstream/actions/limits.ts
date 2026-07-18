@@ -27,6 +27,16 @@ export const CONFIRMATION_LEDGER_KEY_FILE = "confirmation.hmac.key";
 export const CONFIRMATION_LEDGER_DIR_MODE = 0o700;
 export const CONFIRMATION_LEDGER_FILE_MODE = 0o600;
 
+/**
+ * Cross-process exclusive claim lock (atomic mkdir; no flock/child_process).
+ * Stale reclaim is age-bounded; live locks fail closed after wait budget.
+ */
+export const CONFIRMATION_LEDGER_LOCK_NAME = "confirmation-ledger.lock";
+export const CONFIRMATION_LEDGER_LOCK_STALE_MS = 30_000;
+export const CONFIRMATION_LEDGER_LOCK_WAIT_MS = 2_000;
+export const CONFIRMATION_LEDGER_LOCK_POLL_MS = 25;
+export const CONFIRMATION_LEDGER_OWNER_BYTES = 16;
+
 /** Forbidden privacy keys on action/confirm envelopes (never accepted). */
 export const FORBIDDEN_ACTION_KEYS = Object.freeze([
   "cookie",
