@@ -297,54 +297,283 @@ export function readMacosCodexVersionProvenance(
   return { available: false, version: null, provenance: "unavailable" };
 }
 
+/** Protected system / package roots — any hit is refused (after realpath). */
+export const PROTECTED_ROOTS = [
+  "/Applications",
+  "/System",
+  "/Library",
+  "/usr",
+  "/bin",
+  "/sbin",
+  "/private/var/db",
+  "/var/db",
+  "/root",
+  "/etc",
+  "/private/etc",
+  "/dev",
+  "/private/var/root",
+] as const;
+
+export interface DisposableTargetOptions {
+  /**
+   * Extra allowed roots for disposable writes (e.g. repo `.grok-output/verification`).
+   * Each is realpath'd when present.
+   */
+  allowedRoots?: string[];
+  /**
+   * When true (default), existing paths must resolve under a trusted temp or
+   * allowed root. Deny-only checks always apply.
+   */
+  requireTrustedRoot?: boolean;
+}
+
+function tryRealpath(abs: string): string | null {
+  try {
+    return fs.realpathSync.native(abs);
+  } catch {
+    return null;
+  }
+}
+
+function pathIsUnder(root: string, candidate: string): boolean {
+  const r = path.resolve(root);
+  const c = path.resolve(candidate);
+  if (c === r) return true;
+  const prefix = r.endsWith(path.sep) ? r : r + path.sep;
+  return c.startsWith(prefix);
+}
+
+function isProtectedPath(abs: string): boolean {
+  for (const root of PROTECTED_ROOTS) {
+    if (pathIsUnder(root, abs)) return true;
+  }
+  return false;
+}
+
 /**
- * Prove a candidate absolute path is not the active user Codex home
- * and is not a protected system location. Used by harness isolation only;
- * public outputs never include the raw path.
+ * Trusted disposable roots: realpath(os.tmpdir()), TMPDIR, and optional extras.
+ * Public outputs never embed these paths.
+ */
+export function listTrustedDisposableRoots(
+  extraAllowed: string[] = [],
+): string[] {
+  const roots: string[] = [];
+  const add = (p: string | null | undefined) => {
+    if (!p || typeof p !== "string" || p.length === 0) return;
+    const resolved = path.resolve(p);
+    const real = tryRealpath(resolved) ?? resolved;
+    if (!roots.includes(real)) roots.push(real);
+  };
+  add(os.tmpdir());
+  add(process.env.TMPDIR);
+  add(process.env.TMP);
+  add(process.env.TEMP);
+  // Common macOS temp firmlink targets (only as allow roots, never as write-into-protected).
+  add("/tmp");
+  add("/private/tmp");
+  add("/var/folders");
+  add("/private/var/folders");
+  for (const e of extraAllowed) add(e);
+  return roots;
+}
+
+/**
+ * Read-only, path-free witness of active ~/.codex existence + coarse metadata.
+ * Never reads secret file contents; only directory metadata and top-level names.
+ */
+export function captureActiveCodexHomeWitness(
+  homeDir?: string | null,
+): { digest: string; present: boolean } {
+  const home =
+    homeDir ?? process.env.HOME ?? process.env.USERPROFILE ?? null;
+  if (!home || home.length === 0) {
+    return {
+      digest: sha256Text("active_codex:v1:no_home"),
+      present: false,
+    };
+  }
+  const active = path.resolve(path.join(home, ".codex"));
+  let lst: fs.Stats;
+  try {
+    lst = fs.lstatSync(active);
+  } catch {
+    return {
+      digest: sha256Text("active_codex:v1:absent"),
+      present: false,
+    };
+  }
+  if (lst.isSymbolicLink()) {
+    // Symlink active home is treated as present-but-alias; still path-free digest.
+    let targetType = "symlink";
+    try {
+      const st = fs.statSync(active);
+      targetType = st.isDirectory() ? "symlink_dir" : "symlink_other";
+    } catch {
+      targetType = "symlink_dangling";
+    }
+    return {
+      digest: sha256Text(
+        `active_codex:v1:${targetType}|ino=${lst.ino}|dev=${lst.dev}|mode=${lst.mode}|uid=${lst.uid}|gid=${lst.gid}|mtime=${Math.trunc(lst.mtimeMs)}|nlink=${lst.nlink}`,
+      ),
+      present: true,
+    };
+  }
+  const parts = [
+    "active_codex:v1",
+    lst.isDirectory() ? "dir" : lst.isFile() ? "file" : "other",
+    `ino=${lst.ino}`,
+    `dev=${lst.dev}`,
+    `mode=${lst.mode}`,
+    `uid=${lst.uid}`,
+    `gid=${lst.gid}`,
+    `mtime=${Math.trunc(lst.mtimeMs)}`,
+    `ctime=${Math.trunc(lst.ctimeMs)}`,
+    `nlink=${lst.nlink}`,
+    `size=${lst.size}`,
+  ];
+  if (lst.isDirectory()) {
+    try {
+      const names = fs.readdirSync(active).sort();
+      // Bound listing — names only, no file contents (privacy).
+      const bounded = names.slice(0, 64).join(",");
+      parts.push(`entries=${names.length}`, `names=${bounded}`);
+    } catch {
+      parts.push("entries=unreadable");
+    }
+  }
+  return { digest: sha256Text(parts.join("|")), present: true };
+}
+
+/**
+ * Prove a candidate absolute path is not the active user Codex home,
+ * not a protected system location, and not a symlink/firmlink alias escape.
+ * Used by harness isolation only; public outputs never include the raw path.
  */
 export function assertDisposableTarget(
   targetAbs: string,
   homeDir?: string | null,
-): { ok: true } | { ok: false; code: string } {
+  options: DisposableTargetOptions = {},
+): { ok: true; real: string } | { ok: false; code: string } {
+  if (
+    typeof targetAbs !== "string" ||
+    targetAbs.length === 0 ||
+    targetAbs.length > 4096 ||
+    targetAbs.includes("\0")
+  ) {
+    return { ok: false, code: "INVALID_TARGET" };
+  }
+
   const resolved = path.resolve(targetAbs);
   const home =
     homeDir ??
     process.env.HOME ??
     process.env.USERPROFILE ??
     null;
-  if (home && home.length > 0) {
-    const activeCodex = path.resolve(path.join(home, ".codex"));
-    if (
-      resolved === activeCodex ||
-      resolved.startsWith(activeCodex + path.sep)
-    ) {
-      return { ok: false, code: "ACTIVE_CODEX_PROFILE_REFUSED" };
-    }
-  }
-  // Protected system roots — never mutate.
-  const protectedRoots = [
-    "/Applications",
-    "/System",
-    "/Library",
-    "/usr",
-    "/bin",
-    "/sbin",
-    "/private/var/db",
-  ];
-  for (const root of protectedRoots) {
-    if (resolved === root || resolved.startsWith(root + path.sep)) {
-      // Allow only under disposable temp; /Applications itself is protected.
-      // Temp dirs are typically /var/folders or /tmp — not under these roots.
-      if (root === "/Applications" || root === "/System" || root === "/Library") {
-        return { ok: false, code: "PROTECTED_ROOT_REFUSED" };
+
+  const denyPath = (abs: string): string | null => {
+    if (home && home.length > 0) {
+      const homeResolved = path.resolve(home);
+      const activeCodex = path.resolve(path.join(home, ".codex"));
+      // Refuse active profile and the entire home tree as mutation targets.
+      if (pathIsUnder(activeCodex, abs) || abs === activeCodex) {
+        return "ACTIVE_CODEX_PROFILE_REFUSED";
+      }
+      if (pathIsUnder(homeResolved, abs) && abs === homeResolved) {
+        return "HOME_ROOT_REFUSED";
+      }
+      // Also refuse HOME/.codex via realpath aliases.
+      const homeReal = tryRealpath(homeResolved);
+      if (homeReal) {
+        const activeReal = path.join(homeReal, ".codex");
+        if (pathIsUnder(activeReal, abs) || abs === activeReal) {
+          return "ACTIVE_CODEX_PROFILE_REFUSED";
+        }
       }
     }
+    if (isProtectedPath(abs)) {
+      return "PROTECTED_ROOT_REFUSED";
+    }
+    return null;
+  };
+
+  const deniedResolved = denyPath(resolved);
+  if (deniedResolved) {
+    return { ok: false, code: deniedResolved };
   }
-  // Refuse sudo-style paths
-  if (resolved === "/root" || resolved.startsWith("/root" + path.sep)) {
-    return { ok: false, code: "PROTECTED_ROOT_REFUSED" };
+
+  // lstat the leaf when it exists — refuse symlink leaves.
+  let lst: fs.Stats | null = null;
+  try {
+    lst = fs.lstatSync(resolved);
+  } catch {
+    lst = null;
   }
-  return { ok: true };
+
+  if (lst?.isSymbolicLink()) {
+    return { ok: false, code: "SYMLINK_REFUSED" };
+  }
+
+  // Walk parent segments: refuse if any existing segment is a symlink that
+  // redirects outside trusted roots (firmlink/symlink alias escape).
+  const real = tryRealpath(resolved);
+  if (real) {
+    const deniedReal = denyPath(real);
+    if (deniedReal) {
+      return { ok: false, code: deniedReal };
+    }
+  }
+
+  // When the path exists, require ownership by current uid when getuid is available.
+  if (lst && typeof process.getuid === "function") {
+    const uid = process.getuid();
+    if (lst.uid !== uid) {
+      return { ok: false, code: "OWNER_UID_REFUSED" };
+    }
+  }
+
+  // Existing paths (or their realpath) must sit under a trusted disposable root.
+  const requireTrusted = options.requireTrustedRoot !== false;
+  if (requireTrusted) {
+    const trusted = listTrustedDisposableRoots(options.allowedRoots ?? []);
+    const candidate = real ?? resolved;
+    // For not-yet-created paths, check the nearest existing ancestor.
+    let check = candidate;
+    if (!lst) {
+      let cursor = path.resolve(resolved);
+      while (cursor !== path.dirname(cursor)) {
+        try {
+          fs.lstatSync(cursor);
+          check = tryRealpath(cursor) ?? cursor;
+          break;
+        } catch {
+          cursor = path.dirname(cursor);
+        }
+      }
+    }
+    const underTrusted = trusted.some((t) => pathIsUnder(t, check));
+    if (!underTrusted) {
+      return { ok: false, code: "UNTRUSTED_ROOT_REFUSED" };
+    }
+  }
+
+  return { ok: true, real: real ?? resolved };
+}
+
+/**
+ * Assert harness output directory passes the isolation gate.
+ * Allowed only under trusted temp roots or explicitly listed allowedRoots
+ * (typically audited repo `.grok-output/verification`).
+ */
+export function assertHarnessOutputDir(
+  outDir: string,
+  homeDir?: string | null,
+  options: DisposableTargetOptions = {},
+): { ok: true; real: string } | { ok: false; code: string } {
+  return assertDisposableTarget(outDir, homeDir, {
+    requireTrustedRoot: true,
+    allowedRoots: options.allowedRoots,
+    ...options,
+  });
 }
 
 /** Stable isolation digest (hashes only; no paths). */
@@ -354,6 +583,8 @@ export function isolationDigestOf(parts: {
   arch: string;
   no_sudo: true;
   disposable_only: true;
+  /** Path-free active ~/.codex witness digest bound into isolation. */
+  active_home_witness_digest: string;
 }): string {
   return sha256Text(
     [
@@ -363,6 +594,7 @@ export function isolationDigestOf(parts: {
       String(parts.scenario_count),
       "no_sudo",
       "disposable_only",
+      parts.active_home_witness_digest,
     ].join("|"),
   );
 }

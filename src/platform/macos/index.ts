@@ -4,8 +4,13 @@ export {
   readMacosCodexVersionProvenance,
   readCoarseOsVersion,
   assertDisposableTarget,
+  assertHarnessOutputDir,
+  captureActiveCodexHomeWitness,
   isolationDigestOf,
+  listTrustedDisposableRoots,
   macosRegisteredAliases,
   isMacosOperationRegistered,
+  PROTECTED_ROOTS,
   type MacosAdapterCaps,
+  type DisposableTargetOptions,
 } from "./adapter.js";

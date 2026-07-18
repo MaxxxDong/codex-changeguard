@@ -104,6 +104,11 @@ export interface IsolationProof {
   no_active_profile_mutation: true;
   /** Digest over isolation assertion material (hashes only). */
   isolation_digest: string;
+  /**
+   * Path-free witness digest of active ~/.codex (existence + coarse metadata).
+   * Bound into isolation_digest; never contains raw paths or secret contents.
+   */
+  active_home_witness_digest: string;
 }
 
 export interface ReceiptAssertions {

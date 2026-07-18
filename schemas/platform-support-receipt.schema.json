@@ -201,7 +201,8 @@
         "no_sudo",
         "no_protected_write",
         "no_active_profile_mutation",
-        "isolation_digest"
+        "isolation_digest",
+        "active_home_witness_digest"
       ],
       "properties": {
         "active_codex_home_untouched": { "const": true },
@@ -212,6 +213,11 @@
         "isolation_digest": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
+        },
+        "active_home_witness_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Path-free digest of active ~/.codex existence and coarse metadata (no secret contents)."
         }
       }
     },

@@ -27,7 +27,14 @@ export {
   scenarioHashOf,
   receiptIdOf,
   scenariosDigestOf,
+  hostCoarseFingerprintOf,
+  sealLiveHarnessWitness,
+  isLiveHarnessWitness,
+  readLiveHarnessAttestation,
   type BuildReceiptInput,
+  type LiveHarnessWitness,
+  type LiveHarnessAttestation,
+  type ValidateReceiptOptions,
 } from "./receipt.js";
 export {
   buildMacosCapabilities,
@@ -35,10 +42,15 @@ export {
   readMacosCodexVersionProvenance,
   readCoarseOsVersion,
   assertDisposableTarget,
+  assertHarnessOutputDir,
+  captureActiveCodexHomeWitness,
   isolationDigestOf,
+  listTrustedDisposableRoots,
   macosRegisteredAliases,
   isMacosOperationRegistered,
+  PROTECTED_ROOTS,
   type MacosAdapterCaps,
+  type DisposableTargetOptions,
 } from "./macos/index.js";
 export {
   platformStatus,

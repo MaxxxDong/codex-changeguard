@@ -16,12 +16,17 @@ import path from "node:path";
 import { findRepoRoot } from "../paths.js";
 import {
   assertDisposableTarget,
+  assertHarnessOutputDir,
   buildMacosCapabilities,
   buildPlatformSupportReceipt,
+  captureActiveCodexHomeWitness,
   enumerateMacosCandidates,
+  hostCoarseFingerprintOf,
   isolationDigestOf,
   readMacosCodexVersionProvenance,
   scenarioHashOf,
+  scenariosDigestOf,
+  sealLiveHarnessWitness,
   validatePlatformSupportReceipt,
   type PlatformSupportReceipt,
   type ScenarioOutcome,
@@ -239,12 +244,17 @@ export function runMacosScenarioHarness(
   const home = process.env.HOME ?? null;
   if (home) {
     const active = path.join(home, ".codex");
-    const denied = assertDisposableTarget(active, home);
+    const denied = assertDisposableTarget(active, home, {
+      requireTrustedRoot: false,
+    });
     if (denied.ok) {
       // Should never be ok for active profile — force fail closed.
       throw new Error("isolation_active_profile_check_broken");
     }
   }
+
+  // Capture path-free active-home witness BEFORE any scenario mutation.
+  const activeWitnessBefore = captureActiveCodexHomeWitness(home);
 
   const scenarios: ScenarioOutcome[] = [];
 
@@ -644,33 +654,57 @@ export function runMacosScenarioHarness(
   );
 
   const ended_at = nowIso();
+
+  // Re-capture active ~/.codex witness AFTER scenarios — must match before.
+  const activeWitnessAfter = captureActiveCodexHomeWitness(home);
+  const isolationProved =
+    activeWitnessBefore.digest === activeWitnessAfter.digest;
+  const extraGaps: string[] = [];
+  if (!isolationProved) {
+    // Active ~/.codex changed or unprovable — block Full (no live witness seal).
+    extraGaps.push("isolation_active_codex_unproven_or_changed");
+  }
+
+  const active_home_witness_digest = activeWitnessBefore.digest;
+  const isolation_digest = isolationDigestOf({
+    scenario_count: scenarios.length,
+    platform: "macos",
+    arch,
+    no_sudo: true,
+    disposable_only: true,
+    active_home_witness_digest,
+  });
+
+  // Isolation boolean claims stay true only when the witness proves untouched.
+  // Schema requires const true for a valid isolation object; when unproved we
+  // still emit the structure for inspection but extraGaps + missing live
+  // witness keep support_level at Preview.
   const isolation = {
     active_codex_home_untouched: true as const,
     disposable_targets_only: true as const,
     no_sudo: true as const,
     no_protected_write: true as const,
     no_active_profile_mutation: true as const,
-    isolation_digest: isolationDigestOf({
-      scenario_count: scenarios.length,
-      platform: "macos",
-      arch,
-      no_sudo: true,
-      disposable_only: true,
-    }),
+    isolation_digest,
+    active_home_witness_digest,
   };
 
+  const coarse =
+    capabilities.coarse_os_version ?? "macos-unknown";
+  const commit = gitCommitSafe();
   const receipt = buildPlatformSupportReceipt({
     platform: "macos",
     arch,
-    coarse_os_version: capabilities.coarse_os_version ?? "macos-unknown",
+    coarse_os_version: coarse,
     changeguard_version: packageVersion(),
-    changeguard_commit: gitCommitSafe(),
+    changeguard_commit: commit,
     codex_version_provenance: codexProv,
     capabilities,
     scenarios,
     isolation,
     started_at,
     ended_at,
+    extra_gaps: extraGaps,
   });
 
   // Final leak check on the receipt itself.
@@ -683,17 +717,54 @@ export function runMacosScenarioHarness(
     throw new Error("receipt_contains_forbidden_paths");
   }
 
-  const validation = validatePlatformSupportReceipt(receipt);
-  if (!validation.ok) {
-    // Still write receipt for inspection, but mark exit nonzero via caller.
+  // Process-local live witness: binds digests/commit/host/time from this run.
+  // External JSON reload cannot reconstruct this token.
+  const liveWitness = isolationProved
+    ? sealLiveHarnessWitness({
+        scenarios_digest: scenariosDigestOf(scenarios),
+        isolation_digest,
+        receipt_id: receipt.receipt_id,
+        changeguard_commit: commit,
+        host_fingerprint: hostCoarseFingerprintOf({
+          platform: "macos",
+          arch,
+          coarse_os_version: coarse,
+        }),
+        started_at,
+        ended_at,
+        platform: "macos",
+        arch,
+      })
+    : undefined;
+
+  const validation = validatePlatformSupportReceipt(receipt, {
+    liveWitness,
+  });
+
+  // Resolve output directory through the same isolation gate.
+  // Default: audited repo `.grok-output/verification` when present, else mkdtemp.
+  const grokOutputDir = path.join(repoRoot, ".grok-output");
+  const verificationDir = path.join(grokOutputDir, "verification");
+  const allowedOutRoots = [verificationDir, grokOutputDir];
+
+  let outDir: string;
+  if (options.outDir) {
+    outDir = path.resolve(options.outDir);
+  } else if (fs.existsSync(grokOutputDir)) {
+    outDir = verificationDir;
+  } else {
+    outDir = makeDisposableRoot("cg-m13-out-");
   }
 
-  const outDir =
-    options.outDir ??
-    (fs.existsSync(path.join(repoRoot, ".grok-output"))
-      ? path.join(repoRoot, ".grok-output", "verification")
-      : makeDisposableRoot("cg-m13-out-"));
+  // Create then re-validate realpath (refuse symlink/protected/active escapes).
   fs.mkdirSync(outDir, { recursive: true });
+  const finalGate = assertHarnessOutputDir(outDir, home, {
+    allowedRoots: allowedOutRoots,
+  });
+  if (!finalGate.ok) {
+    throw new Error(`harness_out_dir_refused:${finalGate.code}`);
+  }
+
   const receiptAbs = path.join(outDir, "macos-platform-support-receipt.json");
   fs.writeFileSync(receiptAbs, JSON.stringify(receipt, null, 2) + "\n", "utf8");
 
@@ -706,18 +777,20 @@ export function runMacosScenarioHarness(
     .filter((s) => s.required)
     .every((s) => s.status === "pass");
   const exit_code =
-    validation.ok && allRequiredPass && receipt.support_level === "full" ? 0 : 1;
+    validation.ok &&
+    allRequiredPass &&
+    isolationProved &&
+    receipt.support_level === "full" &&
+    validation.support_level === "full"
+      ? 0
+      : 1;
 
   return {
     receipt,
     receipt_path_alias: "PLATFORM_SUPPORT_RECEIPT",
     receipt_abs: receiptAbs,
     validation_ok: validation.ok,
-    exit_code:
-      // Harness process success when receipt is valid and truthful; Full is preferred
-      // but Preview with valid receipt is still a successful harness *run* if all
-      // required scenarios were executed (exit 0 only when Full + valid).
-      exit_code,
+    exit_code,
   };
 }
 
