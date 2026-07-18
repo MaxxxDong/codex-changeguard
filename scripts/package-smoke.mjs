@@ -1014,6 +1014,146 @@ if (
   );
 }
 
+// Ticket 12: followup CLI + MCP + schema + SessionStart follow-up state (no network).
+const followupSchemaPkg = path.join(packageDir, "schemas", "followup-result.schema.json");
+if (!fs.existsSync(followupSchemaPkg)) {
+  fail("Package missing schemas/followup-result.schema.json");
+}
+const followupSchemaObj = JSON.parse(fs.readFileSync(followupSchemaPkg, "utf8"));
+if (
+  followupSchemaObj.additionalProperties !== false ||
+  followupSchemaObj.properties?.network_used?.const !== false
+) {
+  fail("Packaged followup-result schema must be closed with network_used:false");
+}
+const followupStateSmoke = fs.mkdtempSync(path.join(os.tmpdir(), "cg-t12-followup-"));
+const followupCli = spawnSync(
+  process.execPath,
+  [
+    path.join(packageDir, "bin/changeguard.js"),
+    "followup",
+    "status",
+    fixtureDest,
+    `--state-dir=${followupStateSmoke}`,
+  ],
+  {
+    cwd: outside,
+    encoding: "utf8",
+    env: { ...process.env, NO_COLOR: "1" },
+  },
+);
+if (followupCli.status !== 0) {
+  fail(
+    `Packaged followup status must exit 0; status=${followupCli.status}\n${followupCli.stdout}\n${followupCli.stderr}`,
+  );
+}
+let followupCliResult;
+try {
+  followupCliResult = JSON.parse(followupCli.stdout);
+} catch {
+  fail("Packaged followup status stdout is not JSON.");
+}
+if (
+  followupCliResult.ok !== true ||
+  followupCliResult.operation !== "status" ||
+  followupCliResult.network_used !== false ||
+  followupCliResult.external_write !== false
+) {
+  fail(`Packaged followup status contract failed: ${JSON.stringify(followupCliResult)}`);
+}
+
+const mcpFollowupList = await new Promise((resolve, reject) => {
+  const child = spawn(mcpCommand, mcpArgs, {
+    cwd: mcpCwd,
+    stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, NO_COLOR: "1" },
+  });
+  let buf = "";
+  const timer = setTimeout(() => {
+    child.kill();
+    reject(new Error("MCP followup tools/list timeout"));
+  }, 10000);
+  timer.unref?.();
+  child.stdout.on("data", (chunk) => {
+    buf += chunk.toString("utf8");
+    let idx;
+    while ((idx = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+      if (!line.trim()) continue;
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (msg.id === 1 && msg.result) {
+        child.stdin.write(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 2,
+            method: "tools/list",
+            params: {},
+          }) + "\n",
+        );
+      }
+      if (msg.id === 2) {
+        clearTimeout(timer);
+        child.kill();
+        if (msg.error) {
+          reject(new Error(JSON.stringify(msg.error)));
+          return;
+        }
+        resolve(msg.result);
+      }
+    }
+  });
+  child.on("error", reject);
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "package-smoke-followup", version: "0.1.0" },
+      },
+    }) + "\n",
+  );
+  child.stdin.write(
+    JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) +
+      "\n",
+  );
+});
+const toolNames = (mcpFollowupList?.tools ?? []).map((t) => t.name);
+if (!toolNames.includes("changeguard_followup")) {
+  fail(`MCP tools/list must include changeguard_followup; got ${toolNames.join(",")}`);
+}
+const followupTool = (mcpFollowupList.tools ?? []).find(
+  (t) => t.name === "changeguard_followup",
+);
+if (followupTool?.inputSchema?.additionalProperties !== false) {
+  fail("changeguard_followup inputSchema must set additionalProperties:false");
+}
+
+const hook3 = spawnSync(process.execPath, [entryAbs], {
+  cwd: hookCwd,
+  encoding: "utf8",
+  env: {
+    ...hookEnv,
+    PLUGIN_DATA: pluginData,
+  },
+  input: hookInput,
+  maxBuffer: 2 * 1024 * 1024,
+});
+if (hook3.status !== 0) {
+  fail(`SessionStart with follow-up state must exit 0; got ${hook3.status}`);
+}
+if ((hook3.stdout || "").includes(pluginData) || (hook3.stdout || "").includes(packageDir)) {
+  fail("SessionStart must not leak plugin paths when follow-up integrated.");
+}
+
 console.log(
   JSON.stringify(
     {
@@ -1048,6 +1188,10 @@ console.log(
       ticket11_action_confirm_adapter_unavailable: true,
       ticket11_blocked_capsule_refused: true,
       ticket11_no_real_adapter: true,
+      ticket12_followup_schema: true,
+      ticket12_followup_cli_status: true,
+      ticket12_followup_mcp_listed: true,
+      ticket12_session_start_no_path_leak: true,
     },
     null,
     2,

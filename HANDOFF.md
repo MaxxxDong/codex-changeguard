@@ -18,7 +18,7 @@
 - Ticket 09 (Desktop Browser crash-family classifier): `LOCAL_COMPLETE` / integrated as `a7e1cea` (+ hard-gate `45c79b5`), verified on `5aa12c6c7370d9da84be3078c14fc63cf7e90fec`
 - Ticket 10 (upstream draft routing preview): `LOCAL_COMPLETE` / integrated through `0829936` → `7ef87e6` → `26d58b4` → `3265acd`, verified on `3265acd11fa260d4e2c857705a73bd36b7b002b6`
 - Ticket 11 (confirmed upstream actions): `LOCAL_COMPLETE` for local confirmation/action engine on `407789c` — **no production external adapter**; no real GitHub/browser write exercised or authorized
-- Ticket 12 (maintainer follow-up / upstream fix): not complete
+- Ticket 12 (maintainer follow-up / upstream fix): Phase B product wiring **review-ready candidate** in this clone (not root-reviewed; no external submission)
 - Ticket 13 (macOS Full support): `LOCAL_COMPLETE` with receipt-scoped real-machine macOS Full harness evidence on this host (not universal macOS/Codex coverage)
 - Ticket 14 (Windows 11 validation): framework integrated; platform remains **PREVIEW** (no real Windows 11 W11-S01…S11 receipt; external JSON cannot Full; Full also requires process-local live witness)
 - Ticket 15 (Linux/WSL/enterprise): framework integrated; platform remains **Limited / Read-only** (no real host receipt; public writes disabled by default)
@@ -28,6 +28,14 @@
 - Gate C: not authorized
 - No public publication, upload, or submission has occurred
 - Real external GitHub writes: unauthorized / `NOT_STARTED`
+
+
+## Ticket 12 Phase B candidate evidence (this clone)
+
+- Base commit: `65fca8d` (Phase A accepted)
+- Status: **review-ready candidate** — not root-reviewed; no external submission / Gate C / GitHub write
+- Verification (this disposable clone): `npm test` 468/468; typecheck; build; `check:boundary` product_ok; boundary self-test 175/175; `npm run package` + `package:smoke` (includes `changeguard_followup` / followup CLI / schema); `git diff --check` clean
+- Does **not** complete Tickets 16–17, registration, or whole-product closeout
 
 ## Canonical documents
 

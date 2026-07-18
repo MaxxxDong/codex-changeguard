@@ -1583,7 +1583,12 @@ test("Ticket12 P1-A: candidate_version equal to pinned commit full title refused
     }),
   );
   assert.equal(r.ok, false);
-  assert.equal(r.error_code, "CANDIDATE_VERSION_UNBOUND");
+  // P2-2: closed x.y.z gate fails first as INVALID_VERSION (equivalent refuse).
+  assert.ok(
+    r.error_code === "INVALID_VERSION" ||
+      r.error_code === "CANDIDATE_VERSION_UNBOUND",
+    r.error_code ?? "",
+  );
   assert.notEqual(r.status, "SUPERSEDED");
 });
 
@@ -1597,7 +1602,11 @@ test("Ticket12 P1-A: candidate_version equal to commit hash/URL tail refused", (
     }),
   );
   assert.equal(r.ok, false);
-  assert.equal(r.error_code, "CANDIDATE_VERSION_UNBOUND");
+  assert.ok(
+    r.error_code === "INVALID_VERSION" ||
+      r.error_code === "CANDIDATE_VERSION_UNBOUND",
+    r.error_code ?? "",
+  );
 });
 
 test("Ticket12 P1-B: mechanism-unrelated config commit with matching version_range.to refused", () => {
@@ -1719,40 +1728,36 @@ test("Ticket12 P1-C: correct official + same-target witness supersedes once; rep
   assertNoSupersededRecipe(candidate, "p1c-once-replay");
 });
 
-test("Ticket12 P2: caller-supplied snapshot_path cannot authorize alternate official root", () => {
+test("Ticket12 P2: caller-supplied snapshot_path is refused (not supersession authority)", () => {
   const { baseline, candidate } = makeBaselineCandidatePair("cg-t12-p2-snap-");
-  // Even if a path is smuggled, public bind ignores it and uses bundled only.
-  // Mechanism-unrelated release remains refused regardless of path.
+  // Public CandidateValidationInput has no snapshot_path; smuggled field fails closed.
   const r = validateCandidateFix({
     ...baseValidateInput(candidate, baseline, {
       official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
       official_evidence_ref: OFFICIAL_RELEASE_URL,
     }),
     snapshot_path: "/tmp/forged-official-snapshot.json",
-  });
+  } as Parameters<typeof validateCandidateFix>[0] & { snapshot_path: string });
   assert.equal(r.ok, false);
-  assert.equal(r.error_code, "OFFICIAL_EVIDENCE_MECHANISM_UNRELATED");
+  assert.equal(r.error_code, "SNAPSHOT_PATH_FORBIDDEN");
+  assert.notEqual(r.version_guidance, "RECOMMEND_UPGRADE");
 
-  // Positive path still only works with real bundled mechanism-linked item.
-  const pos = validateCandidate(
-    baseValidateInput(candidate, baseline, {
-      official_evidence_item_digest: OFFICIAL_BROWSER_DIFF_DIGEST,
-      official_evidence_ref: OFFICIAL_BROWSER_DIFF_URL,
-    }),
-  );
-  // Candidate root already may have been measured; use fresh pair for clean positive.
-  void pos;
   const pair2 = makeBaselineCandidatePair("cg-t12-p2-snap2-");
   const pos2 = validateCandidate(
     {
       ...baseValidateInput(pair2.candidate, pair2.baseline),
       snapshot_path: "/tmp/forged-official-snapshot.json",
-    },
+    } as Parameters<typeof validateCandidate>[0] & { snapshot_path: string },
   );
-  assert.equal(pos2.ok, true);
-  assert.equal(pos2.status, "SUPERSEDED");
+  assert.equal(pos2.ok, false);
+  assert.equal(pos2.error_code, "SNAPSHOT_PATH_FORBIDDEN");
+  // Clean positive path without snapshot_path still works with bundled official only.
+  const pair3 = makeBaselineCandidatePair("cg-t12-p2-snap3-");
+  const pos3 = validateCandidate(baseValidateInput(pair3.candidate, pair3.baseline));
+  assert.equal(pos3.ok, true);
+  assert.equal(pos3.status, "SUPERSEDED");
   assert.equal(
-    pos2.candidate?.official_evidence_item_digest,
+    pos3.candidate?.official_evidence_item_digest,
     OFFICIAL_BROWSER_DIFF_DIGEST,
   );
 });

@@ -23,6 +23,10 @@ import type {
   SystemEnumerateCaps,
 } from "../instances/types.js";
 import { runSessionStart } from "./session-start.js";
+import {
+  sessionFollowupHintFromState,
+  REFRESH_DUE_HINT,
+} from "../upstream/followup/index.js";
 
 const MAX_STDIN_BYTES = 64 * 1024;
 
@@ -103,7 +107,7 @@ export function readStdinSyncBounded(maxBytes = MAX_STDIN_BYTES): string {
 }
 
 /**
- * Format a path-free additionalContext summary for SessionStart.
+ * Format a path-free additionalContext summary for SessionStart version change.
  */
 export function formatSessionStartContext(result: ScanResult): string {
   const lines = [
@@ -126,8 +130,37 @@ export function formatSessionStartContext(result: ScanResult): string {
   return assertNoLeakPaths(redactText(lines.join("\n")));
 }
 
-export function buildSessionStartHookOutput(result: ScanResult): string {
-  const additionalContext = formatSessionStartContext(result);
+/** Path-free Ticket 12 follow-up refresh-due line (never fetches). */
+export function formatFollowupRefreshHint(): string {
+  return assertNoLeakPaths(
+    redactText(
+      `ChangeGuard follow-up: manual/local refresh is due (${REFRESH_DUE_HINT}). No network fetch.`,
+    ),
+  );
+}
+
+/**
+ * Combine version-change and follow-up hints deterministically.
+ * Order: version fingerprint block first (when present), then follow-up line.
+ */
+export function combineSessionStartContext(
+  versionBlock: string | null,
+  followupDue: boolean,
+): string | null {
+  const parts: string[] = [];
+  if (versionBlock && versionBlock.length > 0) {
+    parts.push(versionBlock);
+  }
+  if (followupDue) {
+    parts.push(formatFollowupRefreshHint());
+  }
+  if (parts.length === 0) return null;
+  return assertNoLeakPaths(redactText(parts.join("\n")));
+}
+
+export function buildSessionStartHookOutputFromContext(
+  additionalContext: string,
+): string {
   const payload = {
     hookSpecificOutput: {
       hookEventName: "SessionStart",
@@ -135,6 +168,10 @@ export function buildSessionStartHookOutput(result: ScanResult): string {
     },
   };
   return assertNoLeakPaths(redactText(JSON.stringify(payload)));
+}
+
+export function buildSessionStartHookOutput(result: ScanResult): string {
+  return buildSessionStartHookOutputFromContext(formatSessionStartContext(result));
 }
 
 export interface RunPackagedSessionStartOptions {
@@ -146,23 +183,33 @@ export interface RunPackagedSessionStartOptions {
   systemCaps?: SystemEnumerateCaps;
   /** Force hook trust for tests (production packaged path is host-trusted). */
   hookTrust?: HookTrustState;
-  /** Override state dir (tests). */
+  /** Override version-fingerprint state dir (tests). */
   stateDir?: string;
+  /**
+   * Override follow-up state dir (tests). Production uses
+   * PLUGIN_DATA/upstream-followup via resolveFollowupStateRoot.
+   */
+  followupStateDir?: string;
+  /** Override now for follow-up due checks (tests). */
+  nowMs?: number;
 }
 
 /**
  * Core packaged SessionStart runner (testable without process.exit).
+ * Combines Ticket 03 version-fingerprint hints with Ticket 12 follow-up
+ * refresh-due hints. Never network, never raw paths, never issue prose.
  */
 export function runPackagedSessionStart(opts: RunPackagedSessionStartOptions = {}): {
   exitCode: number;
   stdout: string;
   result: ScanResult | null;
+  followupDue: boolean;
 } {
   const env = opts.env ?? process.env;
   const { pluginRoot, pluginData } = resolvePluginPaths(env);
   if (!pluginRoot || !pluginData) {
     // Misconfigured host: fail closed silent success so SessionStart does not break.
-    return { exitCode: 0, stdout: "", result: null };
+    return { exitCode: 0, stdout: "", result: null, followupDue: false };
   }
 
   const raw = opts.stdinText ?? "";
@@ -178,6 +225,8 @@ export function runPackagedSessionStart(opts: RunPackagedSessionStartOptions = {
   const observed: ObservedContext = {};
 
   const stateDir = opts.stateDir ?? path.join(pluginData, "version-state");
+  const followupStateDir =
+    opts.followupStateDir ?? path.join(pluginData, "upstream-followup");
 
   const hookTrust = opts.hookTrust ?? "trusted";
   const result = runSessionStart({
@@ -189,12 +238,51 @@ export function runPackagedSessionStart(opts: RunPackagedSessionStartOptions = {
     healthBudgetMs: 10_000,
   });
 
-  if (result.silent) {
-    return { exitCode: 0, stdout: "", result };
+  // Untrusted/skipped/failed must not become a follow-up bypass or emit hints.
+  if (
+    hookTrust === "untrusted" ||
+    hookTrust === "skipped" ||
+    hookTrust === "failed" ||
+    result.hook_status === "untrusted" ||
+    result.hook_status === "skipped" ||
+    result.hook_status === "failed"
+  ) {
+    // Preserve existing non-silent error/explicit status behavior for non-trusted.
+    if (!result.silent && !result.ok) {
+      // Manual-path style: no packaged stdout for failed trust (silent success
+      // for misconfig); untrusted still returns exit 0 with empty stdout so
+      // SessionStart never breaks the host, matching prior packaged contract.
+      return { exitCode: 0, stdout: "", result, followupDue: false };
+    }
+    return { exitCode: 0, stdout: "", result, followupDue: false };
   }
 
-  const out = buildSessionStartHookOutput(result);
-  return { exitCode: 0, stdout: out + "\n", result };
+  // Trusted path only: optional follow-up refresh-due from PLUGIN_DATA state.
+  let followupDue = false;
+  try {
+    const hint = sessionFollowupHintFromState({
+      stateDir: followupStateDir,
+      nowMs: opts.nowMs,
+    });
+    followupDue =
+      hint.ok === true &&
+      hint.status === "REFRESH_DUE" &&
+      hint.session_hint === REFRESH_DUE_HINT;
+  } catch {
+    followupDue = false;
+  }
+
+  const versionChanged = result.silent !== true && result.ok === true;
+  const versionBlock = versionChanged ? formatSessionStartContext(result) : null;
+  const combined = combineSessionStartContext(versionBlock, followupDue);
+
+  if (!combined) {
+    // Neither version change nor follow-up due → exit 0, no stdout.
+    return { exitCode: 0, stdout: "", result, followupDue: false };
+  }
+
+  const out = buildSessionStartHookOutputFromContext(combined);
+  return { exitCode: 0, stdout: out + "\n", result, followupDue };
 }
 
 /** Process entry when executed as packaged hook. */

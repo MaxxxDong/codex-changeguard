@@ -3638,12 +3638,13 @@ fs.closeSync(fd);
     failures.push("temp file scan of node:net should fail");
   }
 
-  // Ticket 03 / Ticket 11: state-write allowlist is exact-file scoped, not product-global.
+  // Ticket 03 / Ticket 11 / Ticket 12: state-write allowlist is exact-file scoped, not product-global.
   {
     const writeSrc = `import fs from "node:fs";\nfs.writeFileSync("x", "y");\nfs.mkdirSync("d");\nfs.renameSync("a", "b");\nfs.unlinkSync("c");\n`;
     const stateAllow = new Set([
       "src/instances/state.ts",
       "src/upstream/actions/ledger.ts",
+      "src/upstream/followup/ledger.ts",
     ]);
     const prevPolicy = scanPolicy;
     try {
@@ -3825,6 +3826,7 @@ function main() {
     stateWriteAllowlist: [
       "src/instances/state.ts",
       "src/upstream/actions/ledger.ts",
+      "src/upstream/followup/ledger.ts",
     ],
   });
   const ok = diagnosisResult.ok && result.ok;
@@ -3838,7 +3840,7 @@ function main() {
     diagnosis_ok: diagnosisResult.ok,
     product_ok: result.ok,
     self_test_ok: true,
-    note: "Independent AST boundary evidence; diagnosis graph remains mutation-free; product graph allows ChangeGuard-owned atomic state writes only (version fingerprint + confirmation ledger).",
+    note: "Independent AST boundary evidence; diagnosis graph remains mutation-free; product graph allows ChangeGuard-owned atomic state writes only (version fingerprint + confirmation ledger + follow-up ledger).",
   };
   console.log(JSON.stringify(report, null, 2));
   if (!ok) {

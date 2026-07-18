@@ -26,6 +26,7 @@ import {
 } from "../recovery/protected-process.js";
 import { sha256Text } from "../recovery/canonical.js";
 import { proveIsolatedFixtureTarget } from "../../platform/capability.js";
+import { isPhaseACandidateVersion } from "../../evidence/official-fix-authority.js";
 
 /** Closed Phase-A profile id. Unknown profiles fail closed. */
 export const PROTECTED_PROCESS_SHIM_PROFILE_V1 = "protected_process_shim_v1" as const;
@@ -319,12 +320,12 @@ export function runRegisteredLiveMeasurement(
   }
 
   const candidate_version = input.candidate_version;
-  if (
-    typeof candidate_version !== "string" ||
-    candidate_version.length === 0 ||
-    candidate_version.length > 64
-  ) {
-    return inconclusive("INVALID_VERSION", "Invalid candidate_version.");
+  // P2-2: same closed x.y.z binder as official supersession authority.
+  if (!isPhaseACandidateVersion(candidate_version)) {
+    return inconclusive(
+      "INVALID_VERSION",
+      "Invalid candidate_version (closed Phase A numeric dotted x.y.z required).",
+    );
   }
 
   if (

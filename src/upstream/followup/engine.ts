@@ -360,13 +360,16 @@ export function followupStatus(input: StatusInput): FollowupResult {
 }
 
 /**
- * SessionStart seam: path-free local "refresh due" hint only; never fetch.
- * Silent when no subscription is due.
+ * State-only follow-up refresh-due read (no target path, no network, no mutation).
+ * Used by packaged SessionStart under PLUGIN_DATA. Public CLI/MCP keep path checks
+ * via sessionFollowupHint unless stateOnly is set.
  */
-export function sessionFollowupHint(input: SessionHintInput): FollowupResult {
+export function sessionFollowupHintFromState(input: {
+  nowMs?: number;
+  stateDir?: string;
+}): FollowupResult {
   const op: FollowupOperation = "session_hint";
   try {
-    resolveTargetDirectory(input.targetPath);
     const nowMs = nowOf(input.nowMs);
     const root = stateRoot(input.stateDir);
     const ledger = loadFollowupLedger(root, nowMs);
@@ -408,6 +411,38 @@ export function sessionFollowupHint(input: SessionHintInput): FollowupResult {
       target_mutated: false,
       adapter_status: "not_applicable",
       contribution_claim: "none",
+    });
+  } catch (e) {
+    return mapError(op, e);
+  }
+}
+
+/**
+ * SessionStart seam: path-free local "refresh due" hint only; never fetch.
+ * Silent when no subscription is due.
+ * Public path: requires targetPath and validates isolation unless stateOnly.
+ */
+export function sessionFollowupHint(input: SessionHintInput): FollowupResult {
+  const op: FollowupOperation = "session_hint";
+  try {
+    if (input.stateOnly === true) {
+      return sessionFollowupHintFromState({
+        nowMs: input.nowMs,
+        stateDir: input.stateDir,
+      });
+    }
+    if (typeof input.targetPath !== "string" || input.targetPath.length === 0) {
+      return fail(
+        op,
+        "INVALID_INPUT",
+        "USAGE",
+        "targetPath required for session_hint (or use state-only packaged path).",
+      );
+    }
+    resolveTargetDirectory(input.targetPath);
+    return sessionFollowupHintFromState({
+      nowMs: input.nowMs,
+      stateDir: input.stateDir,
     });
   } catch (e) {
     return mapError(op, e);

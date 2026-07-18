@@ -19,7 +19,10 @@
 import { runCanary, supersedeRecipe } from "../../core/lifecycle/index.js";
 import { resolveTargetDirectory } from "../../core/path-safety.js";
 import type { VersionGuidance } from "../../core/lifecycle/types.js";
-import { bindOfficialEvidenceItem } from "../../evidence/official-fix-authority.js";
+import {
+  bindOfficialEvidenceItem,
+  isPhaseACandidateVersion,
+} from "../../evidence/official-fix-authority.js";
 import {
   measureWithRegisteredProfile,
   loadCandidateMeasurement,
@@ -30,10 +33,7 @@ import type {
   CandidateValidationResult,
   FollowupProbeResult,
 } from "./types.js";
-import {
-  MAX_RECIPE_ID_LEN,
-  MAX_VERSION_LEN,
-} from "./limits.js";
+import { MAX_RECIPE_ID_LEN } from "./limits.js";
 import { parseCanonicalIssue, IssueUrlError } from "./issue-url.js";
 
 // Re-export canonical binders so followup public surface stays stable.
@@ -95,12 +95,13 @@ export function validateCandidateFix(
     return baseFail("INVALID_INPUT", "INVALID_ISSUE", "Invalid issue.");
   }
 
-  if (
-    typeof input.candidate_version !== "string" ||
-    input.candidate_version.length === 0 ||
-    input.candidate_version.length > MAX_VERSION_LEN
-  ) {
-    return baseFail("INVALID_INPUT", "INVALID_VERSION", "Invalid candidate_version.");
+  // P2-2: same closed x.y.z syntax as official binder / live measurement.
+  if (!isPhaseACandidateVersion(input.candidate_version)) {
+    return baseFail(
+      "INVALID_INPUT",
+      "INVALID_VERSION",
+      "Invalid candidate_version (closed Phase A numeric dotted x.y.z required).",
+    );
   }
   if (
     typeof input.recipe_id !== "string" ||
@@ -114,8 +115,20 @@ export function validateCandidateFix(
   void input.original_fault_absent;
   void input.core_regressions_passed;
   void input.verified;
-  // Caller-controlled snapshot_path is not a trust root (P2-1); ignore if present.
-  void (input as { snapshot_path?: unknown }).snapshot_path;
+  // P2-1: public CandidateValidationInput has no snapshot_path. If a caller
+  // smuggles it via structural cast / request JSON, refuse closed (bundled
+  // official snapshot is the only supersession trust root). Ticket 04 Impact
+  // Card injection is a separate non-supersession path.
+  if (
+    Object.prototype.hasOwnProperty.call(input, "snapshot_path") ||
+    (input as { snapshot_path?: unknown }).snapshot_path !== undefined
+  ) {
+    return baseFail(
+      "REFUSED",
+      "SNAPSHOT_PATH_FORBIDDEN",
+      "Caller-controlled snapshot_path is not accepted for candidate validation; bundled official snapshot only.",
+    );
+  }
 
   // Profile must be the closed Phase-A id (or fail closed).
   const profile_id =

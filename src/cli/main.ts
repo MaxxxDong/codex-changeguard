@@ -15,10 +15,12 @@
  *   changeguard scan-system                    (production registered system adapter)
  *   changeguard session-start <inventory-root> [--hook-trust=…]  (manual fixture path)
  *   changeguard lifecycle <operation> <isolated-target> [--key=value …]
+ *   changeguard followup <operation> <isolated-target> [--request=<request.json>] [--state-dir=<dir>] …
  *   changeguard platform-status [--probe-host=true|false] [--receipt=<path>] [--plan] [--adapter=<id>]
  *   changeguard platform-receipt-validate <receipt.json>
  *
  * Ticket 11 production seams inject no real gh/browser adapter (capability unavailable).
+ * Ticket 12 follow-up is local-only (no network/daemon; external_write:false; no live witness serialization).
  * Ticket 13 platform seams are read-only (no harness spawn; Full only with real-machine receipt).
  * Ticket 14 Windows support remains PREVIEW without a real Windows 11 host receipt.
  * Ticket 15 Linux/WSL capability matrix is Limited/Read-only without a real-machine receipt.
@@ -76,6 +78,14 @@ import {
   type PlatformStatusResult,
   type ReceiptValidationResult,
 } from "../platform/index.js";
+import {
+  dispatchFollowup,
+  isFollowupOperation,
+  parseFollowupRequestJson,
+  MAX_FOLLOWUP_REQUEST_BYTES,
+  type FollowupResult,
+} from "../upstream/followup/index.js";
+import type { FollowupDispatchArgs } from "../upstream/followup/dispatch.js";
 
 const PLATFORM_ADAPTERS = new Set<AdapterId>([
   "unknown",
@@ -112,7 +122,7 @@ function usageDiagnosis(): DiagnosisResult {
     evidence: [],
     error_code: "USAGE",
     error_message:
-      "Usage: changeguard diagnose|impact|analyze-page|upstream-preview|upstream-action-preview|upstream-action-confirm|repair-preview|repair-apply|verify|rollback|scan|scan-system|session-start|lifecycle|platform-status|platform-receipt-validate …",
+      "Usage: changeguard diagnose|impact|analyze-page|upstream-preview|upstream-action-preview|upstream-action-confirm|repair-preview|repair-apply|verify|rollback|scan|scan-system|session-start|lifecycle|followup|platform-status|platform-receipt-validate …",
     network_used: false,
     target_mutated: false,
     repair_applied: false,
@@ -1209,6 +1219,244 @@ function runLifecycleCli(rest: string[]): void {
   printJson(result, result.ok ? 0 : 1);
 }
 
+/**
+ * Parse `followup <operation> <target> [--request=<json>] [--state-dir=…] [--key=value]`.
+ * Target and operation are positional and never overridden by request JSON.
+ * No witness / snapshot_path / shell / binary path may enter from JSON.
+ */
+function followupUsageError(): never {
+  const result: FollowupResult = {
+    schema_version: 1,
+    ok: false,
+    operation: "status",
+    status: "INVALID_INPUT",
+    user_resolution: {
+      status: "INCONCLUSIVE",
+      summary: "Invalid follow-up arguments.",
+      receipt_id: "cli_followup_usage",
+    },
+    upstream_contribution: {
+      status: "NONE",
+      summary: "No upstream contribution.",
+      issue_candidates: [],
+      receipt_id: "cli_followup_usage_up",
+    },
+    subscription: null,
+    subscriptions: null,
+    disposition: null,
+    intents: null,
+    probe_plan: null,
+    evidence_capsule: null,
+    reply_draft: null,
+    candidate: null,
+    ledger: null,
+    session_hint: null,
+    evidence: [],
+    error_code: "USAGE",
+    error_message:
+      "Usage: changeguard followup <operation> <isolated-target> [--request=<request.json>] [--state-dir=<dir>] [--issue=…] [--candidate-version=…] …",
+    network_used: false,
+    target_mutated: false,
+    repair_applied: false,
+    external_write: false,
+    adapter_status: "not_applicable",
+    contribution_claim: "none",
+  };
+  printJson(result, 2);
+}
+
+function runFollowupCli(rest: string[]): void {
+  const positional = rest.filter((a) => !a.startsWith("-"));
+  const flags = rest.filter((a) => a.startsWith("-"));
+  if (positional.length !== 2) {
+    followupUsageError();
+  }
+  const [operation, target] = positional;
+  if (!operation || !target || !isFollowupOperation(operation)) {
+    followupUsageError();
+  }
+  const args: FollowupDispatchArgs = {
+    target,
+    operation,
+  };
+  let requestPath: string | null = null;
+  for (const f of flags) {
+    const eq = f.indexOf("=");
+    if (!f.startsWith("--") || eq < 0) {
+      followupUsageError();
+    }
+    const key = f.slice(2, eq);
+    const raw = f.slice(eq + 1);
+    switch (key) {
+      case "request":
+        if (raw.length === 0) followupUsageError();
+        requestPath = raw;
+        break;
+      case "state-dir":
+        if (raw.length === 0) followupUsageError();
+        args.state_dir = raw;
+        break;
+      case "issue":
+        if (raw.length === 0) followupUsageError();
+        args.issue = raw;
+        break;
+      case "event-json":
+        try {
+          args.event = JSON.parse(raw) as unknown;
+        } catch {
+          followupUsageError();
+        }
+        break;
+      case "candidate-version":
+        args.candidate_version = raw;
+        break;
+      case "recipe-id":
+        args.recipe_id = raw;
+        break;
+      case "official-evidence-item-digest":
+        args.official_evidence_item_digest = raw;
+        break;
+      case "official-evidence-ref":
+        args.official_evidence_ref = raw;
+        break;
+      case "baseline-target":
+        args.baseline_target = raw;
+        break;
+      case "measurement-profile-id":
+        args.measurement_profile_id = raw;
+        break;
+      case "now-ms":
+        args.now_ms = Number(raw);
+        break;
+      case "original-fault-absent":
+        // Non-authoritative; retained for adversarial compatibility only.
+        args.original_fault_absent = raw === "true" || raw === "1";
+        break;
+      case "core-regressions-passed":
+        args.core_regressions_passed = raw === "true" || raw === "1";
+        break;
+      case "verified":
+        args.verified = raw === "true" || raw === "1";
+        break;
+      default:
+        followupUsageError();
+    }
+  }
+  if (requestPath) {
+    if (!fs.existsSync(requestPath)) {
+      printJson(
+        {
+          schema_version: 1,
+          ok: false,
+          operation,
+          status: "INVALID_INPUT",
+          error_code: "REQUEST_NOT_FOUND",
+          error_message: "Follow-up request file not found.",
+          network_used: false,
+          target_mutated: false,
+          repair_applied: false,
+          external_write: false,
+          adapter_status: "not_applicable",
+          contribution_claim: "none",
+        },
+        1,
+      );
+    }
+    const raw = fs.readFileSync(requestPath, "utf8");
+    if (Buffer.byteLength(raw, "utf8") > MAX_FOLLOWUP_REQUEST_BYTES) {
+      printJson(
+        {
+          schema_version: 1,
+          ok: false,
+          operation,
+          status: "INVALID_INPUT",
+          error_code: "SIZE_LIMIT",
+          error_message: "Follow-up request exceeds size limit.",
+          network_used: false,
+          external_write: false,
+        },
+        1,
+      );
+    }
+    const parsed = parseFollowupRequestJson(raw, operation);
+    if (!parsed.ok) {
+      printJson(
+        {
+          schema_version: 1,
+          ok: false,
+          operation,
+          status: "INVALID_INPUT",
+          error_code: parsed.code,
+          error_message: parsed.message,
+          network_used: false,
+          target_mutated: false,
+          repair_applied: false,
+          external_write: false,
+          adapter_status: "not_applicable",
+          contribution_claim: "none",
+        },
+        1,
+      );
+    }
+    // Merge request fields only when CLI flags did not already set them;
+    // target/operation remain positional authority.
+    const fields = parsed.fields;
+    if (args.issue === undefined && fields.issue !== undefined) {
+      args.issue = fields.issue;
+    }
+    if (args.event === undefined && fields.event !== undefined) {
+      args.event = fields.event;
+    }
+    if (args.candidate_version === undefined && fields.candidate_version) {
+      args.candidate_version = fields.candidate_version;
+    }
+    if (args.recipe_id === undefined && fields.recipe_id) {
+      args.recipe_id = fields.recipe_id;
+    }
+    if (
+      args.official_evidence_item_digest === undefined &&
+      fields.official_evidence_item_digest
+    ) {
+      args.official_evidence_item_digest = fields.official_evidence_item_digest;
+    }
+    if (
+      args.official_evidence_ref === undefined &&
+      fields.official_evidence_ref
+    ) {
+      args.official_evidence_ref = fields.official_evidence_ref;
+    }
+    if (args.baseline_target === undefined && fields.baseline_target) {
+      args.baseline_target = fields.baseline_target;
+    }
+    if (
+      args.measurement_profile_id === undefined &&
+      fields.measurement_profile_id
+    ) {
+      args.measurement_profile_id = fields.measurement_profile_id;
+    }
+    if (
+      args.original_fault_absent === undefined &&
+      fields.original_fault_absent !== undefined
+    ) {
+      args.original_fault_absent = fields.original_fault_absent;
+    }
+    if (
+      args.core_regressions_passed === undefined &&
+      fields.core_regressions_passed !== undefined
+    ) {
+      args.core_regressions_passed = fields.core_regressions_passed;
+    }
+    if (args.verified === undefined && fields.verified !== undefined) {
+      args.verified = fields.verified;
+    }
+    if (args.now_ms === undefined && fields.now_ms !== undefined) {
+      args.now_ms = fields.now_ms;
+    }
+  }
+  const result: FollowupResult = dispatchFollowup(args);
+  printJson(result, result.ok ? 0 : 1);
+}
+
 export function runCli(argv: string[]): void {
   const args = argv.slice(2);
   if (args.length === 0) {
@@ -1354,6 +1602,11 @@ export function runCli(argv: string[]): void {
 
     if (cmd === "lifecycle") {
       runLifecycleCli(rest);
+      return;
+    }
+
+    if (cmd === "followup") {
+      runFollowupCli(rest);
       return;
     }
 

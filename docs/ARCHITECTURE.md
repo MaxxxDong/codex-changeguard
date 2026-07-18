@@ -48,8 +48,8 @@ Evidence-locked verdict + Recovery Capsule preview
 ### 2.1 Plugin surfaces
 
 - `skills/changeguard/`: user-facing orchestration instructions
-- `.mcp.json`: MCP server (`changeguard_diagnose`, `changeguard_impact`, `changeguard_analyze_page`, recovery tools, `changeguard_scan`, `changeguard_scan_system`, `changeguard_session_start` → shared core)
-- `bin/changeguard.js` / `dist/cli/main.js`: Rescue CLI (`diagnose|impact|analyze-page|repair-*|verify|rollback|scan|scan-system|session-start`)
+- `.mcp.json`: MCP server (`changeguard_diagnose`, `changeguard_impact`, `changeguard_analyze_page`, recovery tools, `changeguard_scan`, `changeguard_scan_system`, `changeguard_session_start`, `changeguard_lifecycle`, `changeguard_followup` → shared core)
+- `bin/changeguard.js` / `dist/cli/main.js`: Rescue CLI (`diagnose|impact|analyze-page|repair-*|verify|rollback|scan|scan-system|session-start|lifecycle|followup|…`)
 - `src/core/diagnose.ts`: single shared diagnosis core used by CLI and MCP
 - `src/core/crash-family.ts`: Ticket 09 Desktop Browser crash-family classifier (deterministic gates; Fixture E)
 - `src/core/recovery/`: Ticket 02 isolated protected-process repair + Ticket 07 config set/remove + Ticket 08 plugin-cache recovery (preview/apply/verify/rollback; one engine)
@@ -619,6 +619,27 @@ Scenario Harness uses an in-memory controlled remote double
 (`createFakeRemoteAdapter`) covering success, cancel, auth failure, invalid/expired/
 replayed confirmation, timeout found/not-found/uncertain, duplicate, attachment
 privacy, blocked capsule, CLI/MCP equivalence, and default no-network path.
+
+## 10d. Maintainer follow-up / upstream-fix closure (Ticket 12)
+
+Shared core: `src/upstream/followup/` (`dispatchFollowup`, ledger, disposition, probes, candidate validation).
+Public seams:
+
+- Rescue CLI: `changeguard followup <operation> <isolated-target> [--request=<request.json>] [--state-dir=<dir>] …`
+- MCP: `changeguard_followup` (same seven closed operations; `additionalProperties: false`)
+- Packaged SessionStart: low-frequency refresh-due hint from PLUGIN_DATA follow-up state only (no network)
+
+### Authority
+
+- Explicit subscription to canonical `openai/codex` issues only
+- Candidate supersession requires process-local live measurement witness **and** bundled official snapshot bind (mechanism-linked item + exact `version_range.to` x.y.z). Caller `snapshot_path`, booleans, digests alone, and JSON witnesses are refused
+- Ticket 04 Impact Card may inject a separate test/refresh snapshot path for evidence refresh — that path is **not** supersession authority
+- Canary ledger persistence failures fail closed (no `ok:true` / `RECOMMEND_UPGRADE` / stored-state claim)
+- Witness precheck failures (binding/stage/replay) do not mutate the lifecycle ledger
+
+### Outputs
+
+Schema: `schemas/followup-result.schema.json`. Capsule/reply draft remain `preview_only` / `external_write: false`. Disposition policy never auto-reopens, cross-posts, comments, or reacts.
 
 ## 11. Competition MVP
 

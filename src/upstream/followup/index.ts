@@ -104,9 +104,15 @@ export {
   unsubscribeIssue,
   followupStatus,
   sessionFollowupHint,
+  sessionFollowupHintFromState,
   refreshFollowup,
   processFollowupEvent,
   validateCandidate,
 } from "./engine.js";
 
 export { dispatchFollowup, isFollowupOperation } from "./dispatch.js";
+
+export {
+  parseFollowupRequestJson,
+  refuseForbiddenFollowupKeys,
+} from "./request.js";

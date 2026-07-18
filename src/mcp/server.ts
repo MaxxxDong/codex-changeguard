@@ -7,6 +7,7 @@
  * + Ticket 06 lifecycle (KNOWN_GOOD / retention / A-B / canary / supersession)
  * + Ticket 10 upstream draft preview (local-only capsule; never external write)
  * + Ticket 11 confirmed upstream action preview/confirm (no real adapter by default)
+ * + Ticket 12 maintainer follow-up / upstream-fix closure (local-only; no live witness)
  * + Ticket 13 platform status / receipt validation (macOS capabilities; no harness spawn)
  * + Ticket 14 Windows 11 support status (PREVIEW without real-machine host receipt)
  * + Ticket 15 Linux/WSL/enterprise capability matrix (Limited/Read-only without real-machine receipt).
@@ -67,6 +68,13 @@ import {
   type PlatformStatusResult,
   type ReceiptValidationResult,
 } from "../platform/index.js";
+import {
+  dispatchFollowup,
+  isFollowupOperation,
+  refuseForbiddenFollowupKeys,
+  type FollowupResult,
+} from "../upstream/followup/index.js";
+import type { FollowupDispatchArgs } from "../upstream/followup/dispatch.js";
 
 const PLATFORM_ADAPTERS = new Set<AdapterId>([
   "unknown",
@@ -91,6 +99,7 @@ const TOOL_SCAN = "changeguard_scan";
 const TOOL_SCAN_SYSTEM = "changeguard_scan_system";
 const TOOL_SESSION = "changeguard_session_start";
 const TOOL_LIFECYCLE = "changeguard_lifecycle";
+const TOOL_FOLLOWUP = "changeguard_followup";
 const TOOL_PLATFORM_STATUS = "changeguard_platform_status";
 const TOOL_PLATFORM_RECEIPT = "changeguard_platform_receipt_validate";
 
@@ -109,6 +118,7 @@ const KNOWN_TOOLS = new Set([
   TOOL_SCAN_SYSTEM,
   TOOL_SESSION,
   TOOL_LIFECYCLE,
+  TOOL_FOLLOWUP,
   TOOL_PLATFORM_STATUS,
   TOOL_PLATFORM_RECEIPT,
 ]);
@@ -449,6 +459,88 @@ function toolSchemas() {
       },
     },
     {
+      name: TOOL_FOLLOWUP,
+      description:
+        "Ticket 12 maintainer follow-up / upstream-fix closure. Explicit subscriptions only; local event processing; privacy-safe capsule + reply draft (preview_only); measured candidate validation. Never network, daemon, external write, or live witness serialization. Operations: subscribe|unsubscribe|status|session_hint|refresh|process_event|validate_candidate.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["target", "operation"],
+        properties: {
+          target: targetProp,
+          operation: {
+            type: "string",
+            enum: [
+              "subscribe",
+              "unsubscribe",
+              "status",
+              "session_hint",
+              "refresh",
+              "process_event",
+              "validate_candidate",
+            ],
+            description:
+              "Closed follow-up operation. Target/operation are not overridable by nested request fields.",
+          },
+          issue: {
+            description:
+              "Canonical openai/codex issue number or URL (subscribe/unsubscribe/validate_candidate).",
+            oneOf: [{ type: "string" }, { type: "number" }],
+          },
+          event: {
+            type: "object",
+            description:
+              "Bounded local event snapshot for process_event/refresh (no network). Forbidden privacy keys refused.",
+          },
+          candidate_version: {
+            type: "string",
+            description:
+              "Closed Phase A numeric dotted x.y.z for validate_candidate.",
+          },
+          recipe_id: { type: "string" },
+          official_evidence_item_digest: {
+            type: "string",
+            description: "64-hex content_sha256 of a bundled official evidence item.",
+          },
+          official_evidence_ref: {
+            type: "string",
+            description: "Canonical official evidence URL matching the digest.",
+          },
+          baseline_target: {
+            type: "string",
+            description:
+              "Disposable baseline root for registered live measurement (validate_candidate).",
+          },
+          measurement_profile_id: {
+            type: "string",
+            description:
+              "Closed measurement profile id (Phase A: protected_process_shim_v1).",
+          },
+          original_fault_absent: {
+            type: "boolean",
+            description:
+              "Non-authoritative caller flag retained for adversarial compatibility only.",
+          },
+          core_regressions_passed: {
+            type: "boolean",
+            description:
+              "Non-authoritative caller flag retained for adversarial compatibility only.",
+          },
+          verified: {
+            type: "boolean",
+            description:
+              "Non-authoritative caller flag retained for adversarial compatibility only.",
+          },
+          now_ms: { type: "number" },
+          state_dir: {
+            type: "string",
+            description:
+              "Optional ChangeGuard-owned follow-up state directory (tests/injection).",
+          },
+        },
+      },
+    },
+    {
       name: TOOL_PLATFORM_STATUS,
       description:
         "Unified platform status (Tickets 13+14+15): read-only host capabilities (macOS adapter when on darwin), Windows 11 support evaluation under `status` (default PREVIEW), and Linux/WSL/enterprise capability matrix under `reports` (Limited/Read-only without real-machine receipt). Optional macOS harness receipt object, optional Windows receipt file path, optional runner plan, optional adapter filter. Never mutates host, never executes binaries, never fabricates Full from synthetic evidence.",
@@ -544,6 +636,7 @@ function handleToolsCall(params: unknown): {
     | RepairResult
     | ScanResult
     | LifecycleResult
+    | FollowupResult
     | PlatformStatusResult
     | ReceiptValidationResult
     | (PlatformStatusResult & {
@@ -1038,6 +1131,104 @@ function handleToolsCall(params: unknown): {
       dispatchArgs.upstream_verified = a.upstream_verified;
     }
     const payload = dispatchLifecycle(dispatchArgs);
+    return { payload, ok: payload.ok };
+  }
+
+  if (p.name === TOOL_FOLLOWUP) {
+    const allowed = new Set([
+      "target",
+      "operation",
+      "issue",
+      "event",
+      "candidate_version",
+      "recipe_id",
+      "official_evidence_item_digest",
+      "official_evidence_ref",
+      "baseline_target",
+      "measurement_profile_id",
+      "original_fault_absent",
+      "core_regressions_passed",
+      "verified",
+      "now_ms",
+      "state_dir",
+    ]);
+    for (const k of Object.keys(a)) {
+      if (!allowed.has(k)) {
+        throw Object.assign(new Error("Unknown or extra arguments."), {
+          code: "EXTRA_ARGS",
+        });
+      }
+    }
+    // Refuse privacy/authority smuggling inside nested event objects only.
+    // Top-level target/operation are required tool args (not request-body overrides).
+    if (a.event !== undefined) {
+      const nested = refuseForbiddenFollowupKeys(a.event);
+      if (nested) {
+        throw Object.assign(new Error(nested.message), {
+          code: nested.code,
+        });
+      }
+    }
+    if (typeof a.target !== "string" || a.target.length === 0) {
+      throw Object.assign(new Error("Invalid target."), {
+        code: "INVALID_TARGET",
+      });
+    }
+    if (typeof a.operation !== "string" || !isFollowupOperation(a.operation)) {
+      throw Object.assign(new Error("Invalid operation."), {
+        code: "INVALID_ARGS",
+      });
+    }
+    // Explicitly refuse snapshot_path / witness if smuggled under any casing
+    // that slipped past allowlist (defensive; allowlist already closed).
+    if (
+      Object.prototype.hasOwnProperty.call(a, "snapshot_path") ||
+      Object.prototype.hasOwnProperty.call(a, "live_measurement_witness") ||
+      Object.prototype.hasOwnProperty.call(a, "witness")
+    ) {
+      throw Object.assign(
+        new Error("Forbidden or non-authoritative field refused."),
+        { code: "FORBIDDEN_FIELD" },
+      );
+    }
+    const dispatchArgs: FollowupDispatchArgs = {
+      target: a.target,
+      operation: a.operation,
+    };
+    if (typeof a.issue === "string" || typeof a.issue === "number") {
+      dispatchArgs.issue = a.issue as string | number;
+    } else if (a.issue !== undefined) {
+      throw Object.assign(new Error("Invalid issue."), {
+        code: "INVALID_ARGS",
+      });
+    }
+    if (a.event !== undefined) dispatchArgs.event = a.event;
+    if (typeof a.candidate_version === "string") {
+      dispatchArgs.candidate_version = a.candidate_version;
+    }
+    if (typeof a.recipe_id === "string") dispatchArgs.recipe_id = a.recipe_id;
+    if (typeof a.official_evidence_item_digest === "string") {
+      dispatchArgs.official_evidence_item_digest = a.official_evidence_item_digest;
+    }
+    if (typeof a.official_evidence_ref === "string") {
+      dispatchArgs.official_evidence_ref = a.official_evidence_ref;
+    }
+    if (typeof a.baseline_target === "string") {
+      dispatchArgs.baseline_target = a.baseline_target;
+    }
+    if (typeof a.measurement_profile_id === "string") {
+      dispatchArgs.measurement_profile_id = a.measurement_profile_id;
+    }
+    if (typeof a.original_fault_absent === "boolean") {
+      dispatchArgs.original_fault_absent = a.original_fault_absent;
+    }
+    if (typeof a.core_regressions_passed === "boolean") {
+      dispatchArgs.core_regressions_passed = a.core_regressions_passed;
+    }
+    if (typeof a.verified === "boolean") dispatchArgs.verified = a.verified;
+    if (typeof a.now_ms === "number") dispatchArgs.now_ms = a.now_ms;
+    if (typeof a.state_dir === "string") dispatchArgs.state_dir = a.state_dir;
+    const payload: FollowupResult = dispatchFollowup(dispatchArgs);
     return { payload, ok: payload.ok };
   }
 

@@ -15,6 +15,7 @@ This document owns the ChangeGuard verification matrix. Passing a model-generate
 | Probe registry | registered IDs only; no shell text; platform guard; timeout/output cap; result hash; refusal and error are distinct |
 | Privacy | token/env/path fixtures redacted; disclosure manifest exactly matches exported fields; Issue injection is quarantined |
 | Recovery | trust-tier policy; exact target hash/pattern count; disposable-copy dry-run; backup/smoke/rollback receipt tests |
+| Follow-up (Ticket 12) | explicit subscribe, needs-info capsule, no-new-evidence refresh, duplicate migration, measured supersession, regression hold, CLI/MCP parity, SessionStart due/not-due, snapshot_path/witness refusal, persistence fail-closed |
 | Hooks / instances (Ticket 03) | first baseline, unchanged silent SessionStart, multi-instance upgrade, downgrade, PATH precedence drift, actual-instance evidence, ambiguous repair refusal, hook untrusted/skipped/failed, manual scan fallback, CLI/MCP scan equivalence, SessionStart changed/no-change duration &lt;10s, raw-path non-disclosure, symlink state refusal |
 | Platform macOS (Ticket 13) | adapter alias/operation/constraint contracts; isolation refuses active `~/.codex` and protected roots; receipt validator Full-only-with-proof + leak refusal; CLI/MCP `platform-status` / `platform-receipt-validate`; real-machine harness on darwin covers core diagnose, multi-instance, config repair, auto-rollback, explicit rollback, plugin-cache repair/rollback, KNOWN_GOOD/canary, privacy refuse, upstream zero-network, package smoke; support matrix docs |
 | Judge path | clean install; no judge API key; live matcher/probe; offline snapshot; visible evidence state; under 90 seconds |
@@ -353,3 +354,16 @@ Additional static checks remain:
 - fixture validation against schemas
 - Markdown link/path verification
 - clean Git status after a verified checkpoint
+
+## Ticket 12 — maintainer follow-up / upstream fix
+
+Public seams: `changeguard followup` / MCP `changeguard_followup` / packaged SessionStart follow-up hint.
+
+Required coverage:
+
+- Domain: `tests/ticket12-followup-core.test.ts` (Phase A authority + ledger + disposition)
+- P2 hardening: `tests/ticket12-phaseb-p2.test.ts` (version syntax, persistence fail-closed, witness non-mutation, snapshot_path refusal)
+- Scenario Harness: `tests/ticket12-followup-harness.test.ts` (CLI/MCP/SessionStart + schema)
+- Package smoke: packaged CLI followup status, MCP tool list includes `changeguard_followup`, schema present, SessionStart no path leak
+
+Invariants: no network/daemon/external write; no JSON-serializable live witness; no auto-reopen/cross-post; supersession only with live witness + bundled official bind.

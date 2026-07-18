@@ -170,3 +170,13 @@ Never:
 - probe timeout, oversized output, or unsupported platform
 - export manifest missing a field that would leave the device
 - rollback smoke failure
+
+## Ticket 12 follow-up / candidate validation
+
+- Explicit subscription only; no background daemon and no automatic network refresh
+- Forbidden privacy keys on follow-up envelopes fail closed with path-free errors
+- No live measurement witness may be supplied or serialized via CLI/MCP JSON
+- Supersession uses the immutable bundled official snapshot only; caller `snapshot_path` is refused for candidate validation (Ticket 04 Impact Card injection is a separate non-supersession path)
+- Capsule and reply draft are local preview only (`external_write: false`); Ticket 11 owns any real write after confirmation
+- Disposition policy never auto-reopens, cross-posts, comments, or reacts against upstream decisions
+- SessionStart follow-up hints never print raw cwd, plugin paths, state paths, secrets, or issue-session content

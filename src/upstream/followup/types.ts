@@ -195,11 +195,12 @@ export interface CandidateValidationInput {
   core_regressions_passed?: boolean;
   verified?: boolean;
   /**
-   * @deprecated Caller-controlled snapshot_path is not accepted as an official
-   * trust root. Production and public candidate validation always use the
-   * immutable bundled official snapshot. If supplied, it is ignored.
+   * Candidate validation uses only the immutable bundled official snapshot.
+   * Caller-controlled snapshot paths are not part of this public input and
+   * are rejected at public seams (CLI/MCP/request JSON). Ticket 04 Impact Card
+   * may inject a separate test/refresh snapshot path for evidence refresh —
+   * that path is not supersession authority and is never accepted here.
    */
-  snapshot_path?: string;
   nowMs?: number;
 }
 
@@ -275,9 +276,18 @@ export interface StatusInput {
 }
 
 export interface SessionHintInput {
-  targetPath: string;
+  /**
+   * Isolated target for public path checks when present. Packaged SessionStart
+   * may omit this and use the state-only read core (PLUGIN_DATA follow-up state).
+   */
+  targetPath?: string;
   nowMs?: number;
   stateDir?: string;
+  /**
+   * When true, skip target path resolution and read only ChangeGuard-owned
+   * follow-up state (for packaged SessionStart). Public CLI/MCP keep path checks.
+   */
+  stateOnly?: boolean;
 }
 
 export interface RefreshInput {
@@ -317,6 +327,10 @@ export interface FollowupDispatchArgs {
   recipe_id?: string;
   official_evidence_item_digest?: string;
   official_evidence_ref?: string;
+  /** Disposable baseline root for registered live measurement (Ticket 12). */
+  baseline_target?: string;
+  /** Closed measurement profile id (Phase A: protected_process_shim_v1). */
+  measurement_profile_id?: string;
   original_fault_absent?: boolean;
   core_regressions_passed?: boolean;
   verified?: boolean;

@@ -1,0 +1,224 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-changeguard/followup-result.schema.json",
+  "title": "FollowupResult",
+  "description": "Ticket 12 public follow-up result (CLI/MCP/dispatch). Local-only; external_write always false; no live witness serialization.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "ok",
+    "operation",
+    "status",
+    "user_resolution",
+    "upstream_contribution",
+    "subscription",
+    "subscriptions",
+    "disposition",
+    "intents",
+    "probe_plan",
+    "evidence_capsule",
+    "reply_draft",
+    "candidate",
+    "ledger",
+    "session_hint",
+    "evidence",
+    "error_code",
+    "error_message",
+    "network_used",
+    "target_mutated",
+    "repair_applied",
+    "external_write",
+    "adapter_status",
+    "contribution_claim"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "ok": { "type": "boolean" },
+    "operation": {
+      "type": "string",
+      "enum": [
+        "subscribe",
+        "unsubscribe",
+        "status",
+        "session_hint",
+        "refresh",
+        "process_event",
+        "validate_candidate"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "OK",
+        "SILENT",
+        "REFRESH_DUE",
+        "NO_NEW_EVIDENCE",
+        "DISPOSITION_APPLIED",
+        "REPLY_DRAFT_READY",
+        "CANDIDATE_VALIDATED",
+        "CANDIDATE_REGRESSED",
+        "SUPERSEDED",
+        "ADAPTER_UNAVAILABLE",
+        "REFUSED",
+        "INVALID_INPUT",
+        "LEDGER_ERROR",
+        "UNAUTHORIZED_ISSUE",
+        "UNAUTHORIZED_REPOSITORY"
+      ]
+    },
+    "user_resolution": {
+      "type": "object",
+      "required": ["status", "summary", "receipt_id"],
+      "properties": {
+        "status": { "type": "string" },
+        "summary": { "type": "string", "maxLength": 2048 },
+        "receipt_id": { "type": "string", "maxLength": 128 }
+      },
+      "additionalProperties": true
+    },
+    "upstream_contribution": {
+      "type": "object",
+      "required": ["status", "summary", "issue_candidates", "receipt_id"],
+      "properties": {
+        "status": { "type": "string" },
+        "summary": { "type": "string", "maxLength": 2048 },
+        "issue_candidates": {
+          "type": "array",
+          "items": { "type": "string", "maxLength": 512 }
+        },
+        "receipt_id": { "type": "string", "maxLength": 128 }
+      },
+      "additionalProperties": true
+    },
+    "subscription": { "type": ["object", "null"] },
+    "subscriptions": {
+      "type": ["array", "null"],
+      "items": { "type": "object" }
+    },
+    "disposition": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": [
+            "auto_reopen",
+            "cross_post",
+            "auto_comment",
+            "auto_react",
+            "respect_upstream"
+          ],
+          "properties": {
+            "disposition": { "type": "string" },
+            "auto_reopen": { "const": false },
+            "cross_post": { "const": false },
+            "auto_comment": { "const": false },
+            "auto_react": { "const": false },
+            "migrate_to_issue": { "type": ["integer", "null"] },
+            "user_guidance": { "type": "string" },
+            "respect_upstream": { "const": true }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "intents": {
+      "type": ["array", "null"],
+      "items": { "type": "string" }
+    },
+    "probe_plan": { "type": ["object", "null"] },
+    "evidence_capsule": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": [
+            "schema_version",
+            "external_write",
+            "mode",
+            "locality",
+            "requires_ticket11_confirmation"
+          ],
+          "properties": {
+            "schema_version": { "const": 1 },
+            "external_write": { "const": false },
+            "mode": { "const": "preview_only" },
+            "locality": { "const": "local_only" },
+            "requires_ticket11_confirmation": { "const": true }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "reply_draft": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["schema_version", "external_write"],
+          "properties": {
+            "schema_version": { "const": 1 },
+            "external_write": { "const": false }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "candidate": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": [
+            "binary_downloaded",
+            "binary_installed",
+            "workaround_uninstalled"
+          ],
+          "properties": {
+            "ok": { "type": "boolean" },
+            "status": { "type": "string" },
+            "version_guidance": { "type": ["string", "null"] },
+            "recipe_status": { "type": ["string", "null"] },
+            "recipe_recommendable": { "type": ["boolean", "null"] },
+            "binary_downloaded": { "const": false },
+            "binary_installed": { "const": false },
+            "workaround_uninstalled": { "const": false }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "ledger": { "type": ["object", "null"] },
+    "session_hint": {
+      "type": ["string", "null"],
+      "maxLength": 256
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "detail", "measured"],
+        "properties": {
+          "kind": { "type": "string", "maxLength": 128 },
+          "detail": { "type": "string", "maxLength": 2048 },
+          "measured": { "type": "boolean" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "error_code": { "type": ["string", "null"], "maxLength": 128 },
+    "error_message": { "type": ["string", "null"], "maxLength": 2048 },
+    "network_used": { "const": false },
+    "target_mutated": { "type": "boolean" },
+    "repair_applied": { "const": false },
+    "external_write": { "const": false },
+    "adapter_status": {
+      "type": "string",
+      "enum": ["unavailable", "not_applicable"]
+    },
+    "contribution_claim": {
+      "type": "string",
+      "enum": ["none", "local_only"]
+    }
+  }
+}

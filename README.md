@@ -72,6 +72,7 @@ Implemented public commands (repository wrapper: `node bin/changeguard.js …`):
 | Page analysis (Ticket 05) | `changeguard analyze-page <target> --envelope=<page.json> [--disclose-…]` | `changeguard_analyze_page` |
 | Upstream preview (Ticket 10) | `changeguard upstream-preview <target> --request=<request.json> [--disclose-…]` | `changeguard_upstream_preview` |
 | Lifecycle (Ticket 06) | `changeguard lifecycle <operation> <target>` | `changeguard_lifecycle` |
+| Follow-up (Ticket 12) | `changeguard followup <operation> <target> [--request=…]` | `changeguard_followup` |
 | Repair (Ticket 02) | `repair-preview` / `repair-apply` / `verify` / `rollback` | `changeguard_repair_*` / `changeguard_verify` / `changeguard_rollback` |
 | Instances (Ticket 03) | `scan` / `scan-system` / `session-start` | `changeguard_scan` / `changeguard_scan_system` / `changeguard_session_start` |
 | Upstream actions (Ticket 11) | `upstream-action-preview` / `upstream-action-confirm` | `changeguard_upstream_action_preview` / `changeguard_upstream_action_confirm` |
@@ -128,6 +129,18 @@ rollback seams are registered `preview_only` guidance (official pin / signed med
 ChangeGuard never stores or redistributes OpenAI binaries. Desktop version rollback is
 `limited` without signed history or lawful media. Canary and upstream supersession emit
 exact guidance enums. Platform Full/Preview/Limited claims are receipt-scoped (see Tickets 13–15 and [docs/SUPPORT_MATRIX.md](docs/SUPPORT_MATRIX.md)).
+
+### Maintainer follow-up / upstream fix (Ticket 12)
+
+Explicit local subscriptions only (canonical `openai/codex` issues). Manual or
+SessionStart low-frequency refresh-due hints never fetch the network. Maintainer
+`needs-info` events become privacy-safe Capsules and reply drafts (`preview_only`,
+`external_write: false`; Ticket 11 confirmation still required). Disposition policy
+never auto-reopens, cross-posts, comments, or reacts. Candidate validation requires
+registered live measurement plus the bundled official snapshot (no caller
+`snapshot_path` / JSON witness); successful measured official fixes mark temporary
+recipes `SUPERSEDED_BY_UPSTREAM_FIX` and stop recommending them without binary
+install/uninstall.
 
 ### Configuration / startup fault pack (Ticket 07)
 
@@ -238,7 +251,7 @@ Repository harness: `npm run harness:macos` (darwin real-machine path).
 ## Plugin surfaces
 
 - Skill commands for update scanning, incident diagnosis, page analysis, Impact Card, recovery preview, upstream action preview/confirm, and platform status
-- A local-facts MCP server with explicit tool approval (`changeguard_diagnose`, `changeguard_impact`, `changeguard_analyze_page`, `changeguard_upstream_preview`, `changeguard_upstream_action_preview`, `changeguard_upstream_action_confirm`, `changeguard_platform_status`, `changeguard_platform_receipt_validate`, `changeguard_lifecycle`, repair/scan tools)
+- A local-facts MCP server with explicit tool approval (`changeguard_diagnose`, `changeguard_impact`, `changeguard_analyze_page`, `changeguard_upstream_preview`, `changeguard_upstream_action_preview`, `changeguard_upstream_action_confirm`, `changeguard_platform_status`, `changeguard_platform_receipt_validate`, `changeguard_lifecycle`, `changeguard_followup`, repair/scan tools)
 - An optional trusted `SessionStart` hook that notices version-fingerprint changes (Ticket 03)
 - A manual scan path that always works when hooks are disabled or untrusted
 

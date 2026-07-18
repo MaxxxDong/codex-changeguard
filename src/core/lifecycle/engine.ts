@@ -35,7 +35,6 @@ import {
 } from "./constants.js";
 import {
   LedgerError,
-  emptyLedger,
   loadLedger,
   newId,
   saveLedger,
@@ -78,6 +77,7 @@ import {
 } from "./types.js";
 import {
   bindOfficialFixForSupersession,
+  isPhaseACandidateVersion,
 } from "../../evidence/official-fix-authority.js";
 import {
   consumeWitnessForSupersede,
@@ -993,12 +993,14 @@ export function runCanary(input: CanaryInput): LifecycleResult {
   const op: LifecycleOperation = "canary";
   try {
     const targetReal = resolveRoot(input.targetPath);
-    if (
-      typeof input.candidate_version !== "string" ||
-      input.candidate_version.length === 0 ||
-      input.candidate_version.length > MAX_VERSION_LEN
-    ) {
-      return fail(op, "INVALID_VERSION", "Invalid candidate_version.");
+    // P2-2: process-local live measurement / canary that may RECOMMEND_UPGRADE
+    // uses the same closed x.y.z syntax as the official binder (one source).
+    if (!isPhaseACandidateVersion(input.candidate_version)) {
+      return fail(
+        op,
+        "INVALID_VERSION",
+        "Invalid candidate_version (closed Phase A numeric dotted x.y.z required).",
+      );
     }
     const nowMs = nowOf(input.nowMs);
     // Fail closed: only exact true means executed. Omitted/false → availability only.
@@ -1009,8 +1011,10 @@ export function runCanary(input: CanaryInput): LifecycleResult {
     // Ticket 12 P0 authority: never mutate witness stage until the successful
     // measured-canary branch is established in this same call
     // (executed + fault absent + core ok + live witness bind + exact target).
-    // When a real live witness is supplied with invalid target/version binding,
-    // fail closed without writing this target's lifecycle ledger (P2).
+    // P2-4: when a real process-local witness is supplied and precheck fails for
+    // any reason (binding, stage, replay, invalid state), fail closed without
+    // writing/updating this target's lifecycle ledger. Boolean-only calls
+    // without a witness keep availability behavior.
     let hasLiveAuthority = false;
     if (executed && faultAbsent && coreOk) {
       const expected = {
@@ -1022,7 +1026,7 @@ export function runCanary(input: CanaryInput): LifecycleResult {
           input.live_measurement_witness,
           expected,
         );
-        if (!pre.ok && pre.code === "LIVE_WITNESS_BINDING") {
+        if (!pre.ok) {
           return fail(op, pre.code, pre.message, {
             version_guidance: null,
             target_mutated: false,
@@ -1053,8 +1057,7 @@ export function runCanary(input: CanaryInput): LifecycleResult {
       detail =
         "Canary failed: hold KNOWN_GOOD; original fault and/or core regressions not clean.";
     } else if (executed && faultAbsent && coreOk && !hasLiveAuthority) {
-      // Boolean-only all-true path, or witness present but unbound/invalid:
-      // availability / general guidance only — stage never advanced above.
+      // Boolean-only all-true path (no witness): availability only.
       guidance = "UPGRADE_CANARY_AVAILABLE";
       detail =
         "Canary flags reported but live measurement witness absent or unbound; upgrade not recommended (authority closed).";
@@ -1076,8 +1079,11 @@ export function runCanary(input: CanaryInput): LifecycleResult {
     const outcomesMeasured = hasLiveAuthority && input.measured_outcomes === true;
 
     // Persist under default instance ledger when present.
-    // Corrupt/tampered ledgers must fail closed (never recommend upgrade).
+    // P2-3: persistence failures fail closed — no ok:true, no RECOMMEND_UPGRADE,
+    // no claim that state was stored. Preserve a retryable witness when the
+    // successful measured path advanced stage but ledger write did not land.
     let ledger: LifecycleLedger | null = null;
+    let persisted = false;
     try {
       ledger = loadLedger(targetReal, "default", nowMs);
       // Prefer holding known good if any checkpoints exist and canary failed.
@@ -1097,11 +1103,51 @@ export function runCanary(input: CanaryInput): LifecycleResult {
       ledger.updated_at_ms = nowMs;
       saveLedger(targetReal, ledger);
       ledger = loadLedger(targetReal, "default", nowMs);
+      persisted = true;
     } catch (e) {
-      if (e instanceof LedgerError) throw e;
-      ledger = emptyLedger("default", nowMs);
-      ledger.last_canary = canary;
-      ledger.version_guidance = guidance;
+      // P2-3 fail closed: do not invent an in-memory success ledger.
+      // If a live witness was advanced to canary_recorded but persistence failed,
+      // leave the witness at canary_recorded so a later supersede/retry can still
+      // use it (retryable) without claiming RECOMMEND_UPGRADE was stored.
+      if (e instanceof LedgerError) {
+        return fail(op, e.code, e.message, {
+          version_guidance: null,
+          target_mutated: false,
+          canary: {
+            ...canary,
+            version_guidance: "GENERAL_UPDATE_ONLY",
+            detail:
+              "Canary ledger persistence failed; upgrade not recommended and state not stored.",
+          },
+        });
+      }
+      return fail(
+        op,
+        "LEDGER_PERSIST_FAILED",
+        "Canary ledger persistence failed; upgrade not recommended and state not stored.",
+        {
+          version_guidance: null,
+          target_mutated: false,
+          canary: {
+            ...canary,
+            version_guidance: "GENERAL_UPDATE_ONLY",
+            detail:
+              "Canary ledger persistence failed; upgrade not recommended and state not stored.",
+          },
+        },
+      );
+    }
+
+    if (!persisted) {
+      return fail(
+        op,
+        "LEDGER_PERSIST_FAILED",
+        "Canary ledger persistence failed; upgrade not recommended and state not stored.",
+        {
+          version_guidance: null,
+          target_mutated: false,
+        },
+      );
     }
 
     return baseResult({

@@ -256,6 +256,35 @@ Both call `previewUpstreamAction` / `confirmUpstreamAction`. Production injects 
 - arbitrary shell / child_process / un-injected `gh` execution from production seams
 - claiming registration, Gate C, external submission completion, or `LOCAL_COMPLETE` without separate authorization
 
+
+## Ticket 12 — maintainer follow-up / upstream-fix closure
+
+### Public seams (same core)
+
+1. Rescue CLI: `changeguard followup <operation> <isolated-target> [--request=<request.json>] [--state-dir=<dir>] …`
+2. MCP tool: `changeguard_followup` with `{ "target", "operation", … }` (`additionalProperties: false`)
+3. Packaged SessionStart: path-free refresh-due hint from ChangeGuard-owned follow-up state under `PLUGIN_DATA` (no fetch)
+
+Closed operations: `subscribe` | `unsubscribe` | `status` | `session_hint` | `refresh` | `process_event` | `validate_candidate`.
+
+### Safety boundaries
+
+- Explicit subscription only; canonical `github.com/openai/codex/issues/N` scope
+- No network, daemon, shell, binary download/install, or external GitHub write
+- No live measurement witness serialization via CLI/MCP JSON
+- No caller `snapshot_path` for supersession (bundled official snapshot only; Ticket 04 Impact Card injection is separate and non-authoritative for supersession)
+- Capsule/reply draft: `preview_only`, `local_only`, `external_write: false`, requires Ticket 11 confirmation
+- Disposition never auto-reopens, cross-posts, comments, or reacts
+- SessionStart combines version-fingerprint and follow-up due hints; untrusted/skipped/failed hooks never bypass
+
+### Orchestration
+
+1. `subscribe` the issue the user cares about (or `unsubscribe`).
+2. On SessionStart/manual due: run local `refresh` or `process_event` with a bounded local event snapshot — never auto-fetch.
+3. Present capsule + reply draft for user confirmation only (Ticket 11).
+4. For candidate fixes: isolated baseline + candidate roots, closed profile, official digest/ref; measure before any upgrade guidance.
+5. Never claim supersession from booleans/JSON alone.
+
 ## Planned commands
 
 - `/changeguard scan`: compare installed and last-seen Codex fingerprints via the shared instance core (Ticket 03)
@@ -264,6 +293,7 @@ Both call `previewUpstreamAction` / `confirmUpstreamAction`. Production injects 
 - `/changeguard impact`: official-evidence Impact Card via the shared core (Ticket 04)
 - `/changeguard upstream-preview`: local-only Upstream Submission Capsule (Ticket 10)
 - `/changeguard upstream-action-preview` / `upstream-action-confirm`: Ticket 11 confirmed actions (adapter-gated; production default unavailable)
+- `/changeguard followup`: Ticket 12 maintainer follow-up / candidate validation (local-only)
 - `/changeguard repro-pack`: show the disclosure manifest and export a redacted evidence package after confirmation
 - `/changeguard recovery-preview` / repair-preview: build a Repair Capsule (Ticket 02 protected-process; Ticket 07 config set/remove; Ticket 08 plugin-cache)
 - `/changeguard verify` / `/changeguard rollback`: recovery seams (Tickets 02 / 07 / 08)
