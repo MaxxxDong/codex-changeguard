@@ -1,17 +1,19 @@
 # Platform support matrix
 
 Platform Full / Preview / Limited / Read-only claims require a fresh
-**real-machine Scenario Harness receipt**. Synthetic fixtures alone never
-upgrade a platform to Full.
+**real-machine Scenario Harness receipt** (plus live harness witness where
+required). Synthetic fixtures alone never upgrade a platform to Full.
+**Full is receipt-scoped**, not a universal claim for every OS release,
+architecture, or Codex version.
 
-| Platform | Declared aim | Current claim rule | Adapter status | Notes |
-| --- | --- | --- | --- | --- |
-| macOS | Full (first full path) | Full only when Ticket 13 real-machine receipt has every required scenario `pass` **and** current-process live harness witness validation succeeds; external/CLI/MCP/arbitrary JSON alone is at most **Preview** | Namespaced adapter in `src/platform/macos/` | Disposable temp fixtures only; never active `~/.codex` (logical or realpath; symlink fail-closed) |
-| Windows 11 | Full after Ticket 14 real-machine loop | **Preview** (current product claim). Framework integrated; Full only with a real Windows 11 `host_kind=real_machine` receipt covering W11-S01…S11 **and** a process-local live harness witness (external/CLI/MCP/JSON alone is at most Preview) | Namespaced adapter in `src/instances/windows/` + `src/platform/windows/` | No admin bypass; signed `.exe/.dll/.sys` always refused; no WindowsApps / Program Files mutation; synthetic fixtures never Full; no production path seals a Windows live witness yet |
-| Linux | Limited CLI | **Limited** / read-only (Ticket 15 framework). No real Linux host Scenario Harness receipt in this repository; writes disabled by default | Namespaced adapter in `src/platform/linux-adapter.ts` + capability matrix | Registered PATH / package roots only; no Desktop full repair claim; `/mnt/<drive>` refused |
-| WSL | Limited CLI + IT handoff | **Limited** (Ticket 15 framework). No real WSL host receipt; Windows host + WSL identities never collapse | Namespaced adapter in `src/platform/wsl-adapter.ts` | Enterprise policy → IT Handoff; host mounts refused; no sudo/chmod/UAC bypass |
-| Unknown / unverified | Read-only | **Read-only**; mutation refused | Generic discovery only | Fail closed until a trusted adapter is identified |
-| Enterprise managed | Limited + IT Handoff | **Limited**; local mutation refused | Policy recognition only | `ADMIN_ACTION_REQUIRED` + path/secret-cleaned IT Handoff; no elevation recipes |
+| Platform | Declared aim | Current product claim | Claim rule | Adapter status | Notes |
+| --- | --- | --- | --- | --- | --- |
+| macOS | Full (first full path) | **Full** (receipt-scoped on verified real-machine harness for this host; Ticket 13 `LOCAL_COMPLETE`) | Full only when real-machine receipt has every required scenario `pass` **and** current-process live harness witness validation succeeds; external/CLI/MCP/arbitrary JSON alone is at most **Preview** | Namespaced adapter in `src/platform/macos/` | Disposable temp fixtures only; never active `~/.codex` (logical or realpath; symlink fail-closed). Not a universal macOS/Codex guarantee |
+| Windows 11 | Full after Ticket 14 real-machine loop | **Preview** (framework integrated; not Full) | Full only with a real Windows 11 `host_kind=real_machine` receipt covering W11-S01…S11 **and** a process-local live harness witness (external/CLI/MCP/JSON alone is at most Preview) | Namespaced adapter in `src/instances/windows/` + `src/platform/windows/` | No admin bypass; signed `.exe/.dll/.sys` always refused; no WindowsApps / Program Files mutation; synthetic fixtures never Full; no real W11-S01…S11 receipt yet |
+| Linux | Limited CLI | **Limited** / read-only (Ticket 15 framework; no real host receipt) | Writes disabled by default; synthetic capability cannot Full | Namespaced adapter in `src/platform/linux-adapter.ts` + capability matrix | Registered PATH / package roots only; no Desktop full repair claim; `/mnt/<drive>` refused |
+| WSL | Limited CLI + IT handoff | **Limited** (Ticket 15 framework; no real host receipt) | Windows host + WSL identities never collapse; writes fail closed without disposable isolation proof | Namespaced adapter in `src/platform/wsl-adapter.ts` | Enterprise policy → IT Handoff; host mounts refused; no sudo/chmod/UAC bypass |
+| Unknown / unverified | Read-only | **Read-only**; mutation refused | Fail closed until a trusted adapter is identified | Generic discovery only | — |
+| Enterprise managed | Limited + IT Handoff | **Limited**; local mutation refused | Policy recognition only; no elevation | Policy recognition only | `ADMIN_ACTION_REQUIRED` + path/secret-cleaned IT Handoff |
 
 ## macOS Full required scenarios
 
@@ -99,6 +101,11 @@ IT Handoff wire shape: `schemas/it-handoff.schema.json`.
 
 - Ticket 06 CLI/Desktop **version** rollback remains `preview_only` / Desktop may be `limited`.
 - Ticket 10 upstream capsules remain `preview_only` / `local_only` / `external_write: false`.
-- Gate C / registration / publication / upload / external submission remain unauthorized until separate approval.
-- Ticket 15 framework is integrated; Linux/WSL remain **Limited / Read-only** without real-machine host receipts. This does **not** mark the whole product complete; Tickets 16–17 remain open. Broader product status stays `IN_PROGRESS`.
+- Ticket 11 local confirmation engine is integrated; production default adapter remains unavailable — no real external GitHub write is authorized by documentation status alone.
+- Gate C / registration / publication / upload / external submission remain unauthorized / `NOT_STARTED` until separate approval.
+- Ticket 13 macOS Full is **receipt-scoped** (current real-machine harness on this host); it does not upgrade Windows or Linux claims.
+- Ticket 14 remains **Preview** without a real Windows 11 host receipt + live witness.
+- Ticket 15 framework is integrated; Linux/WSL remain **Limited / Read-only** without real-machine host receipts.
+- This does **not** mark the whole product complete; Tickets **12, 16, 17** remain open. Broader product status stays `IN_PROGRESS`.
 - Public CLI/MCP write paths are gated by trusted host capability; unknown/Linux/WSL/managed policies fail closed. External JSON/CLI/MCP arguments cannot downgrade the host or enable writes.
+- Repository-only operational closeout evidence (Wave 4 tip, harness counts, Gate C state) lives in the repo `HANDOFF.md` Wave 4 section — not packaged with the plugin.

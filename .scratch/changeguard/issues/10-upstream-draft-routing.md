@@ -6,7 +6,7 @@
 
 **Status:** `LOCAL_COMPLETE` (locally verified on integrated commit `3265acd11fa260d4e2c857705a73bd36b7b002b6`)
 
-Broader ChangeGuard product remains `IN_PROGRESS`. Tickets 11–17 are not complete. Registration, external submission, and Gate C remain not authorized / `NOT_STARTED`. No public publication or upload has occurred. Real external GitHub writes remain unauthorized / `NOT_STARTED`. Ticket 11 is still required for any separately confirmed external write.
+Broader ChangeGuard product remains `IN_PROGRESS`. Wave 4 later closed local/framework status for Tickets 11/13/14/15 on `407789c` (see [HANDOFF.md](../../../HANDOFF.md) § Wave 4); Tickets **12, 16, 17** remain open. Registration, external submission, and Gate C remain not authorized / `NOT_STARTED`. No public publication or upload has occurred. Real external GitHub writes remain unauthorized / `NOT_STARTED`. Ticket 11 is still required for any separately confirmed external write (production adapter remains unavailable by default).
 
 Exact operational evidence (Root integrated verification dynamic, Ticket 10 final independent static review, residual preview-only boundaries) is canonical in [HANDOFF.md](../../../HANDOFF.md).
 
@@ -32,5 +32,5 @@ Exact operational evidence (Root integrated verification dynamic, Ticket 10 fina
 - Local status: `LOCAL_COMPLETE` on integrated clean HEAD `3265acd11fa260d4e2c857705a73bd36b7b002b6`.
 - Integration commits: `0829936` (feat), `7ef87e6` (preview gates), `26d58b4` (ready-state invariant), `3265acd` (consumer gaps / verification tip).
 - Root integrated verification (dynamic) and final independent static review (`changeguard-ticket10-regression-review-r7`, `NO_P0_P1`, empty patch): see [HANDOFF.md](../../../HANDOFF.md) § Ticket 10 closeout. Do not collapse Root dynamic proof into Grok static review; this docs closeout does not claim Grok-run dynamic tests.
-- Product-wide status remains `IN_PROGRESS`; this ticket does not complete Tickets 11–17 or authorize any real external write.
+- Product-wide status remains `IN_PROGRESS`; this ticket does not complete Tickets 12/16/17 or authorize any real external write (Ticket 11 local engine is separate and still has no production adapter).
 - Registration `NOT_STARTED`; external submission `NOT_STARTED`; Gate C not authorized; publication / upload / real GitHub writes unauthorized / `NOT_STARTED`.

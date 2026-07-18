@@ -6,7 +6,7 @@
 
 **Status:** `LOCAL_COMPLETE` (locally verified on integrated commit `5aa12c6c7370d9da84be3078c14fc63cf7e90fec`)
 
-Broader ChangeGuard product remains `IN_PROGRESS`. Tickets 11–17 are not complete. Registration, external submission, and Gate C remain not authorized / `NOT_STARTED`. No public publication or upload has occurred.
+Broader ChangeGuard product remains `IN_PROGRESS`. At Ticket 05 local closeout, Tickets 11–17 were still open. Wave 4 later closed local/framework status for 11/13/14/15 (see [HANDOFF.md](../../../HANDOFF.md) § Wave 4). Current open product tickets are **12, 16, 17**; Ticket 14 platform Full and Ticket 15 real-host remain platform gaps. Registration, external submission, and Gate C remain not authorized / `NOT_STARTED`. No public publication or upload has occurred.
 
 Exact operational evidence (Root integrated verification, Wave 3 final review, residual boundaries) is canonical in [HANDOFF.md](../../../HANDOFF.md).
 
@@ -30,5 +30,5 @@ Exact operational evidence (Root integrated verification, Wave 3 final review, r
 
 - Local status: `LOCAL_COMPLETE` on integrated commit `5aa12c6c7370d9da84be3078c14fc63cf7e90fec` (integrated as `607be8f`).
 - Root integrated verification (dynamic) and Wave 3 final independent review (`changeguard-wave3-final-review-r2`, `NO_P0_P1`, static): see [HANDOFF.md](../../../HANDOFF.md) § Wave 3 closeout.
-- Product-wide status remains `IN_PROGRESS`; this ticket does not complete Tickets 11–17.
+- Product-wide status remains `IN_PROGRESS`; this ticket does not complete Tickets **12, 16, 17**. Wave 4 local/framework closeout for 11/13/14/15 is recorded in [HANDOFF.md](../../../HANDOFF.md) § Wave 4 (T14 Full and T15 real-host remain platform gaps).
 - Registration `NOT_STARTED`; external submission `NOT_STARTED`; Gate C not authorized.

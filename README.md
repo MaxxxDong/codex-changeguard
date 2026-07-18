@@ -13,15 +13,22 @@ ChangeGuard is not a generic changelog summarizer, Issue chatbot, environment do
 - Competition: OpenAI Build Week 2026
 - Track: `track-openai-build-week-codex-changeguard-20260717`
 - Gate B: approved, option A
+- Integrated HEAD (Wave 4 closeout tip): `407789c` — Root evidence: `npm test` 390/390; typecheck; production boundary; boundary self-test 175/175; package + package:smoke; real macOS Full harness on this host (details in [HANDOFF.md](HANDOFF.md))
 - Tickets 01–04: `LOCAL_COMPLETE` on integrated commit `c20ddc5` (Ticket 01 first closed on `d7d917b`; Wave 2 tip `c20ddc5`)
 - Tickets 05–09: `LOCAL_COMPLETE` on integrated HEAD `5aa12c6` (Wave 3 tip; Root full regression 212/212; final review `changeguard-wave3-final-review-r2` → `NO_P0_P1`)
 - Ticket 10: `LOCAL_COMPLETE` on integrated HEAD `3265acd` (commits `0829936` → `7ef87e6` → `26d58b4` → `3265acd`; Root full regression 260/260; final static review `changeguard-ticket10-regression-review-r7` → `NO_P0_P1`, empty patch)
-- Broader product: still `IN_PROGRESS` (Tickets 12, 15–17 not complete; Ticket 11 implemented surfaces are local-only with no real adapter by default; Tickets 13–14 platform surfaces are integrated as framework code)
-- Residual platform claims: macOS Full requires a Ticket 13 real-machine Scenario Harness receipt with live harness witness (see [docs/SUPPORT_MATRIX.md](docs/SUPPORT_MATRIX.md)); Windows Full remains Ticket 14 and stays **Preview** until a real Windows 11 host live harness covers W11-S01…S11 (external JSON alone cannot Full); Linux·WSL Ticket 15 framework is integrated but remains **Limited / Read-only** without a real host receipt (writes fail closed; synthetic capability cannot Full); Ticket 06 CLI/Desktop **version** rollback stays `preview_only` / Desktop may be `limited`
+- Tickets 11 / 13 / 14 / 15: Wave 4 integrated on `407789c` — see per-ticket rows below and [HANDOFF.md](HANDOFF.md) § Wave 4 closeout
+- Broader product: still `IN_PROGRESS` (Tickets **12, 16, 17** not complete; Ticket 14 platform Full and Ticket 15 real-host Full remain open)
+- Platform claims (canonical matrix: [docs/SUPPORT_MATRIX.md](docs/SUPPORT_MATRIX.md)):
+  - **macOS:** receipt-scoped **Full** on this host after Ticket 13 real-machine Scenario Harness (`support_level=full`, live witness, all required scenarios pass). Full is **not** universal for every macOS/Codex version; external JSON alone is at most Preview
+  - **Windows 11:** Ticket 14 framework integrated; platform remains **Preview** until a real Windows 11 host covers W11-S01…S11 **and** seals a process-local live witness (external JSON cannot Full)
+  - **Linux / WSL:** Ticket 15 framework integrated; platform remains **Limited / Read-only** without a real host receipt (writes fail closed; synthetic capability cannot Full)
+  - Ticket 06 CLI/Desktop **version** rollback stays `preview_only` / Desktop may be `limited`
 - Ticket 10 residual: upstream capsules stay `preview_only` / `local_only` / `external_write: false`; immutable form snapshot date/commit/blob provenance recorded in [HANDOFF.md](HANDOFF.md)
-- Ticket 11 surfaces: separate `upstream-action-preview` / `upstream-action-confirm` (CLI + MCP) with capability-injected adapter; production default is `ADAPTER_UNAVAILABLE` and never simulates success or real GitHub/browser writes. Not marked complete here; no external submission claimed.
-- Ticket 13 surfaces: `platform-status` / `platform-receipt-validate` (CLI + MCP), macOS adapter/harness/receipt schema, and support matrix. Full is never claimed from external JSON alone — only with a real-machine Scenario Harness receipt that passes live validation.
-- Ticket 14 surfaces: Windows adapter, write-scope gate, crash-metadata bounds, and Windows support receipt evaluation are integrated under `src/instances/windows/` + `src/platform/windows/`. **Windows support remains PREVIEW** on this host; no real Windows 11 receipt; no Full / published / submitted claim.
+- Ticket 11: local confirmation/action engine `LOCAL_COMPLETE`; separate `upstream-action-preview` / `upstream-action-confirm` (CLI + MCP) with capability-injected adapter; **production default is `ADAPTER_UNAVAILABLE`** and never simulates success or real GitHub/browser writes. No external submission claimed.
+- Ticket 13: `LOCAL_COMPLETE` with macOS adapter/harness/receipt schema and current real-machine Full evidence on this host (receipt-scoped).
+- Ticket 14: Windows adapter + receipt evaluation integrated under `src/instances/windows/` + `src/platform/windows/`. **Windows support remains PREVIEW**; no real Windows 11 receipt; no Full / published / submitted claim.
+- Ticket 15: Linux/WSL/enterprise matrix integrated; **Limited / Read-only** without real host receipt.
 - Registration and external submission: `NOT_STARTED`; Gate C not authorized; no public publication, upload, or real external GitHub writes
 - Exact local-verification evidence: [HANDOFF.md](HANDOFF.md)
 
@@ -120,7 +127,7 @@ rollback returns `MITIGATED_VERIFIED_BY_ROLLBACK` only. CLI and Desktop **versio
 rollback seams are registered `preview_only` guidance (official pin / signed media);
 ChangeGuard never stores or redistributes OpenAI binaries. Desktop version rollback is
 `limited` without signed history or lawful media. Canary and upstream supersession emit
-exact guidance enums. Real-machine platform Full/Preview/Limited claims remain Tickets 13–15.
+exact guidance enums. Platform Full/Preview/Limited claims are receipt-scoped (see Tickets 13–15 and [docs/SUPPORT_MATRIX.md](docs/SUPPORT_MATRIX.md)).
 
 ### Configuration / startup fault pack (Ticket 07)
 
@@ -167,8 +174,9 @@ node bin/changeguard.js platform-status --receipt=fixtures/windows11/receipts/sy
 **Status remains PREVIEW** until a real Windows 11 host Scenario Harness covers
 every critical scenario (W11-S01…S11) **and** seals a process-local live
 witness. Synthetic / cross-platform / forged / external JSON receipts never
-authorize FULL (including complete self-reported `real_machine` objects). This
-ticket does **not** claim `LOCAL_COMPLETE` or real-machine Full support.
+authorize FULL (including complete self-reported `real_machine` objects). Local
+framework integration is complete; this ticket does **not** claim real-machine
+Full support.
 
 ### Upstream draft routing (Ticket 10) — preview only
 
@@ -209,7 +217,7 @@ minimal Upstream Contribution Receipt (action, canonical URL, timestamp,
 receipt/idempotency hashes only).
 
 
-### macOS platform support (Ticket 13) — receipt-gated Full
+### macOS platform support (Ticket 13) — receipt-scoped Full
 
 `changeguard platform-status` / `changeguard_platform_status` reports read-only
 macOS adapter capabilities (registered install sources, path-role aliases, operations,
@@ -218,10 +226,13 @@ and closed safety constraints). Optional receipt objects surface a validated
 the host, and never opens the network.
 
 `changeguard platform-receipt-validate` / `changeguard_platform_receipt_validate`
-validates a Scenario Harness receipt (schema, leak checks, Full-only-with-proof).
-**Full** is declared only when every required real-machine scenario passes and
-validation succeeds; a hand-authored external JSON receipt alone never upgrades a
-platform to Full. See [docs/SUPPORT_MATRIX.md](docs/SUPPORT_MATRIX.md).
+validates a Scenario Harness receipt (schema, leak checks, Full-only-with-live-witness).
+**Full** is declared only when every required real-machine scenario passes **and** a
+process-local live harness witness validates; a hand-authored external JSON receipt
+alone never upgrades a platform to Full. Current product claim: **receipt-scoped Full
+on this host** after a real macOS Scenario Harness (all required scenarios pass;
+`network_used=false`). This is **not** a universal claim for every macOS release,
+architecture, or Codex version. See [docs/SUPPORT_MATRIX.md](docs/SUPPORT_MATRIX.md).
 Repository harness: `npm run harness:macos` (darwin real-machine path).
 
 ## Plugin surfaces

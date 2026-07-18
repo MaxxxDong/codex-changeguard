@@ -4,12 +4,17 @@
 
 **Blocked by:** 06 — 建立 KNOWN_GOOD 与回滚生命周期; 08 — 完成 Plugin 缓存与版本偏移故障包; 09 — 完成 Desktop Browser 崩溃分类器; 10 — 生成低噪声上游反馈草稿.
 
-**Status:** ready-for-agent
+**Status:** framework integrated / **platform PREVIEW** (not `LOCAL_COMPLETE` for Full; integrated on clean main `407789ca847b984dbd935e26edf8ad58ad0cf688`)
 
-Implementation note (framework on clean baseline; **not** `LOCAL_COMPLETE`, **not** Full):
+Implementation note (framework on clean baseline; **not** Full):
 namespaced Windows adapter + platform-support receipt/validator land with synthetic
 CI coverage. Platform level remains **PREVIEW** until a real Windows 11 host
-receipt covers W11-S01…S11. No fabricated Full claim.
+receipt covers W11-S01…S11 **and** a process-local live harness witness seals Full.
+External/CLI/MCP/JSON alone cannot produce Full. No fabricated Full claim.
+
+Broader product remains `IN_PROGRESS`. Gate C / registration / publication / submission / real external GitHub writes remain unauthorized / `NOT_STARTED`.
+
+Exact operational evidence is canonical in [HANDOFF.md](../../../HANDOFF.md) § Wave 4 closeout and [docs/SUPPORT_MATRIX.md](../../../docs/SUPPORT_MATRIX.md).
 
 - [x] Windows 适配器区分 MSIX、Desktop 内置 CLI、PATH CLI、WSL 和不同用户 Profile（注入 caps / 合成布局）。
 - [x] 只读取允许的崩溃元数据与日志窗口，不修改 WindowsApps、Program Files、注册表策略或系统安全设置（策略 + dump 拒绝）。
@@ -18,3 +23,9 @@ receipt covers W11-S01…S11. No fabricated Full claim.
 - [x] 无管理员权限可完成受支持路径；管理员或受管策略要求转为明确的 IT Handoff。
 - [x] Full 状态必须由真实机器 Scenario Harness 回执支持；缺少任何关键路径时保持 Preview 并列出缺口（校验器强制；本机默认 PREVIEW）。
 - [ ] 真实 Windows 11 主机完整 W11-S01…S11 回执（门禁 Full；本任务无真机，故意不采集）。
+
+## Local status closeout
+
+- Framework / local CI: integrated and verified on `407789c`.
+- Platform support claim: **PREVIEW** only (no real Windows 11 receipt; no Full).
+- Remaining for Full: real host W11-S01…S11 + process-local live witness.

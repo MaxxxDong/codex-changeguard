@@ -104,7 +104,7 @@ for (const forbidden of FORBIDDEN_PACKAGED_PATHS) {
   }
 }
 
-// Exact public docs tree (four Markdown files only; no docs/agents)
+// Exact public docs tree (five Markdown files only; no docs/agents)
 const docsDir = path.join(packageDir, "docs");
 if (!fs.existsSync(docsDir) || !fs.statSync(docsDir).isDirectory()) {
   fail("Packaged docs/ directory missing.");

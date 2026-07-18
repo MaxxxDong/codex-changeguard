@@ -89,7 +89,7 @@ Core I/O rules:
 - surface / error class / failure phase remain applicability gates after independent measurements
 - MCP stdio uses a bounded byte-oriented NDJSON frame accumulator; frames with byte length `<= MAX_MCP_REQUEST_BYTES` are accepted, only `>` the limit is rejected, before `JSON.parse`
 - Scenario Harness owns whole-target before/after hashing, not the diagnosis core
-- Packaging: `npm run package` builds `release/codex-changeguard-plugin/` with exact public top-level surface (`.codex-plugin`, `.mcp.json`, `README.md`, `bin`, `dist`, `docs`, `fixtures`, `hooks`, `package.json`, `schemas`, `skills`); public `docs/` is only `ARCHITECTURE.md`, `SECURITY.md`, `TEST_PLAN.md`, and `CASE_STUDIES.md` (no `docs/agents`); packaged `README.md` omits the repository-only `HANDOFF.md` link; no `node_modules`, `AGENTS.md`, `HANDOFF.md`, `src`, or `scripts`. Package smoke launches MCP via packaged `.mcp.json` and fails on broken local Markdown links or forbidden packaged paths. A clean source checkout is not claimed runnable before `npm ci && npm run build` (or package).
+- Packaging: `npm run package` builds `release/codex-changeguard-plugin/` with exact public top-level surface (`.codex-plugin`, `.mcp.json`, `README.md`, `bin`, `dist`, `docs`, `fixtures`, `hooks`, `package.json`, `schemas`, `skills`); public `docs/` is only `ARCHITECTURE.md`, `SECURITY.md`, `SUPPORT_MATRIX.md`, `TEST_PLAN.md`, and `CASE_STUDIES.md` (no `docs/agents`); packaged `README.md` omits the repository-only `HANDOFF.md` link; no `node_modules`, `AGENTS.md`, `HANDOFF.md`, `src`, or `scripts`. Package smoke launches MCP via packaged `.mcp.json` and fails on broken local Markdown links or forbidden packaged paths. A clean source checkout is not claimed runnable before `npm ci && npm run build` (or package).
 
 ### 2.3 Ticket 02 protected-process verified repair (isolated target)
 
@@ -358,7 +358,7 @@ Public seams (shared with Ticket 14 under one CLI/MCP command set):
 | `changeguard platform-receipt-validate` / MCP `changeguard_platform_receipt_validate` | Strict macOS harness receipt validation (schema, leak checks, Full-only-with-live-witness) |
 | `npm run harness:macos` / `scripts/run-macos-harness.mjs` | Real-machine isolated Scenario Harness (black-box CLI; disposable temps only) |
 
-macOS Full requires every required real-machine scenario to pass **and** a current-process live harness witness; external/CLI/MCP/arbitrary receipt JSON alone is at most Preview. See `docs/SUPPORT_MATRIX.md`. Windows contracts live under `src/platform/windows/` and never overwrite macOS types or validators.
+macOS Full requires every required real-machine scenario to pass **and** a current-process live harness witness; external/CLI/MCP/arbitrary receipt JSON alone is at most Preview. Full is **receipt-scoped** (not a universal claim for every macOS/Codex version). Current product claim and residual Preview/Limited boundaries for Windows and Linux/WSL are canonical in `docs/SUPPORT_MATRIX.md` (repository-only Wave 4 operational tip/evidence remains outside the packaged plugin surface). Windows contracts live under `src/platform/windows/` and never overwrite macOS types or validators.
 
 ### 9.2 Affected-instance resolution
 

@@ -5,7 +5,8 @@
 - Date: 2026-07-18 Asia/Shanghai
 - Track ID: `track-openai-build-week-codex-changeguard-20260717`
 - Gate B: `APPROVED`, option A
-- Current scope status: `IN_PROGRESS` (broader product; Tickets 11–17 are not complete)
+- Current scope status: `IN_PROGRESS` (broader product; Tickets 12, 16, 17 not complete; T14 platform Full and T15 real-host Full remain open)
+- Integrated HEAD (Wave 4 closeout tip): `407789ca847b984dbd935e26edf8ad58ad0cf688`
 - Ticket 01 (read-only diagnosis spine): `LOCAL_COMPLETE` / locally verified on commit `d7d917b03fc8b2ddd6b9b42b961cf58b4af4e5b2`
 - Ticket 02 (protected-process verified repair): `LOCAL_COMPLETE` / integrated through `e06e254`, verified on `c20ddc5c3b36b373e3b2c5791aa1db2678a45a8e`
 - Ticket 03 (instance / version detection): `LOCAL_COMPLETE` / integrated as `075d318`, verified on `c20ddc5c3b36b373e3b2c5791aa1db2678a45a8e`
@@ -16,6 +17,12 @@
 - Ticket 08 (plugin cache / skew / reconciliation): `LOCAL_COMPLETE` / integrated as `5b0b608`, verified on `5aa12c6c7370d9da84be3078c14fc63cf7e90fec`
 - Ticket 09 (Desktop Browser crash-family classifier): `LOCAL_COMPLETE` / integrated as `a7e1cea` (+ hard-gate `45c79b5`), verified on `5aa12c6c7370d9da84be3078c14fc63cf7e90fec`
 - Ticket 10 (upstream draft routing preview): `LOCAL_COMPLETE` / integrated through `0829936` → `7ef87e6` → `26d58b4` → `3265acd`, verified on `3265acd11fa260d4e2c857705a73bd36b7b002b6`
+- Ticket 11 (confirmed upstream actions): `LOCAL_COMPLETE` for local confirmation/action engine on `407789c` — **no production external adapter**; no real GitHub/browser write exercised or authorized
+- Ticket 12 (maintainer follow-up / upstream fix): not complete
+- Ticket 13 (macOS Full support): `LOCAL_COMPLETE` with receipt-scoped real-machine macOS Full harness evidence on this host (not universal macOS/Codex coverage)
+- Ticket 14 (Windows 11 validation): framework integrated; platform remains **PREVIEW** (no real Windows 11 W11-S01…S11 receipt; external JSON cannot Full; Full also requires process-local live witness)
+- Ticket 15 (Linux/WSL/enterprise): framework integrated; platform remains **Limited / Read-only** (no real host receipt; public writes disabled by default)
+- Tickets 16–17: not complete
 - Registration: `NOT_STARTED`
 - External submission: `NOT_STARTED`
 - Gate C: not authorized
@@ -28,6 +35,7 @@
 - Technical design and evidence levels: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Security/privacy contract: [docs/SECURITY.md](docs/SECURITY.md)
 - Verification plan: [docs/TEST_PLAN.md](docs/TEST_PLAN.md)
+- Platform support matrix: [docs/SUPPORT_MATRIX.md](docs/SUPPORT_MATRIX.md)
 - Ticket 01 issue record: [.scratch/changeguard/issues/01-read-only-diagnosis-spine.md](.scratch/changeguard/issues/01-read-only-diagnosis-spine.md)
 - Ticket 02 issue record: [.scratch/changeguard/issues/02-protected-process-verified-repair.md](.scratch/changeguard/issues/02-protected-process-verified-repair.md)
 - Ticket 03 issue record: [.scratch/changeguard/issues/03-instance-version-detection.md](.scratch/changeguard/issues/03-instance-version-detection.md)
@@ -38,6 +46,10 @@
 - Ticket 08 issue record: [.scratch/changeguard/issues/08-plugin-cache-skew-fault-pack.md](.scratch/changeguard/issues/08-plugin-cache-skew-fault-pack.md)
 - Ticket 09 issue record: [.scratch/changeguard/issues/09-desktop-browser-crash-classifier.md](.scratch/changeguard/issues/09-desktop-browser-crash-classifier.md)
 - Ticket 10 issue record: [.scratch/changeguard/issues/10-upstream-draft-routing.md](.scratch/changeguard/issues/10-upstream-draft-routing.md)
+- Ticket 11 issue record: [.scratch/changeguard/issues/11-confirmed-upstream-actions.md](.scratch/changeguard/issues/11-confirmed-upstream-actions.md)
+- Ticket 13 issue record: [.scratch/changeguard/issues/13-macos-full-support.md](.scratch/changeguard/issues/13-macos-full-support.md)
+- Ticket 14 issue record: [.scratch/changeguard/issues/14-windows-11-validation.md](.scratch/changeguard/issues/14-windows-11-validation.md)
+- Ticket 15 issue record: [.scratch/changeguard/issues/15-linux-wsl-enterprise-handoff.md](.scratch/changeguard/issues/15-linux-wsl-enterprise-handoff.md)
 
 ## Ticket 01 local completion (canonical evidence)
 
@@ -126,10 +138,11 @@ Tickets 05, 06, 07, 08, and 09 each meet their ticket acceptance criteria locall
 and are `LOCAL_COMPLETE`, verified on integrated clean HEAD
 `5aa12c6c7370d9da84be3078c14fc63cf7e90fec` (`fix: close Wave 3 lifecycle trust gaps`).
 Broader ChangeGuard remains `IN_PROGRESS`; at Wave 3 closeout Tickets 10–17 were
-still incomplete (Ticket 10 was closed later; Tickets 11–17 remain incomplete).
-Gate B remains `APPROVED`, option A. Gate C is not authorized. Registration,
-publication, upload, and external submission remain `NOT_STARTED`. Real external
-GitHub writes remain unauthorized / `NOT_STARTED`.
+still incomplete (Ticket 10 was closed later; Tickets 11/13/14/15 were closed in
+Wave 4 — see Wave 4 closeout; Tickets 12/16/17 remain open). Gate B remains
+`APPROVED`, option A. Gate C is not authorized. Registration, publication,
+upload, and external submission remain `NOT_STARTED`. Real external GitHub
+writes remain unauthorized / `NOT_STARTED`.
 
 ### Integration commits
 
@@ -164,7 +177,7 @@ Root dispatcher evidence (not Grok-run in this docs closeout):
 
 Wave 3 local completion does **not** upgrade platform support claims:
 
-- macOS Full / Windows Full / Linux·WSL Limited real-machine matrix remains Tickets 13–15 (`NOT_STARTED` / incomplete).
+- At Wave 3 closeout, macOS Full / Windows Full / Linux·WSL Limited real-machine matrix remained Tickets 13–15 (incomplete then; Wave 4 later integrated T13 receipt-scoped Full evidence, T14 Preview framework, T15 Limited framework — see Wave 4 closeout).
 - Ticket 06 CLI and Desktop **version** rollback seams are registered `preview_only` guidance: no OpenAI binary store, download, redistribution, or package-manager shell install.
 - Desktop version rollback is additionally `limited` without official signed history or lawful user media evidence.
 - Ticket 05 page commands remain candidate-only Repair DSL (`repair_authorized: false`); Ticket 09 crash families without verified fix stay `UPSTREAM_BLOCKED` / `INCONCLUSIVE` and refuse symptom-level repair authorization.
@@ -176,11 +189,13 @@ The clean integrated Root regression plus `changeguard-wave3-final-review-r2` (`
 
 Ticket 10 meets its acceptance criteria locally and is `LOCAL_COMPLETE`, verified on
 integrated clean HEAD `3265acd11fa260d4e2c857705a73bd36b7b002b6`
-(`test: close Ticket 10 consumer gaps`). Broader ChangeGuard remains `IN_PROGRESS`;
-Tickets 11–17 are **not** complete. Gate B remains `APPROVED`, option A. Gate C is
-not authorized. Registration, publication, upload, and external submission remain
-`NOT_STARTED`. Real external GitHub writes remain unauthorized / `NOT_STARTED`.
-Ticket 11 remains required for any separately confirmed external action.
+(`test: close Ticket 10 consumer gaps`). Broader ChangeGuard remains `IN_PROGRESS`.
+At Ticket 10 closeout, Tickets 11–17 were still open; Wave 4 later closed local/framework
+status for 11/13/14/15 (see Wave 4 closeout). Tickets **12, 16, 17** remain incomplete.
+Gate B remains `APPROVED`, option A. Gate C is not authorized. Registration,
+publication, upload, and external submission remain `NOT_STARTED`. Real external
+GitHub writes remain unauthorized / `NOT_STARTED`. Ticket 11 remains required for any
+separately confirmed external action (and production still has no real adapter by default).
 
 ### Integration commits
 
@@ -245,7 +260,63 @@ The clean integrated Root regression plus `changeguard-ticket10-regression-revie
 (`NO_P0_P1`, empty patch) above are the canonical final proof for Ticket 10 local
 closeout on `3265acd`.
 
-## Verified facts (Tickets 01–10)
+## Wave 4 closeout (Tickets 11 / 13 / 14 / 15; canonical current evidence)
+
+Tickets 11, 13, 14, and 15 are integrated on clean main tip
+`407789ca847b984dbd935e26edf8ad58ad0cf688`
+(`fix: refuse shared temp roots for fixture repairs`). Broader ChangeGuard remains
+`IN_PROGRESS`. Tickets **12, 16, 17** are **not** complete. Gate B remains
+`APPROVED`, option A. Gate C is **not** authorized. Registration, publication,
+upload, and external submission remain `NOT_STARTED`. Real external GitHub writes
+remain unauthorized / `NOT_STARTED`. No public competition submission occurred.
+
+Distinguish **ticket-local implementation** from **platform support** and
+**external operation** status:
+
+| Ticket | Local / framework status | Platform or external claim |
+| --- | --- | --- |
+| 11 | `LOCAL_COMPLETE` for confirmation/action engine (controlled fake remote) | Production default adapter **unavailable**; no real `gh`/browser adapter; no real external write exercised or authorized |
+| 13 | `LOCAL_COMPLETE` (adapter + harness + receipt gates) | **macOS Full** is **receipt-scoped** on this host (real Scenario Harness: `ok=true`, `support_level=full`, `network_used=false`, all 10 required scenarios pass). Not a universal claim for every macOS/Codex version |
+| 14 | Framework integrated (adapter, write-scope, receipt validator, synthetic CI) | Platform remains **PREVIEW**. No real Windows 11 W11-S01…S11 receipt. External JSON cannot Full; Full also requires process-local live witness |
+| 15 | Framework integrated (Limited/Read-only matrix, IT Handoff, write-disable, synthetic harness) | Platform remains **Limited / Read-only**. No real Linux/WSL host receipt. Public writes disabled by default; fixture-env alone is not authorization |
+
+### Root integrated verification on `407789c` (dynamic; passed)
+
+Root dispatcher evidence (authoritative for this wave tip; not re-run as Grok dynamic
+authority in this docs-only closeout):
+
+- Full regression: `npm test` **390/390** pass, **0** failures
+- `npm run typecheck` pass
+- `npm run check:boundary` pass
+- Boundary self-test: **175/175** pass
+- Real macOS Scenario Harness on this machine: `ok=true`, `support_level=full`,
+  `network_used=false`, all 10 required scenarios pass (current receipt under local
+  verification outputs; path-free public summary only)
+- `npm run package` pass
+- `npm run package:smoke` pass; packaged artifact is self-contained and excludes
+  internal/source/agents/`node_modules` surfaces
+
+### Residual boundaries (still truthful after Wave 4)
+
+- Ticket 11 success receipts on the fake remote are not real GitHub contributions;
+  production remains pure draft / `ADAPTER_UNAVAILABLE` without a host-injected adapter.
+- macOS Full does not imply Windows Full or Linux Full; Full is receipt + live-witness
+  scoped, not “all platforms / all versions.”
+- Ticket 14 stays **Preview** until a real Windows 11 host covers W11-S01…S11 **and**
+  seals a process-local live witness.
+- Ticket 15 stays **Limited / Read-only** without a real host receipt; strict disposable
+  child only for any isolated PREVIEW write path.
+- Ticket 06 CLI/Desktop **version** rollback remains `preview_only` / Desktop may be
+  `limited`. Ticket 10 capsules remain `preview_only` / `local_only` /
+  `external_write: false`.
+- Gate C / registration / publication / upload / submission / real external GitHub
+  writes remain unauthorized / `NOT_STARTED`.
+
+Historical sections above (Ticket 01, Wave 2, Wave 3, Ticket 10) keep their original
+pass counts (43/43, 110/110, 212/212, 260/260) as historical evidence. Do not rewrite
+those counts to 390/390.
+
+## Verified facts (Tickets 01–11, 13–15)
 
 - Shared diagnosis core: `src/core/diagnose.ts` (named candidates only; fail-closed symlink policy; structural shim signature)
 - Protected-process recovery: `src/core/recovery/` (preview / one-shot authorize / apply / verify / rollback on isolated targets only)
@@ -257,24 +328,25 @@ closeout on `3265acd`.
 - Plugin-cache faults: `src/core/plugin-cache/` + recovery resource copy / atomic replace / quarantine rename
 - Crash-family classifier: `src/core/crash-family.ts` (deterministic gates; Fixture E)
 - Upstream draft routing preview: `src/upstream/` (`upstream-preview` / `changeguard_upstream_preview`; preview-only capsule; immutable form snapshot)
-- Public CLI: `bin/changeguard.js` → `dist/cli/main.js` (`diagnose`, `impact`, `analyze-page`, `upstream-preview`, `repair-preview`, `repair-apply`, `verify`, `rollback`, `scan`, `scan-system`, `session-start`, `lifecycle`)
-- Public MCP tools: `changeguard_diagnose`, `changeguard_impact`, `changeguard_analyze_page`, `changeguard_upstream_preview`, `changeguard_repair_*`, `changeguard_verify`, `changeguard_rollback`, `changeguard_scan`, `changeguard_scan_system`, `changeguard_session_start`, `changeguard_lifecycle`
+- Confirmed upstream actions: `src/upstream/actions/` (`upstream-action-preview` / `upstream-action-confirm`; production adapter unavailable by default)
+- Platform surfaces: `src/platform/` (macOS harness/receipts T13; Windows PREVIEW T14; Linux/WSL/enterprise Limited T15) + `src/instances/windows/`
+- Public CLI: `bin/changeguard.js` → `dist/cli/main.js` (`diagnose`, `impact`, `analyze-page`, `upstream-preview`, `upstream-action-preview`, `upstream-action-confirm`, `repair-preview`, `repair-apply`, `verify`, `rollback`, `scan`, `scan-system`, `session-start`, `lifecycle`, `platform-status`, `platform-receipt-validate`)
+- Public MCP tools: `changeguard_diagnose`, `changeguard_impact`, `changeguard_analyze_page`, `changeguard_upstream_preview`, `changeguard_upstream_action_preview`, `changeguard_upstream_action_confirm`, `changeguard_repair_*`, `changeguard_verify`, `changeguard_rollback`, `changeguard_scan`, `changeguard_scan_system`, `changeguard_session_start`, `changeguard_lifecycle`, `changeguard_platform_status`, `changeguard_platform_receipt_validate`
 - `.mcp.json` uses `cwd: "."` and `./dist/mcp/server.js`
 - Release package: `npm run package` → `release/codex-changeguard-plugin/` (self-contained JS, no `node_modules`)
-- Package smoke: `npm run package:smoke` from a non-repo cwd (includes packaged SessionStart / MCP wiring checks and Ticket 10 upstream-preview ready/blocked)
+- Package smoke: `npm run package:smoke` from a non-repo cwd (includes packaged SessionStart / MCP wiring checks, Ticket 10 upstream-preview ready/blocked, Ticket 11 action-preview / adapter-unavailable confirm)
 - Production boundary guard: `npm run check:boundary`
 - Positive protected-process fixture may reach `SOURCE_COMPONENT_LOCATED` / experimental `RESOLVED_VERIFIED` only under measured local evidence and Ticket 02 authorization rules
-- Never claims external submission, Gate C authorization, whole-product completion, Ticket 11 confirmed writes, or real-machine platform Full beyond verified tickets
+- Never claims external submission, Gate C authorization, whole-product completion, real Ticket 11 production adapter success, Windows Full, or Linux/WSL Full beyond verified receipt-scoped claims
 
-## Ticket 15 integration note (framework only; not product complete)
+## Ticket 15 residual note (platform Limited; framework integrated)
 
-Ticket 15 Linux/WSL/enterprise capability matrix, bounded discovery, IT Handoff,
-network compare, and write-disable gates are **semantically integrated** into the
-unified platform surface with Tickets 13–14. Broader product remains
-`IN_PROGRESS`. This is **not** `LOCAL_COMPLETE` for real-machine Linux/WSL Full,
-and does **not** authorize Gate C / registration / publication / submission.
+See **Wave 4 closeout** above for the canonical current tip. Ticket 15 Linux/WSL/enterprise
+capability matrix, bounded discovery, IT Handoff, network compare, and write-disable gates
+are **semantically integrated** into the unified platform surface with Tickets 13–14.
+This is **not** real-machine Linux/WSL Full and does **not** authorize Gate C.
 
-Truthful residual claims after integration:
+Truthful residual claims:
 
 - Linux and WSL remain **Limited / Read-only** without a real host Scenario Harness receipt.
 - Synthetic or caller-injected capability validates the framework only; it cannot upgrade production Full.
@@ -285,10 +357,10 @@ Truthful residual claims after integration:
 
 ## Next steps
 
-1. Continue broader product tickets (16–17); Tickets 01–15 framework work does not complete the product.
+1. Continue open product tickets **12, 16, 17**; Wave 4 local/framework closeout does not complete the product.
 2. Keep Gate C / registration / publication / upload / submission / real external GitHub writes blocked until separate authorization.
-3. Preserve residual Preview/Limited boundaries (version-rollback preview-only; Ticket 10 upstream preview-only / local-only / no external write; macOS Full needs live witness; Windows Full needs real host + live witness; Linux/WSL stay Limited without real receipts).
-4. Ticket 11 owns separately confirmed external actions after a fresh Ticket 10 preview; do not treat Ticket 10 closeout as write authorization.
+3. Preserve residual boundaries: Ticket 11 no production adapter / no real external write; Ticket 13 Full is receipt-scoped (not universal); Ticket 14 stays Preview without real W11 host + live witness; Ticket 15 stays Limited without real host receipt; Ticket 06 version-rollback preview-only; Ticket 10 upstream preview-only / local-only / no external write.
+4. Do not treat Ticket 10 or Ticket 11 local completion as authorization for real GitHub writes without a host-injected adapter and explicit user confirmation.
 5. Do not treat a clean source checkout as runnable before `npm ci && npm run build` (or `npm run package`).
 
 ## Boundaries
