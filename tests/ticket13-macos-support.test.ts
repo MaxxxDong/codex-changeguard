@@ -1012,14 +1012,29 @@ test("Ticket13: schema file exists for platform support receipt", () => {
   );
   assert.ok(fs.existsSync(schemaPath));
   const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8")) as {
-    required: string[];
-    properties: { isolation: { required: string[] } };
+    oneOf?: Array<{
+      title?: string;
+      required?: string[];
+      properties?: { isolation?: { required?: string[] } };
+    }>;
+    required?: string[];
+    properties?: { isolation?: { required?: string[] } };
   };
-  assert.ok(schema.required.includes("support_level"));
-  assert.ok(schema.required.includes("isolation"));
-  assert.ok(schema.required.includes("scenarios"));
+  // Discriminated union: macOS harness receipt + Windows support receipt.
+  // Resolve the macOS branch (Ticket 13 contract) without requiring a second
+  // truth source outside schemas/platform-support-receipt.schema.json.
+  const macosBranch =
+    Array.isArray(schema.oneOf) && schema.oneOf.length >= 1
+      ? (schema.oneOf.find((b) => b.title === "MacosScenarioHarnessReceipt") ??
+        schema.oneOf[0]!)
+      : schema;
+  assert.ok(macosBranch.required?.includes("support_level"));
+  assert.ok(macosBranch.required?.includes("isolation"));
+  assert.ok(macosBranch.required?.includes("scenarios"));
   assert.ok(
-    schema.properties.isolation.required.includes("active_home_witness_digest"),
+    macosBranch.properties?.isolation?.required?.includes(
+      "active_home_witness_digest",
+    ),
   );
 });
 

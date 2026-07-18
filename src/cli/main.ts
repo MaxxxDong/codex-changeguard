@@ -13,14 +13,14 @@
  *   changeguard rollback <isolated-target>
  *   changeguard scan <inventory-root>          (fixture inventory adapter)
  *   changeguard scan-system                    (production registered system adapter)
- *   changeguard platform-status [--receipt=<path>]  (Ticket 14 support level; default PREVIEW)
  *   changeguard session-start <inventory-root> [--hook-trust=…]  (manual fixture path)
  *   changeguard lifecycle <operation> <isolated-target> [--key=value …]
- *   changeguard platform-status [--probe-host=true|false]
+ *   changeguard platform-status [--probe-host=true|false] [--receipt=<path>] [--plan]
  *   changeguard platform-receipt-validate <receipt.json>
  *
  * Ticket 11 production seams inject no real gh/browser adapter (capability unavailable).
  * Ticket 13 platform seams are read-only (no harness spawn; Full only with real-machine receipt).
+ * Ticket 14 Windows support remains PREVIEW without a real Windows 11 host receipt.
  */
 import fs from "node:fs";
 import { diagnose } from "../core/diagnose.js";
@@ -67,6 +67,9 @@ import {
 import {
   platformStatus,
   validatePlatformSupportReceipt,
+  loadAndEvaluateReceiptFile,
+  realMachineRunnerPlan,
+  windows11SupportStatus,
   type PlatformStatusResult,
   type ReceiptValidationResult,
 } from "../platform/index.js";
@@ -167,8 +170,18 @@ function actionConfirmUsageError(): never {
   printJson(result, 2);
 }
 
+/**
+ * Unified platform-status (Tickets 13 + 14).
+ * - Always includes macOS/host capability fields from platformStatus.
+ * - Always includes Windows support evaluation under `status` (default PREVIEW).
+ * - --receipt=<path> evaluates a Windows support receipt file (never fabricates Full).
+ * - --plan includes the Windows real-machine runner plan.
+ * - --probe-host controls host install probing for capabilities.
+ */
 function runPlatformStatus(rest: string[]): void {
   let probeHost = true;
+  let receiptPath: string | null = null;
+  let showPlan = false;
   for (const a of rest) {
     if (a === "--probe-host=false" || a === "--probe-host=0") {
       probeHost = false;
@@ -178,13 +191,87 @@ function runPlatformStatus(rest: string[]): void {
       probeHost = true;
       continue;
     }
-    if (a.startsWith("-")) {
-      printJson(usageDiagnosis(), 2);
+    if (a.startsWith("--receipt=")) {
+      receiptPath = a.slice("--receipt=".length);
+      if (!receiptPath) {
+        printJson(
+          {
+            schema_version: 1,
+            ok: false,
+            error_code: "USAGE",
+            error_message: "Empty --receipt= path.",
+            network_used: false,
+            target_mutated: false,
+            repair_applied: false,
+          },
+          2,
+        );
+      }
+      continue;
     }
-    printJson(usageDiagnosis(), 2);
+    if (a === "--plan") {
+      showPlan = true;
+      continue;
+    }
+    if (a.startsWith("-")) {
+      printJson(
+        {
+          schema_version: 1,
+          ok: false,
+          error_code: "USAGE",
+          error_message:
+            "Usage: changeguard platform-status [--probe-host=true|false] [--receipt=<path>] [--plan]",
+          network_used: false,
+          target_mutated: false,
+          repair_applied: false,
+        },
+        2,
+      );
+    }
+    printJson(
+      {
+        schema_version: 1,
+        ok: false,
+        error_code: "USAGE",
+        error_message:
+          "Usage: changeguard platform-status [--probe-host=true|false] [--receipt=<path>] [--plan]",
+        network_used: false,
+        target_mutated: false,
+        repair_applied: false,
+      },
+      2,
+    );
   }
-  const result: PlatformStatusResult = platformStatus({ probeHost });
-  printJson(result, result.ok ? 0 : 1);
+
+  const base: PlatformStatusResult = platformStatus({ probeHost });
+  let winStatus = windows11SupportStatus(null);
+  let loadOk = true;
+  let error_code: string | null = base.error_code;
+  let error_message: string | null = base.error_message;
+
+  if (receiptPath) {
+    const loaded = loadAndEvaluateReceiptFile(receiptPath);
+    winStatus = loaded.status;
+    loadOk = loaded.ok;
+    if (!loaded.ok) {
+      error_code = loaded.error_code;
+      error_message = loaded.error_message;
+    }
+  }
+
+  printJson(
+    {
+      ...base,
+      ok: base.ok && loadOk,
+      status: winStatus,
+      plan: showPlan ? realMachineRunnerPlan() : null,
+      error_code,
+      error_message,
+    },
+    // Exit 0 when evaluation succeeded (including honest PREVIEW).
+    // Nonzero only on load/parse failure of a provided receipt path.
+    loadOk ? (base.ok ? 0 : 1) : 1,
+  );
 }
 
 function runPlatformReceiptValidate(rest: string[]): void {
@@ -1203,108 +1290,6 @@ export function runCli(argv: string[]): void {
       }
       runScanSystem(parseStateDir(flags));
       return;
-    }
-
-    if (cmd === "platform-status") {
-      const flags = rest.filter((a) => a.startsWith("-"));
-      const positional = rest.filter((a) => !a.startsWith("-"));
-      if (positional.length !== 0) {
-        printJson(
-          {
-            schema_version: 1,
-            ok: false,
-            error_code: "USAGE",
-            error_message:
-              "Usage: changeguard platform-status [--receipt=<path>] [--plan]",
-            network_used: false,
-            target_mutated: false,
-            repair_applied: false,
-          },
-          2,
-        );
-      }
-      let receiptPath: string | null = null;
-      let showPlan = false;
-      for (const f of flags) {
-        if (f.startsWith("--receipt=")) {
-          receiptPath = f.slice("--receipt=".length);
-          if (!receiptPath) {
-            printJson(
-              {
-                schema_version: 1,
-                ok: false,
-                error_code: "USAGE",
-                error_message: "Empty --receipt= path.",
-                network_used: false,
-                target_mutated: false,
-                repair_applied: false,
-              },
-              2,
-            );
-          }
-        } else if (f === "--plan") {
-          showPlan = true;
-        } else {
-          printJson(
-            {
-              schema_version: 1,
-              ok: false,
-              error_code: "USAGE",
-              error_message:
-                "Usage: changeguard platform-status [--receipt=<path>] [--plan]",
-              network_used: false,
-              target_mutated: false,
-              repair_applied: false,
-            },
-            2,
-          );
-        }
-      }
-      if (showPlan) {
-        printJson(
-          {
-            schema_version: 1,
-            ok: true,
-            plan: realMachineRunnerPlan(),
-            status: windows11SupportStatus(null),
-            network_used: false,
-            target_mutated: false,
-            repair_applied: false,
-          },
-          0,
-        );
-      }
-      if (receiptPath) {
-        const loaded = loadAndEvaluateReceiptFile(receiptPath);
-        printJson(
-          {
-            schema_version: 1,
-            ok: loaded.ok,
-            status: loaded.status,
-            error_code: loaded.error_code,
-            error_message: loaded.error_message,
-            network_used: false,
-            target_mutated: false,
-            repair_applied: false,
-          },
-          // Exit 0 when evaluation succeeded (including honest PREVIEW).
-          // Nonzero only on load/parse failure.
-          loaded.ok ? 0 : 1,
-        );
-      }
-      // No receipt: honest PREVIEW default (never fabricate FULL).
-      const status = windows11SupportStatus(null);
-      printJson(
-        {
-          schema_version: 1,
-          ok: true,
-          status,
-          network_used: false,
-          target_mutated: false,
-          repair_applied: false,
-        },
-        0,
-      );
     }
 
     if (cmd === "session-start") {

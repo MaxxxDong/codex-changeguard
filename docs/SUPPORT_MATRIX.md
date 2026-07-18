@@ -6,8 +6,8 @@ upgrade a platform to Full.
 
 | Platform | Declared aim | Current claim rule | Adapter status | Notes |
 | --- | --- | --- | --- | --- |
-| macOS | Full (first full path) | Full only when Ticket 13 real-machine receipt has every required scenario `pass` and receipt validation succeeds; otherwise **Preview** with exact `uncovered_gaps` | Namespaced adapter in `src/platform/macos/` | Disposable temp fixtures only; never active `~/.codex` |
-| Windows 11 | Full after Ticket 14 real-machine loop | **Preview** until Ticket 14 receipt | Partial system enumeration (MSIX / Desktop / PATH) | No admin bypass; no WindowsApps mutation |
+| macOS | Full (first full path) | Full only when Ticket 13 real-machine receipt has every required scenario `pass` **and** current-process live harness witness validation succeeds; external/CLI/MCP/arbitrary JSON alone is at most **Preview** | Namespaced adapter in `src/platform/macos/` | Disposable temp fixtures only; never active `~/.codex` (logical or realpath; symlink fail-closed) |
+| Windows 11 | Full after Ticket 14 real-machine loop | **Preview** (current product claim). Framework integrated; Full only with a real Windows 11 `host_kind=real_machine` receipt covering W11-S01…S11 | Namespaced adapter in `src/instances/windows/` + `src/platform/windows/` | No admin bypass; signed `.exe/.dll/.sys` always refused; no WindowsApps / Program Files mutation; synthetic fixtures never Full |
 | Linux | Limited CLI | **Limited** / read-only generic until Ticket 15 | Registered PATH / package roots only | No Desktop full repair claim |
 | WSL | Limited CLI + IT handoff | **Limited** until Ticket 15 | Registered WSL paths | Enterprise policy → IT Handoff |
 
@@ -70,9 +70,14 @@ node bin/changeguard.js platform-status
 
 ## Schema
 
-`schemas/platform-support-receipt.schema.json` is the strict receipt contract.
+`schemas/platform-support-receipt.schema.json` is a **oneOf** contract:
+
+1. macOS Scenario Harness receipt (Ticket 13; `receipt_id` + `scenarios` + `isolation`)
+2. Windows 11 support receipt (Ticket 14; `host_kind` + `critical_scenarios`)
+
 Receipts must not contain usernames, home paths, disposable clone paths, or raw
-temp paths.
+temp paths. The two variants never share a second truth source: validators live
+under `src/platform/receipt.ts` (macOS) and `src/platform/windows/` (Windows).
 
 ## Residual product boundaries
 

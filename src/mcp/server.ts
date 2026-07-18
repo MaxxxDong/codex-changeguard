@@ -7,7 +7,8 @@
  * + Ticket 06 lifecycle (KNOWN_GOOD / retention / A-B / canary / supersession)
  * + Ticket 10 upstream draft preview (local-only capsule; never external write)
  * + Ticket 11 confirmed upstream action preview/confirm (no real adapter by default)
- * + Ticket 13 platform status / receipt validation (macOS capabilities; no harness spawn).
+ * + Ticket 13 platform status / receipt validation (macOS capabilities; no harness spawn)
+ * + Ticket 14 Windows 11 support status (PREVIEW without real-machine host receipt).
  *
  * Wire protocol: newline-delimited JSON-RPC 2.0 over stdio.
  * Request frames are accumulated as bounded bytes (not unbounded readline).
@@ -57,6 +58,9 @@ import {
 import {
   platformStatus,
   validatePlatformSupportReceipt,
+  loadAndEvaluateReceiptFile,
+  realMachineRunnerPlan,
+  windows11SupportStatus,
   type PlatformStatusResult,
   type ReceiptValidationResult,
 } from "../platform/index.js";
@@ -73,7 +77,6 @@ const TOOL_VERIFY = "changeguard_verify";
 const TOOL_ROLLBACK = "changeguard_rollback";
 const TOOL_SCAN = "changeguard_scan";
 const TOOL_SCAN_SYSTEM = "changeguard_scan_system";
-const TOOL_PLATFORM_STATUS = "changeguard_platform_status";
 const TOOL_SESSION = "changeguard_session_start";
 const TOOL_LIFECYCLE = "changeguard_lifecycle";
 const TOOL_PLATFORM_STATUS = "changeguard_platform_status";
@@ -92,7 +95,6 @@ const KNOWN_TOOLS = new Set([
   TOOL_ROLLBACK,
   TOOL_SCAN,
   TOOL_SCAN_SYSTEM,
-  TOOL_PLATFORM_STATUS,
   TOOL_SESSION,
   TOOL_LIFECYCLE,
   TOOL_PLATFORM_STATUS,
@@ -363,27 +365,6 @@ function toolSchemas() {
       },
     },
     {
-      name: TOOL_PLATFORM_STATUS,
-      description:
-        "Ticket 14 Windows 11 platform support status. Without a real-machine receipt, level is PREVIEW with explicit gaps. Synthetic/cross-platform receipts never authorize FULL. Optional receipt path is validated read-only; never executes binaries or writes system paths.",
-      inputSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          receipt: {
-            type: "string",
-            description:
-              "Optional path to a platform-support receipt JSON file. Omit for default PREVIEW status.",
-          },
-          plan: {
-            type: "boolean",
-            description:
-              "When true, include the real-machine runner plan (scenario IDs + forbidden actions).",
-          },
-        },
-      },
-    },
-    {
       name: TOOL_SESSION,
       description:
         "Trusted SessionStart equivalent over an isolated inventory fixture: silent when fingerprint unchanged; otherwise bounded read-only health check. Hook trust must be explicit. Packaged SessionStart uses the dedicated PLUGIN_ROOT entrypoint.",
@@ -458,7 +439,7 @@ function toolSchemas() {
     {
       name: TOOL_PLATFORM_STATUS,
       description:
-        "Ticket 13 read-only platform capabilities/status (macOS adapter aliases, operations, safety constraints). Optional receipt object for verified support level. Never mutates host, never executes binaries, never uses network.",
+        "Unified platform status (Tickets 13+14): read-only host capabilities (macOS adapter when on darwin) plus Windows 11 support evaluation under `status` (default PREVIEW). Optional macOS harness receipt object, optional Windows receipt file path, optional runner plan. Never mutates host, never executes binaries, never fabricates Full from synthetic evidence.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -469,9 +450,25 @@ function toolSchemas() {
               "When true (default), probe registered Desktop/PATH candidates without executing them.",
           },
           receipt: {
-            type: "object",
             description:
-              "Optional platform support receipt to validate and surface verified_support_level.",
+              "Optional macOS harness receipt object (Ticket 13 verified_support_level) or Windows support receipt file path string (Ticket 14).",
+            oneOf: [
+              {
+                type: "object",
+                description:
+                  "macOS Scenario Harness receipt object for verified_support_level.",
+              },
+              {
+                type: "string",
+                description:
+                  "Path to a Windows platform-support receipt JSON file.",
+              },
+            ],
+          },
+          plan: {
+            type: "boolean",
+            description:
+              "When true, include the Windows real-machine runner plan (scenario IDs + forbidden actions).",
           },
         },
       },
@@ -479,7 +476,7 @@ function toolSchemas() {
     {
       name: TOOL_PLATFORM_RECEIPT,
       description:
-        "Validate a platform support Scenario Harness receipt (schema, leak checks, Full-only-with-proof). Read-only; no network.",
+        "Validate a macOS platform support Scenario Harness receipt (schema, leak checks, Full-only-with-proof). Read-only; no network. Windows file-path receipts use changeguard_platform_status with receipt path.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -487,7 +484,7 @@ function toolSchemas() {
         properties: {
           receipt: {
             type: "object",
-            description: "PlatformSupportReceipt JSON object.",
+            description: "macOS PlatformSupportReceipt JSON object.",
           },
         },
       },
@@ -523,7 +520,11 @@ function handleToolsCall(params: unknown): {
     | ScanResult
     | LifecycleResult
     | PlatformStatusResult
-    | ReceiptValidationResult;
+    | ReceiptValidationResult
+    | (PlatformStatusResult & {
+        status: unknown;
+        plan: unknown;
+      });
   ok: boolean;
 } {
   if (!params || typeof params !== "object" || Array.isArray(params)) {
@@ -874,49 +875,6 @@ function handleToolsCall(params: unknown): {
     return { payload, ok: payload.ok };
   }
 
-  if (p.name === TOOL_PLATFORM_STATUS) {
-    const keys = Object.keys(a);
-    if (keys.some((k) => k !== "receipt" && k !== "plan")) {
-      throw Object.assign(new Error("Unknown or extra arguments."), {
-        code: "EXTRA_ARGS",
-      });
-    }
-    const includePlan = a.plan === true;
-    if (a.receipt !== undefined && typeof a.receipt !== "string") {
-      throw Object.assign(new Error("Invalid receipt path."), {
-        code: "INVALID_ARGS",
-      });
-    }
-    if (typeof a.receipt === "string" && a.receipt.length > 0) {
-      const loaded = loadAndEvaluateReceiptFile(a.receipt);
-      const payload = {
-        schema_version: 1 as const,
-        ok: loaded.ok,
-        status: loaded.status,
-        plan: includePlan ? realMachineRunnerPlan() : null,
-        error_code: loaded.error_code,
-        error_message: loaded.error_message,
-        network_used: false as const,
-        target_mutated: false as const,
-        repair_applied: false as const,
-      };
-      return { payload, ok: loaded.ok };
-    }
-    const status = windows11SupportStatus(null);
-    const payload = {
-      schema_version: 1 as const,
-      ok: true,
-      status,
-      plan: includePlan ? realMachineRunnerPlan() : null,
-      error_code: null,
-      error_message: null,
-      network_used: false as const,
-      target_mutated: false as const,
-      repair_applied: false as const,
-    };
-    return { payload, ok: true };
-  }
-
   if (p.name === TOOL_SESSION) {
     const keys = Object.keys(a);
     if (keys.some((k) => k !== "target" && k !== "hook_trust")) {
@@ -1050,7 +1008,7 @@ function handleToolsCall(params: unknown): {
   }
 
   if (p.name === TOOL_PLATFORM_STATUS) {
-    const allowed = new Set(["probe_host", "receipt"]);
+    const allowed = new Set(["probe_host", "receipt", "plan"]);
     for (const k of Object.keys(a)) {
       if (!allowed.has(k)) {
         throw Object.assign(new Error("Unknown or extra arguments."), {
@@ -1067,10 +1025,56 @@ function handleToolsCall(params: unknown): {
       }
       probeHost = a.probe_host;
     }
-    const payload = platformStatus({
+    if (a.plan !== undefined && typeof a.plan !== "boolean") {
+      throw Object.assign(new Error("Invalid plan."), {
+        code: "INVALID_ARGS",
+      });
+    }
+    const includePlan = a.plan === true;
+
+    // receipt: string path → Windows support receipt; object → macOS harness receipt.
+    let macosReceipt: unknown = undefined;
+    let winStatus = windows11SupportStatus(null);
+    let loadOk = true;
+    let error_code: string | null = null;
+    let error_message: string | null = null;
+
+    if (typeof a.receipt === "string") {
+      if (a.receipt.length === 0) {
+        throw Object.assign(new Error("Invalid receipt path."), {
+          code: "INVALID_ARGS",
+        });
+      }
+      const loaded = loadAndEvaluateReceiptFile(a.receipt);
+      winStatus = loaded.status;
+      loadOk = loaded.ok;
+      error_code = loaded.error_code;
+      error_message = loaded.error_message;
+    } else if (a.receipt !== undefined) {
+      if (
+        a.receipt === null ||
+        typeof a.receipt !== "object" ||
+        Array.isArray(a.receipt)
+      ) {
+        throw Object.assign(new Error("Invalid receipt."), {
+          code: "INVALID_ARGS",
+        });
+      }
+      macosReceipt = a.receipt;
+    }
+
+    const base = platformStatus({
       probeHost,
-      receipt: a.receipt,
+      receipt: macosReceipt,
     });
+    const payload = {
+      ...base,
+      ok: base.ok && loadOk,
+      status: winStatus,
+      plan: includePlan ? realMachineRunnerPlan() : null,
+      error_code: error_code ?? base.error_code,
+      error_message: error_message ?? base.error_message,
+    };
     return { payload, ok: payload.ok };
   }
 

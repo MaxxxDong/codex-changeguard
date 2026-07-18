@@ -334,7 +334,7 @@ Crash metadata accepts only allowlisted structured fields (`src/instances/window
 | **FULL** | Only an actual Windows 11 `host_kind=real_machine` receipt covering **all** critical scenarios W11-S01…W11-S11 with evidence digests and operator attestation |
 | **LIMITED** | Non-Windows Linux/WSL receipts (Ticket 15 narrative); not a Windows Full substitute |
 
-Public seams: `changeguard platform-status [--receipt=<path>] [--plan]`, MCP `changeguard_platform_status`. Schema: `schemas/platform-support-receipt.schema.json`. The real-machine runner entry (`src/platform/runner.ts`) validates receipts only — it never executes Codex binaries, never writes WindowsApps/Program Files/registry policy, and never elevates. Synthetic fixtures under `fixtures/windows11/receipts/` can only support PREVIEW.
+Public seams: `changeguard platform-status [--probe-host=…] [--receipt=<path>] [--plan]`, MCP `changeguard_platform_status` (unified with Ticket 13 capability fields; Windows evaluation under `status`). Schema: `schemas/platform-support-receipt.schema.json` is a oneOf of macOS harness receipts and Windows 11 support receipts. The Windows real-machine runner entry (`src/platform/windows/runner.ts`) validates receipts only — it never executes Codex binaries, never writes WindowsApps/Program Files/registry policy, and never elevates. Synthetic fixtures under `fixtures/windows11/receipts/` can only support PREVIEW.
 
 Each public identity includes:
 
@@ -345,19 +345,19 @@ Each public identity includes:
 
 Version/build evidence is read only from metadata/manifest files (`version.json`, `package.json`, `Info.plist`, `AppxManifest.xml`, or fixture-declared fields) and only under **explicit allowed roots** (inventory root and/or system-adapter trusted install roots). Implicit parent traversal (`../Info.plist`, npm parent paths) is not used; parent metadata requires a separately registered trusted root and remains bounded with Ticket 01-equivalent no-follow checks.
 
-### 9.1.1 macOS platform adapter and support receipts (Ticket 13)
+### 9.1.3 macOS platform adapter and support receipts (Ticket 13)
 
-`src/platform/macos/` is the namespaced macOS adapter. It advertises only bounded registered install sources (`desktop_bundled`, `path`, `package_manager`), path-role **aliases** (profile/config/log/cache/crash metadata), and registered operations. Constraints are fixed closed: no broad home crawl, no raw path export, no executing discovered binaries for version, no sudo, no system certificate/proxy/security-control change, no signed-app or OpenAI binary mutation, no active primary-profile mutation.
+`src/platform/macos/` is the namespaced macOS adapter. It advertises only bounded registered install sources (`desktop_bundled`, `path`, `package_manager`), path-role **aliases** (profile/config/log/cache/crash metadata), and registered operations. Constraints are fixed closed: no broad home crawl, no raw path export, no executing discovered binaries for version, no sudo, no system certificate/proxy/security-control change, no signed-app or OpenAI binary mutation, no active primary-profile mutation. Isolation refuses active `~/.codex` (logical and realpath), protected roots, and symlink targets (fail closed). Any harness write path is gated before creation.
 
-Public seams:
+Public seams (shared with Ticket 14 under one CLI/MCP command set):
 
 | Seam | Role |
 | --- | --- |
-| `changeguard platform-status` / MCP `changeguard_platform_status` | Read-only capabilities + optional receipt validation |
-| `changeguard platform-receipt-validate` / MCP `changeguard_platform_receipt_validate` | Strict receipt validation (schema, leak checks, Full-only-with-proof) |
+| `changeguard platform-status` / MCP `changeguard_platform_status` | Read-only capabilities + Windows `status` evaluation + optional receipt/plan |
+| `changeguard platform-receipt-validate` / MCP `changeguard_platform_receipt_validate` | Strict macOS harness receipt validation (schema, leak checks, Full-only-with-live-witness) |
 | `npm run harness:macos` / `scripts/run-macos-harness.mjs` | Real-machine isolated Scenario Harness (black-box CLI; disposable temps only) |
 
-`schemas/platform-support-receipt.schema.json` is the receipt contract. Full support is declared only when every required real-machine scenario passes and validation succeeds; otherwise the receipt stays **Preview** with exact `uncovered_gaps`. See `docs/SUPPORT_MATRIX.md`.
+macOS Full requires every required real-machine scenario to pass **and** a current-process live harness witness; external/CLI/MCP/arbitrary receipt JSON alone is at most Preview. See `docs/SUPPORT_MATRIX.md`. Windows contracts live under `src/platform/windows/` and never overwrite macOS types or validators.
 
 ### 9.2 Affected-instance resolution
 
