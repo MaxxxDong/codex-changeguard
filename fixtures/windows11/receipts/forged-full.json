@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "platform": "windows",
+  "os_family": "Windows 11",
+  "os_version": "11",
+  "os_build": "22631",
+  "arch": "x64",
+  "host_kind": "synthetic",
+  "codex_versions": ["0.50.0"],
+  "instances_fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "git_sha": "c62b9b2e6c50fbd4cc31358a2371c6a888857808",
+  "collected_at": "2026-07-18T00:00:00.000Z",
+  "critical_scenarios": [
+    { "id": "W11-S01", "passed": true, "evidence_digest": "a111111111111111111111111111111111111111111111111111111111111111", "title": "Multi-identity scan without collapse", "note": null },
+    { "id": "W11-S02", "passed": true, "evidence_digest": "a222222222222222222222222222222222222222222222222222222222222222", "title": "Windows + WSL coexistence", "note": null },
+    { "id": "W11-S03", "passed": true, "evidence_digest": "a333333333333333333333333333333333333333333333333333333333333333", "title": "Crash metadata classification", "note": null },
+    { "id": "W11-S04", "passed": true, "evidence_digest": "a444444444444444444444444444444444444444444444444444444444444444", "title": "Cross-family repair refusal", "note": null },
+    { "id": "W11-S05", "passed": true, "evidence_digest": "a555555555555555555555555555555555555555555555555555555555555555", "title": "User-owned repair verified", "note": null },
+    { "id": "W11-S06", "passed": true, "evidence_digest": "a666666666666666666666666666666666666666666666666666666666666666", "title": "Induced verification auto-rollback", "note": null },
+    { "id": "W11-S07", "passed": true, "evidence_digest": "a777777777777777777777777777777777777777777777777777777777777777", "title": "Explicit rollback", "note": null },
+    { "id": "W11-S08", "passed": true, "evidence_digest": "a888888888888888888888888888888888888888888888888888888888888888", "title": "Managed/admin handoff", "note": null },
+    { "id": "W11-S09", "passed": true, "evidence_digest": "a999999999999999999999999999999999999999999999999999999999999999", "title": "SessionStart Windows hook", "note": null },
+    { "id": "W11-S10", "passed": true, "evidence_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "title": "CLI/MCP equivalence and boundary", "note": null },
+    { "id": "W11-S11", "passed": true, "evidence_digest": "abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "title": "No forbidden writes", "note": null }
+  ],
+  "operator_attestation": {
+    "non_primary_profile": true,
+    "real_hardware": true
+  }
+}

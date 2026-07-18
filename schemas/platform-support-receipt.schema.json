@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://changeguard.local/schemas/platform-support-receipt.schema.json",
+  "title": "PlatformSupportReceipt",
+  "description": "Auditable platform support receipt. FULL requires real_machine Windows 11 with all critical scenarios passed. Synthetic and cross_platform_ci can only support PREVIEW.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "platform",
+    "os_family",
+    "arch",
+    "host_kind",
+    "collected_at",
+    "critical_scenarios"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "platform": {
+      "type": "string",
+      "enum": ["windows", "macos", "linux", "wsl", "unknown"]
+    },
+    "os_family": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "os_version": { "type": ["string", "null"], "maxLength": 64 },
+    "os_build": { "type": ["string", "null"], "maxLength": 64 },
+    "arch": { "type": "string", "minLength": 1, "maxLength": 32 },
+    "host_kind": {
+      "type": "string",
+      "enum": ["real_machine", "synthetic", "cross_platform_ci"]
+    },
+    "codex_versions": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "type": "string", "maxLength": 64 }
+    },
+    "instances_fingerprint": {
+      "type": ["string", "null"],
+      "maxLength": 128
+    },
+    "git_sha": { "type": ["string", "null"], "maxLength": 64 },
+    "collected_at": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "critical_scenarios": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "passed"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": [
+              "W11-S01",
+              "W11-S02",
+              "W11-S03",
+              "W11-S04",
+              "W11-S05",
+              "W11-S06",
+              "W11-S07",
+              "W11-S08",
+              "W11-S09",
+              "W11-S10",
+              "W11-S11"
+            ]
+          },
+          "title": { "type": "string", "maxLength": 256 },
+          "passed": { "type": "boolean" },
+          "evidence_digest": {
+            "type": ["string", "null"],
+            "maxLength": 128
+          },
+          "note": { "type": ["string", "null"], "maxLength": 512 }
+        }
+      }
+    },
+    "operator_attestation": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["non_primary_profile", "real_hardware"],
+      "properties": {
+        "non_primary_profile": { "type": "boolean" },
+        "real_hardware": { "type": "boolean" }
+      }
+    }
+  }
+}

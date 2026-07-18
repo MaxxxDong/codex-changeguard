@@ -20,6 +20,7 @@ import type {
   PlatformId,
   SystemEnumerateCaps,
 } from "./types.js";
+import { enumerateWindowsCandidates } from "./windows/adapter.js";
 
 const DEFAULT_MAX_PATH_ENTRIES = 64;
 const CODEX_NAMES = new Set(["codex", "codex.exe", "Codex.exe", "Codex"]);
@@ -215,11 +216,27 @@ function pushCandidate(
  * Enumerate registered system candidates. Never executes binaries.
  * Symlink leaves are accepted as path identities for hashing only; version
  * metadata still uses no-follow reads under trusted roots.
+ *
+ * On platform=windows, delegates to the namespaced Windows 11 adapter
+ * (Ticket 14) so MSIX / Desktop app / Desktop CLI / PATH / WSL / profiles
+ * remain distinct identities.
  */
 export function enumerateSystemCandidates(
   caps: SystemEnumerateCaps = {},
 ): DiscoveredCandidate[] {
   const platform = detectPlatform(caps);
+
+  // Ticket 14: Windows uses the dedicated adapter for full identity matrix.
+  if (platform === "windows") {
+    return enumerateWindowsCandidates({
+      ...caps,
+      platform: "windows",
+      arch: detectArch(caps),
+      pathDelimiter: caps.pathDelimiter ?? (caps.env?.Path || caps.env?.PATH ? ";" : path.delimiter),
+      pathKind: caps.pathKind ?? defaultPathKind,
+    }).candidates;
+  }
+
   const arch = detectArch(caps);
   const pathKind = caps.pathKind ?? defaultPathKind;
   const max = Math.min(caps.maxCandidates ?? MAX_INSTANCES, MAX_INSTANCES);

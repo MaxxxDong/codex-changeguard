@@ -1,0 +1,8 @@
+{
+  "policy_class": "msix_package",
+  "admin_owned": true,
+  "signed": true,
+  "permission_bound": true,
+  "target_path_alias": "MSIX_PACKAGE_ROOT",
+  "target_marker": "C:\\\\Program Files\\\\WindowsApps\\\\Codex_1.0.0\\\\Codex.exe"
+}

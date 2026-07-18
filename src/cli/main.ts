@@ -11,6 +11,7 @@
  *   changeguard rollback <isolated-target>
  *   changeguard scan <inventory-root>          (fixture inventory adapter)
  *   changeguard scan-system                    (production registered system adapter)
+ *   changeguard platform-status [--receipt=<path>]  (Ticket 14 support level; default PREVIEW)
  *   changeguard session-start <inventory-root> [--hook-trust=…]  (manual fixture path)
  *   changeguard lifecycle <operation> <isolated-target> [--key=value …]
  */
@@ -48,6 +49,11 @@ import type {
   UpstreamPreviewResult,
 } from "../upstream/types.js";
 import { MAX_UPSTREAM_REQUEST_BYTES } from "../upstream/limits.js";
+import {
+  loadAndEvaluateReceiptFile,
+  realMachineRunnerPlan,
+  windows11SupportStatus,
+} from "../platform/index.js";
 
 function printJson(value: unknown, exitCode: number): never {
   const text = assertNoLeakPaths(redactText(JSON.stringify(value, null, 2)));
@@ -75,7 +81,7 @@ function usageDiagnosis(): DiagnosisResult {
     evidence: [],
     error_code: "USAGE",
     error_message:
-      "Usage: changeguard diagnose|impact|analyze-page|upstream-preview|repair-preview|repair-apply|verify|rollback|scan|scan-system|session-start|lifecycle …",
+      "Usage: changeguard diagnose|impact|analyze-page|upstream-preview|repair-preview|repair-apply|verify|rollback|scan|scan-system|platform-status|session-start|lifecycle …",
     network_used: false,
     target_mutated: false,
     repair_applied: false,
@@ -780,6 +786,108 @@ export function runCli(argv: string[]): void {
       }
       runScanSystem(parseStateDir(flags));
       return;
+    }
+
+    if (cmd === "platform-status") {
+      const flags = rest.filter((a) => a.startsWith("-"));
+      const positional = rest.filter((a) => !a.startsWith("-"));
+      if (positional.length !== 0) {
+        printJson(
+          {
+            schema_version: 1,
+            ok: false,
+            error_code: "USAGE",
+            error_message:
+              "Usage: changeguard platform-status [--receipt=<path>] [--plan]",
+            network_used: false,
+            target_mutated: false,
+            repair_applied: false,
+          },
+          2,
+        );
+      }
+      let receiptPath: string | null = null;
+      let showPlan = false;
+      for (const f of flags) {
+        if (f.startsWith("--receipt=")) {
+          receiptPath = f.slice("--receipt=".length);
+          if (!receiptPath) {
+            printJson(
+              {
+                schema_version: 1,
+                ok: false,
+                error_code: "USAGE",
+                error_message: "Empty --receipt= path.",
+                network_used: false,
+                target_mutated: false,
+                repair_applied: false,
+              },
+              2,
+            );
+          }
+        } else if (f === "--plan") {
+          showPlan = true;
+        } else {
+          printJson(
+            {
+              schema_version: 1,
+              ok: false,
+              error_code: "USAGE",
+              error_message:
+                "Usage: changeguard platform-status [--receipt=<path>] [--plan]",
+              network_used: false,
+              target_mutated: false,
+              repair_applied: false,
+            },
+            2,
+          );
+        }
+      }
+      if (showPlan) {
+        printJson(
+          {
+            schema_version: 1,
+            ok: true,
+            plan: realMachineRunnerPlan(),
+            status: windows11SupportStatus(null),
+            network_used: false,
+            target_mutated: false,
+            repair_applied: false,
+          },
+          0,
+        );
+      }
+      if (receiptPath) {
+        const loaded = loadAndEvaluateReceiptFile(receiptPath);
+        printJson(
+          {
+            schema_version: 1,
+            ok: loaded.ok,
+            status: loaded.status,
+            error_code: loaded.error_code,
+            error_message: loaded.error_message,
+            network_used: false,
+            target_mutated: false,
+            repair_applied: false,
+          },
+          // Exit 0 when evaluation succeeded (including honest PREVIEW).
+          // Nonzero only on load/parse failure.
+          loaded.ok ? 0 : 1,
+        );
+      }
+      // No receipt: honest PREVIEW default (never fabricate FULL).
+      const status = windows11SupportStatus(null);
+      printJson(
+        {
+          schema_version: 1,
+          ok: true,
+          status,
+          network_used: false,
+          target_mutated: false,
+          repair_applied: false,
+        },
+        0,
+      );
     }
 
     if (cmd === "session-start") {

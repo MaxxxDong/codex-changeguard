@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "platform": "windows",
+  "os_family": "Windows 11",
+  "os_version": "11",
+  "os_build": "22631",
+  "arch": "x64",
+  "host_kind": "real_machine",
+  "codex_versions": ["0.50.0"],
+  "instances_fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "git_sha": null,
+  "collected_at": "2026-07-18T00:00:00.000Z",
+  "critical_scenarios": [
+    {
+      "id": "W11-S01",
+      "title": "Multi-identity scan without collapse",
+      "passed": true,
+      "evidence_digest": "d111111111111111111111111111111111111111111111111111111111111111",
+      "note": null
+    },
+    {
+      "id": "W11-S03",
+      "title": "Crash metadata classification",
+      "passed": true,
+      "evidence_digest": "d333333333333333333333333333333333333333333333333333333333333333",
+      "note": null
+    }
+  ],
+  "operator_attestation": {
+    "non_primary_profile": true,
+    "real_hardware": true
+  }
+}

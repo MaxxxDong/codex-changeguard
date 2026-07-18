@@ -44,6 +44,26 @@ import type {
   UpstreamPreviewResult,
 } from "../upstream/types.js";
 import { MAX_UPSTREAM_REQUEST_BYTES } from "../upstream/limits.js";
+import {
+  loadAndEvaluateReceiptFile,
+  realMachineRunnerPlan,
+  windows11SupportStatus,
+  type PlatformSupportStatus,
+  type RealMachineRunnerPlan,
+} from "../platform/index.js";
+
+/** MCP payload for Ticket 14 platform-status. */
+interface PlatformStatusMcpResult {
+  schema_version: 1;
+  ok: boolean;
+  status: PlatformSupportStatus;
+  plan: RealMachineRunnerPlan | null;
+  error_code: string | null;
+  error_message: string | null;
+  network_used: false;
+  target_mutated: false;
+  repair_applied: false;
+}
 
 const TOOL_DIAGNOSE = "changeguard_diagnose";
 const TOOL_IMPACT = "changeguard_impact";
@@ -55,6 +75,7 @@ const TOOL_VERIFY = "changeguard_verify";
 const TOOL_ROLLBACK = "changeguard_rollback";
 const TOOL_SCAN = "changeguard_scan";
 const TOOL_SCAN_SYSTEM = "changeguard_scan_system";
+const TOOL_PLATFORM_STATUS = "changeguard_platform_status";
 const TOOL_SESSION = "changeguard_session_start";
 const TOOL_LIFECYCLE = "changeguard_lifecycle";
 
@@ -69,6 +90,7 @@ const KNOWN_TOOLS = new Set([
   TOOL_ROLLBACK,
   TOOL_SCAN,
   TOOL_SCAN_SYSTEM,
+  TOOL_PLATFORM_STATUS,
   TOOL_SESSION,
   TOOL_LIFECYCLE,
 ]);
@@ -280,6 +302,27 @@ function toolSchemas() {
       },
     },
     {
+      name: TOOL_PLATFORM_STATUS,
+      description:
+        "Ticket 14 Windows 11 platform support status. Without a real-machine receipt, level is PREVIEW with explicit gaps. Synthetic/cross-platform receipts never authorize FULL. Optional receipt path is validated read-only; never executes binaries or writes system paths.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          receipt: {
+            type: "string",
+            description:
+              "Optional path to a platform-support receipt JSON file. Omit for default PREVIEW status.",
+          },
+          plan: {
+            type: "boolean",
+            description:
+              "When true, include the real-machine runner plan (scenario IDs + forbidden actions).",
+          },
+        },
+      },
+    },
+    {
       name: TOOL_SESSION,
       description:
         "Trusted SessionStart equivalent over an isolated inventory fixture: silent when fingerprint unchanged; otherwise bounded read-only health check. Hook trust must be explicit. Packaged SessionStart uses the dedicated PLUGIN_ROOT entrypoint.",
@@ -378,7 +421,8 @@ function handleToolsCall(params: unknown): {
     | UpstreamPreviewResult
     | RepairResult
     | ScanResult
-    | LifecycleResult;
+    | LifecycleResult
+    | PlatformStatusMcpResult;
   ok: boolean;
 } {
   if (!params || typeof params !== "object" || Array.isArray(params)) {
@@ -636,6 +680,49 @@ function handleToolsCall(params: unknown): {
       stateDir: a.state_dir,
     });
     return { payload, ok: payload.ok };
+  }
+
+  if (p.name === TOOL_PLATFORM_STATUS) {
+    const keys = Object.keys(a);
+    if (keys.some((k) => k !== "receipt" && k !== "plan")) {
+      throw Object.assign(new Error("Unknown or extra arguments."), {
+        code: "EXTRA_ARGS",
+      });
+    }
+    const includePlan = a.plan === true;
+    if (a.receipt !== undefined && typeof a.receipt !== "string") {
+      throw Object.assign(new Error("Invalid receipt path."), {
+        code: "INVALID_ARGS",
+      });
+    }
+    if (typeof a.receipt === "string" && a.receipt.length > 0) {
+      const loaded = loadAndEvaluateReceiptFile(a.receipt);
+      const payload = {
+        schema_version: 1 as const,
+        ok: loaded.ok,
+        status: loaded.status,
+        plan: includePlan ? realMachineRunnerPlan() : null,
+        error_code: loaded.error_code,
+        error_message: loaded.error_message,
+        network_used: false as const,
+        target_mutated: false as const,
+        repair_applied: false as const,
+      };
+      return { payload, ok: loaded.ok };
+    }
+    const status = windows11SupportStatus(null);
+    const payload = {
+      schema_version: 1 as const,
+      ok: true,
+      status,
+      plan: includePlan ? realMachineRunnerPlan() : null,
+      error_code: null,
+      error_message: null,
+      network_used: false as const,
+      target_mutated: false as const,
+      repair_applied: false as const,
+    };
+    return { payload, ok: true };
   }
 
   if (p.name === TOOL_SESSION) {

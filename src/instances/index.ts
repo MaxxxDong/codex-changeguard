@@ -12,6 +12,13 @@ export {
 } from "./identity.js";
 export { readVersionEvidence } from "./version-evidence.js";
 export { enumerateSystemCandidates } from "./system-adapter.js";
+export {
+  enumerateWindowsCandidates,
+  resolveWindowsRepairScope,
+  classifyWriteTarget,
+  parseCrashMetadataWindow,
+  isForbiddenSystemPath,
+} from "./windows/index.js";
 export type {
   InstanceIdentity,
   ScanResult,
@@ -28,3 +35,9 @@ export type {
   SystemEnumerateCaps,
   EnumerationSource,
 } from "./types.js";
+export type {
+  WindowsEnumerateCaps,
+  WindowsDiscoveryResult,
+  WindowsWriteClassification,
+  WindowsCrashMetadataWindow,
+} from "./windows/index.js";
