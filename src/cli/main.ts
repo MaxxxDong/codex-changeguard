@@ -15,8 +15,11 @@
  *   changeguard scan-system                    (production registered system adapter)
  *   changeguard session-start <inventory-root> [--hook-trust=…]  (manual fixture path)
  *   changeguard lifecycle <operation> <isolated-target> [--key=value …]
+ *   changeguard platform-status [--probe-host=true|false]
+ *   changeguard platform-receipt-validate <receipt.json>
  *
  * Ticket 11 production seams inject no real gh/browser adapter (capability unavailable).
+ * Ticket 13 platform seams are read-only (no harness spawn; Full only with real-machine receipt).
  */
 import fs from "node:fs";
 import { diagnose } from "../core/diagnose.js";
@@ -60,6 +63,12 @@ import {
   type ActionConfirmResult,
   type ActionPreviewResult,
 } from "../upstream/actions/index.js";
+import {
+  platformStatus,
+  validatePlatformSupportReceipt,
+  type PlatformStatusResult,
+  type ReceiptValidationResult,
+} from "../platform/index.js";
 
 function printJson(value: unknown, exitCode: number): never {
   const text = assertNoLeakPaths(redactText(JSON.stringify(value, null, 2)));
@@ -87,7 +96,7 @@ function usageDiagnosis(): DiagnosisResult {
     evidence: [],
     error_code: "USAGE",
     error_message:
-      "Usage: changeguard diagnose|impact|analyze-page|upstream-preview|upstream-action-preview|upstream-action-confirm|repair-preview|repair-apply|verify|rollback|scan|scan-system|session-start|lifecycle …",
+      "Usage: changeguard diagnose|impact|analyze-page|upstream-preview|upstream-action-preview|upstream-action-confirm|repair-preview|repair-apply|verify|rollback|scan|scan-system|session-start|lifecycle|platform-status|platform-receipt-validate …",
     network_used: false,
     target_mutated: false,
     repair_applied: false,
@@ -156,6 +165,76 @@ function actionConfirmUsageError(): never {
   };
   printJson(result, 2);
 }
+
+function runPlatformStatus(rest: string[]): void {
+  let probeHost = true;
+  for (const a of rest) {
+    if (a === "--probe-host=false" || a === "--probe-host=0") {
+      probeHost = false;
+      continue;
+    }
+    if (a === "--probe-host=true" || a === "--probe-host=1") {
+      probeHost = true;
+      continue;
+    }
+    if (a.startsWith("-")) {
+      printJson(usageDiagnosis(), 2);
+    }
+    printJson(usageDiagnosis(), 2);
+  }
+  const result: PlatformStatusResult = platformStatus({ probeHost });
+  printJson(result, result.ok ? 0 : 1);
+}
+
+function runPlatformReceiptValidate(rest: string[]): void {
+  if (rest.length !== 1 || isFlag(rest[0]!)) {
+    printJson(
+      {
+        schema_version: 1,
+        ok: false,
+        support_level: "unsupported",
+        errors: ["USAGE"],
+        gaps: [],
+        receipt_id: null,
+        network_used: false,
+        error_code: "USAGE",
+        error_message:
+          "Usage: changeguard platform-receipt-validate <receipt.json>",
+      },
+      2,
+    );
+  }
+  const receiptPath = rest[0]!;
+  try {
+    if (!fs.existsSync(receiptPath)) {
+      const result: ReceiptValidationResult = {
+        schema_version: 1,
+        ok: false,
+        support_level: "unsupported",
+        errors: ["RECEIPT_NOT_FOUND"],
+        gaps: [],
+        receipt_id: null,
+        network_used: false,
+      };
+      printJson(result, 1);
+    }
+    const raw = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
+    const result = validatePlatformSupportReceipt(raw);
+    printJson(result, result.ok ? 0 : 1);
+  } catch {
+    const result: ReceiptValidationResult = {
+      schema_version: 1,
+      ok: false,
+      support_level: "unsupported",
+      errors: ["RECEIPT_PARSE"],
+      gaps: [],
+      receipt_id: null,
+      network_used: false,
+    };
+    printJson(result, 1);
+  }
+}
+
 
 function upstreamUsageError(): never {
   const result: UpstreamPreviewResult = {
@@ -1139,6 +1218,16 @@ export function runCli(argv: string[]): void {
 
     if (cmd === "lifecycle") {
       runLifecycleCli(rest);
+      return;
+    }
+
+    if (cmd === "platform-status") {
+      runPlatformStatus(rest);
+      return;
+    }
+
+    if (cmd === "platform-receipt-validate") {
+      runPlatformReceiptValidate(rest);
       return;
     }
 

@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "platform": "macos",
+  "arch": "arm64",
+  "description": "Synthetic macOS multi-instance inventory for Ticket 13 adapter/contract tests. Binaries are placeholders and must never be executed for version.",
+  "candidates": [
+    {
+      "install_source": "desktop_bundled",
+      "surface": "desktop",
+      "relative_path": "apps/Codex.app/Contents/MacOS/Codex",
+      "profile_root_alias": "DESKTOP_PROFILE",
+      "config_root_alias": "CODEX_CONFIG_PRIMARY",
+      "path_precedence": null,
+      "version_metadata_rel": "apps/Codex.app/Contents/Info.plist"
+    },
+    {
+      "install_source": "path",
+      "surface": "cli",
+      "relative_path": "path-bin/codex",
+      "profile_root_alias": null,
+      "config_root_alias": null,
+      "path_precedence": 0,
+      "version_metadata_rel": "path-bin/version.json"
+    },
+    {
+      "install_source": "package_manager",
+      "surface": "cli",
+      "relative_path": "pkg/bin/codex",
+      "profile_root_alias": null,
+      "config_root_alias": null,
+      "path_precedence": null,
+      "version_metadata_rel": "pkg/package.json"
+    }
+  ],
+  "registered_aliases": [
+    "DESKTOP_APP_BUNDLE",
+    "DESKTOP_PROFILE",
+    "CODEX_HOME_DEFAULT",
+    "CODEX_CONFIG_PRIMARY",
+    "CODEX_LOG_ROOT",
+    "PLUGIN_CACHE_ROOT",
+    "CRASH_REPORTS_METADATA"
+  ],
+  "forbidden": [
+    "broad_home_crawl",
+    "raw_path_export",
+    "execute_discovered_binaries",
+    "sudo",
+    "system_certificate_change",
+    "active_profile_mutation"
+  ]
+}

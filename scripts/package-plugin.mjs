@@ -21,6 +21,7 @@ const PUBLIC_DOCS = [
   "SECURITY.md",
   "TEST_PLAN.md",
   "CASE_STUDIES.md",
+  "SUPPORT_MATRIX.md",
 ];
 
 function rmrf(p) {

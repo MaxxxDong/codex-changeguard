@@ -16,6 +16,7 @@ This document owns the ChangeGuard verification matrix. Passing a model-generate
 | Privacy | token/env/path fixtures redacted; disclosure manifest exactly matches exported fields; Issue injection is quarantined |
 | Recovery | trust-tier policy; exact target hash/pattern count; disposable-copy dry-run; backup/smoke/rollback receipt tests |
 | Hooks / instances (Ticket 03) | first baseline, unchanged silent SessionStart, multi-instance upgrade, downgrade, PATH precedence drift, actual-instance evidence, ambiguous repair refusal, hook untrusted/skipped/failed, manual scan fallback, CLI/MCP scan equivalence, SessionStart changed/no-change duration &lt;10s, raw-path non-disclosure, symlink state refusal |
+| Platform macOS (Ticket 13) | adapter alias/operation/constraint contracts; isolation refuses active `~/.codex` and protected roots; receipt validator Full-only-with-proof + leak refusal; CLI/MCP `platform-status` / `platform-receipt-validate`; real-machine harness on darwin covers core diagnose, multi-instance, config repair, auto-rollback, explicit rollback, plugin-cache repair/rollback, KNOWN_GOOD/canary, privacy refuse, upstream zero-network, package smoke; support matrix docs |
 | Judge path | clean install; no judge API key; live matcher/probe; offline snapshot; visible evidence state; under 90 seconds |
 
 ## Fixture expectations
@@ -97,6 +98,18 @@ Black-box + classifier coverage in `tests/ticket09-crash-family.test.ts`
 - optional model ranking cannot override hard gates, invent provenance, or resurrect no-mechanism GPU/complex candidates
 - CLI/MCP stable-field equivalence; malformed extra crash_metadata key refused; oversized incident refused; path redaction; dump-contents parse/export refused
 - prior-ticket regression: protected-process + negative-control diagnose unchanged
+
+## Ticket 13 Scenario Harness (macOS Full support receipt)
+
+Coverage in `tests/ticket13-macos-support.test.ts` + `scripts/run-macos-harness.mjs`:
+
+- macOS capabilities expose only registered install sources, path aliases, and operations; all safety constraints remain closed
+- synthetic `fixtures/platform-macos/` multi-instance inventory scans without raw path export or binary execution
+- isolation refuses active Codex home and protected system roots; disposable temps only
+- receipt validator accepts path-free Full receipts only when every required scenario passes; forged Full + leaks fail
+- CLI/MCP `platform-status` / `platform-receipt-validate` are read-only and path-free
+- on a real darwin host, the isolated harness must pass all required scenarios and emit `support_level: full` (otherwise Preview + exact gaps); never fabricates a receipt
+- package smoke remains part of the Full required set and is self-contained: always production `npm run package` then `package:smoke` + packaged diagnose (no dependency on residual/stale `release/` or test order); phase-labeled failure summaries for package build vs smoke vs diagnose
 
 ### Session-expired evidence boundary
 

@@ -50,6 +50,7 @@ const PUBLIC_DOCS = [
   "ARCHITECTURE.md",
   "CASE_STUDIES.md",
   "SECURITY.md",
+  "SUPPORT_MATRIX.md",
   "TEST_PLAN.md",
 ];
 

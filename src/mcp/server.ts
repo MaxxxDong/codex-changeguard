@@ -6,7 +6,8 @@
  * + Ticket 05 untrusted page-evidence analysis (orchestrator-supplied envelope)
  * + Ticket 06 lifecycle (KNOWN_GOOD / retention / A-B / canary / supersession)
  * + Ticket 10 upstream draft preview (local-only capsule; never external write)
- * + Ticket 11 confirmed upstream action preview/confirm (no real adapter by default).
+ * + Ticket 11 confirmed upstream action preview/confirm (no real adapter by default)
+ * + Ticket 13 platform status / receipt validation (macOS capabilities; no harness spawn).
  *
  * Wire protocol: newline-delimited JSON-RPC 2.0 over stdio.
  * Request frames are accumulated as bounded bytes (not unbounded readline).
@@ -53,6 +54,12 @@ import {
   type ActionConfirmResult,
   type ActionPreviewResult,
 } from "../upstream/actions/index.js";
+import {
+  platformStatus,
+  validatePlatformSupportReceipt,
+  type PlatformStatusResult,
+  type ReceiptValidationResult,
+} from "../platform/index.js";
 
 const TOOL_DIAGNOSE = "changeguard_diagnose";
 const TOOL_IMPACT = "changeguard_impact";
@@ -68,6 +75,8 @@ const TOOL_SCAN = "changeguard_scan";
 const TOOL_SCAN_SYSTEM = "changeguard_scan_system";
 const TOOL_SESSION = "changeguard_session_start";
 const TOOL_LIFECYCLE = "changeguard_lifecycle";
+const TOOL_PLATFORM_STATUS = "changeguard_platform_status";
+const TOOL_PLATFORM_RECEIPT = "changeguard_platform_receipt_validate";
 
 const KNOWN_TOOLS = new Set([
   TOOL_DIAGNOSE,
@@ -84,6 +93,8 @@ const KNOWN_TOOLS = new Set([
   TOOL_SCAN_SYSTEM,
   TOOL_SESSION,
   TOOL_LIFECYCLE,
+  TOOL_PLATFORM_STATUS,
+  TOOL_PLATFORM_RECEIPT,
 ]);
 
 /** Extra top-level tools/call params beyond name/arguments are refused. */
@@ -421,6 +432,43 @@ function toolSchemas() {
         },
       },
     },
+    {
+      name: TOOL_PLATFORM_STATUS,
+      description:
+        "Ticket 13 read-only platform capabilities/status (macOS adapter aliases, operations, safety constraints). Optional receipt object for verified support level. Never mutates host, never executes binaries, never uses network.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          probe_host: {
+            type: "boolean",
+            description:
+              "When true (default), probe registered Desktop/PATH candidates without executing them.",
+          },
+          receipt: {
+            type: "object",
+            description:
+              "Optional platform support receipt to validate and surface verified_support_level.",
+          },
+        },
+      },
+    },
+    {
+      name: TOOL_PLATFORM_RECEIPT,
+      description:
+        "Validate a platform support Scenario Harness receipt (schema, leak checks, Full-only-with-proof). Read-only; no network.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["receipt"],
+        properties: {
+          receipt: {
+            type: "object",
+            description: "PlatformSupportReceipt JSON object.",
+          },
+        },
+      },
+    },
   ];
 }
 
@@ -450,7 +498,9 @@ function handleToolsCall(params: unknown): {
     | ActionConfirmResult
     | RepairResult
     | ScanResult
-    | LifecycleResult;
+    | LifecycleResult
+    | PlatformStatusResult
+    | ReceiptValidationResult;
   ok: boolean;
 } {
   if (!params || typeof params !== "object" || Array.isArray(params)) {
@@ -930,6 +980,47 @@ function handleToolsCall(params: unknown): {
       dispatchArgs.upstream_verified = a.upstream_verified;
     }
     const payload = dispatchLifecycle(dispatchArgs);
+    return { payload, ok: payload.ok };
+  }
+
+  if (p.name === TOOL_PLATFORM_STATUS) {
+    const allowed = new Set(["probe_host", "receipt"]);
+    for (const k of Object.keys(a)) {
+      if (!allowed.has(k)) {
+        throw Object.assign(new Error("Unknown or extra arguments."), {
+          code: "EXTRA_ARGS",
+        });
+      }
+    }
+    let probeHost = true;
+    if (a.probe_host !== undefined) {
+      if (typeof a.probe_host !== "boolean") {
+        throw Object.assign(new Error("Invalid probe_host."), {
+          code: "INVALID_ARGS",
+        });
+      }
+      probeHost = a.probe_host;
+    }
+    const payload = platformStatus({
+      probeHost,
+      receipt: a.receipt,
+    });
+    return { payload, ok: payload.ok };
+  }
+
+  if (p.name === TOOL_PLATFORM_RECEIPT) {
+    const keys = Object.keys(a);
+    if (keys.some((k) => k !== "receipt")) {
+      throw Object.assign(new Error("Unknown or extra arguments."), {
+        code: "EXTRA_ARGS",
+      });
+    }
+    if (a.receipt === undefined || a.receipt === null) {
+      throw Object.assign(new Error("Invalid receipt."), {
+        code: "INVALID_ARGS",
+      });
+    }
+    const payload = validatePlatformSupportReceipt(a.receipt);
     return { payload, ok: payload.ok };
   }
 
