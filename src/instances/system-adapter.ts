@@ -289,11 +289,13 @@ export function enumerateSystemCandidates(
           trusted.some((t) => isInsideRoot(t, m)),
         ),
         runtime_domain:
-          platform === "windows"
-            ? "windows_host"
-            : platform === "macos"
-              ? "macos_host"
-              : null,
+          platform === "macos"
+            ? "macos_host"
+            : platform === "linux"
+              ? "native_linux"
+              : platform === "wsl"
+                ? "wsl_distro"
+                : null,
       },
       max,
       seen,
@@ -355,11 +357,9 @@ export function enumerateSystemCandidates(
           ? "native_linux"
           : platform === "wsl"
             ? "wsl_distro"
-            : platform === "windows"
-              ? "windows_host"
-              : platform === "macos"
-                ? "macos_host"
-                : null;
+            : platform === "macos"
+              ? "macos_host"
+              : null;
       pushCandidate(
         out,
         {
@@ -453,11 +453,9 @@ export function enumerateSystemCandidates(
             ? "native_linux"
             : platform === "wsl"
               ? "wsl_distro"
-              : platform === "windows"
-                ? "windows_host"
-                : platform === "macos"
-                  ? "macos_host"
-                  : null,
+              : platform === "macos"
+                ? "macos_host"
+                : null,
       },
       max,
       seen,

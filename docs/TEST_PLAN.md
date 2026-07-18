@@ -125,7 +125,7 @@ Coverage in `tests/ticket13-macos-support.test.ts` + `scripts/run-macos-harness.
 - synthetic `fixtures/platform-macos/` multi-instance inventory scans without raw path export or binary execution
 - isolation refuses active Codex home and protected system roots; disposable temps only
 - receipt validator accepts path-free Full receipts only when every required scenario passes; forged Full + leaks fail
-- CLI/MCP `platform-status` / `platform-receipt-validate` are read-only and path-free; `platform-status` also surfaces Windows `status` (default PREVIEW) without weakening macOS fields
+- CLI/MCP `platform-status` / `platform-receipt-validate` are read-only and path-free; `platform-status` surfaces Windows `status` (default PREVIEW), Ticket 15 capability `reports` / `default_status` (Linux/WSL Limited, unknown Read-only), and macOS capability fields without mutual overwrite
 - on a real darwin host, the isolated harness must pass all required scenarios and emit `support_level: full` only with live harness witness (otherwise Preview + exact gaps); external/forged receipts stay non-Full; never fabricates a receipt
 - package smoke remains part of the Full required set and is self-contained: always production `npm run package` then `package:smoke` + packaged diagnose (no dependency on residual/stale `release/` or test order); phase-labeled failure summaries for package build vs smoke vs diagnose
 

@@ -266,11 +266,28 @@ closeout on `3265acd`.
 - Positive protected-process fixture may reach `SOURCE_COMPONENT_LOCATED` / experimental `RESOLVED_VERIFIED` only under measured local evidence and Ticket 02 authorization rules
 - Never claims external submission, Gate C authorization, whole-product completion, Ticket 11 confirmed writes, or real-machine platform Full beyond verified tickets
 
+## Ticket 15 integration note (framework only; not product complete)
+
+Ticket 15 Linux/WSL/enterprise capability matrix, bounded discovery, IT Handoff,
+network compare, and write-disable gates are **semantically integrated** into the
+unified platform surface with Tickets 13–14. Broader product remains
+`IN_PROGRESS`. This is **not** `LOCAL_COMPLETE` for real-machine Linux/WSL Full,
+and does **not** authorize Gate C / registration / publication / submission.
+
+Truthful residual claims after integration:
+
+- Linux and WSL remain **Limited / Read-only** without a real host Scenario Harness receipt.
+- Synthetic or caller-injected capability validates the framework only; it cannot upgrade production Full.
+- Public CLI/MCP recovery paths fail closed on unknown/Linux/WSL/managed policy; only the internal fixture seam enables isolated PREVIEW writes for tests.
+- WSL host mounts (`/mnt/<drive>`), symlink laundering, and admin elevation recipes are refused.
+- Network compare is local-input only (`network_used: false`).
+- `platform-status` unifies T13 macOS fields, T14 Windows PREVIEW/`status`/plan/live-witness limits, and T15 capability `reports` without a second receipt truth source.
+
 ## Next steps
 
-1. Continue broader product tickets (11–17); Tickets 01–10 local completion does not complete them.
+1. Continue broader product tickets (16–17); Tickets 01–15 framework work does not complete the product.
 2. Keep Gate C / registration / publication / upload / submission / real external GitHub writes blocked until separate authorization.
-3. Preserve residual Preview/Limited boundaries (version-rollback preview-only; Ticket 10 upstream preview-only / local-only / no external write; platform Full claims require Tickets 13–15).
+3. Preserve residual Preview/Limited boundaries (version-rollback preview-only; Ticket 10 upstream preview-only / local-only / no external write; macOS Full needs live witness; Windows Full needs real host + live witness; Linux/WSL stay Limited without real receipts).
 4. Ticket 11 owns separately confirmed external actions after a fresh Ticket 10 preview; do not treat Ticket 10 closeout as write authorization.
 5. Do not treat a clean source checkout as runnable before `npm ci && npm run build` (or `npm run package`).
 

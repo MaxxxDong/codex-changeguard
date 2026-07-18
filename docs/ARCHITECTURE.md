@@ -335,7 +335,7 @@ Crash metadata accepts only allowlisted structured fields (`src/instances/window
 | **FULL** | Only an actual Windows 11 `host_kind=real_machine` receipt covering **all** critical scenarios W11-S01…W11-S11 with evidence digests and operator attestation **and** a process-local live harness witness sealed in the same process (WeakMap; not reconstructible from JSON). External/CLI/MCP/file JSON alone is capped at Preview (`FULL_REQUIRES_LIVE_WITNESS`) |
 | **LIMITED** | Non-Windows Linux/WSL receipts (Ticket 15 narrative); not a Windows Full substitute |
 
-Public seams: `changeguard platform-status [--probe-host=…] [--receipt=<path>] [--plan]`, MCP `changeguard_platform_status` (unified with Ticket 13 capability fields; Windows evaluation under `status`). Schema: `schemas/platform-support-receipt.schema.json` is a oneOf of macOS harness receipts and Windows 11 support receipts. The Windows real-machine runner entry (`src/platform/windows/runner.ts`) validates receipts only — it never executes Codex binaries, never writes WindowsApps/Program Files/registry policy, never elevates, and never seals a live witness. Synthetic fixtures under `fixtures/windows11/receipts/` can only support PREVIEW. Runtime receipt parse fail-closes on unknown extra keys (top-level, scenarios, attestation) to match `additionalProperties: false`.
+Public seams: `changeguard platform-status [--probe-host=…] [--receipt=<path>] [--plan] [--adapter=<id>]`, MCP `changeguard_platform_status` (unified: Ticket 13 macOS capability fields, Ticket 14 Windows evaluation under `status`, Ticket 15 capability matrix under `reports` / `default_status`). Schema: `schemas/platform-support-receipt.schema.json` is a oneOf of macOS harness receipts and Windows 11 support receipts; Ticket 15 lightweight `SupportReceipt` is a separate contract (`schemas/platform-capability.schema.json`) and never upgrades production Full. The Windows real-machine runner entry (`src/platform/windows/runner.ts`) validates receipts only — it never executes Codex binaries, never writes WindowsApps/Program Files/registry policy, never elevates, and never seals a live witness. Synthetic fixtures under `fixtures/windows11/receipts/` can only support PREVIEW. Runtime receipt parse fail-closes on unknown extra keys (top-level, scenarios, attestation) to match `additionalProperties: false`. Public recovery CLI/MCP paths bind host-derived capability via `resolvePublicRepairCapability()`; external JSON cannot inject PREVIEW or enable writes. Linux/WSL remain Limited with writes disabled until a real-machine receipt exists.
 
 Each public identity includes:
 
@@ -354,7 +354,7 @@ Public seams (shared with Ticket 14 under one CLI/MCP command set):
 
 | Seam | Role |
 | --- | --- |
-| `changeguard platform-status` / MCP `changeguard_platform_status` | Read-only capabilities + Windows `status` evaluation + optional receipt/plan |
+| `changeguard platform-status` / MCP `changeguard_platform_status` | Read-only capabilities + Windows `status` + T15 capability matrix reports + optional receipt/plan/adapter |
 | `changeguard platform-receipt-validate` / MCP `changeguard_platform_receipt_validate` | Strict macOS harness receipt validation (schema, leak checks, Full-only-with-live-witness) |
 | `npm run harness:macos` / `scripts/run-macos-harness.mjs` | Real-machine isolated Scenario Harness (black-box CLI; disposable temps only) |
 

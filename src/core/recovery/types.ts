@@ -250,33 +250,11 @@ export interface RepairHostContext {
   };
   /** Extra absolute write paths (artifacts) to classify on Windows. */
   writePaths?: Array<{ absPath: string; alias: string }>;
-}
-
-/** Options for repair-preview (optional trusted host context for tests). */
-export type PreviewOptions = RepairHostContext;
-
-export interface ApplyOptions extends RepairHostContext {
-  /**
-   * Self-contained authorization token from repair-preview (cg1.…).
-   * Encodes capsule material + nonce/expiry; apply revalidates live preconditions.
-   */
-  authorization: string;
   /**
    * Ticket 15 platform capability gate.
    * When omitted, fail-closed to READ_ONLY / production_unknown (no mutation).
    * Public CLI/MCP must pass host-derived options explicitly. Isolated-fixture
    * PREVIEW is only for the internal Scenario Harness / test seam.
-   */
-  capability_status?: "READ_ONLY" | "LIMITED" | "PREVIEW" | "FULL";
-  allow_limited_user_owned_recovery?: boolean;
-  isolation?: "isolated_fixture" | "user_owned_registered" | "production_unknown";
-}
-
-/** Optional preview gates (Ticket 15 write-disable / capability). */
-export interface PreviewOptions {
-  /**
-   * When omitted, fail-closed to READ_ONLY / production_unknown.
-   * Explicit PREVIEW + isolated_fixture is the internal fixture seam only.
    */
   capability_status?: "READ_ONLY" | "LIMITED" | "PREVIEW" | "FULL";
   /**
@@ -285,6 +263,17 @@ export interface PreviewOptions {
    */
   allow_limited_user_owned_recovery?: boolean;
   isolation?: "isolated_fixture" | "user_owned_registered" | "production_unknown";
+}
+
+/** Options for repair-preview (host context + Ticket 15 capability gates). */
+export type PreviewOptions = RepairHostContext;
+
+export interface ApplyOptions extends RepairHostContext {
+  /**
+   * Self-contained authorization token from repair-preview (cg1.…).
+   * Encodes capsule material + nonce/expiry; apply revalidates live preconditions.
+   */
+  authorization: string;
 }
 
 /** Sentinel relative path the harness may plant to induce verify failure. */

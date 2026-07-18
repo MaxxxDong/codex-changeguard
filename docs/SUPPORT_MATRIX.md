@@ -8,8 +8,10 @@ upgrade a platform to Full.
 | --- | --- | --- | --- | --- |
 | macOS | Full (first full path) | Full only when Ticket 13 real-machine receipt has every required scenario `pass` **and** current-process live harness witness validation succeeds; external/CLI/MCP/arbitrary JSON alone is at most **Preview** | Namespaced adapter in `src/platform/macos/` | Disposable temp fixtures only; never active `~/.codex` (logical or realpath; symlink fail-closed) |
 | Windows 11 | Full after Ticket 14 real-machine loop | **Preview** (current product claim). Framework integrated; Full only with a real Windows 11 `host_kind=real_machine` receipt covering W11-S01…S11 **and** a process-local live harness witness (external/CLI/MCP/JSON alone is at most Preview) | Namespaced adapter in `src/instances/windows/` + `src/platform/windows/` | No admin bypass; signed `.exe/.dll/.sys` always refused; no WindowsApps / Program Files mutation; synthetic fixtures never Full; no production path seals a Windows live witness yet |
-| Linux | Limited CLI | **Limited** / read-only generic until Ticket 15 | Registered PATH / package roots only | No Desktop full repair claim |
-| WSL | Limited CLI + IT handoff | **Limited** until Ticket 15 | Registered WSL paths | Enterprise policy → IT Handoff |
+| Linux | Limited CLI | **Limited** / read-only (Ticket 15 framework). No real Linux host Scenario Harness receipt in this repository; writes disabled by default | Namespaced adapter in `src/platform/linux-adapter.ts` + capability matrix | Registered PATH / package roots only; no Desktop full repair claim; `/mnt/<drive>` refused |
+| WSL | Limited CLI + IT handoff | **Limited** (Ticket 15 framework). No real WSL host receipt; Windows host + WSL identities never collapse | Namespaced adapter in `src/platform/wsl-adapter.ts` | Enterprise policy → IT Handoff; host mounts refused; no sudo/chmod/UAC bypass |
+| Unknown / unverified | Read-only | **Read-only**; mutation refused | Generic discovery only | Fail closed until a trusted adapter is identified |
+| Enterprise managed | Limited + IT Handoff | **Limited**; local mutation refused | Policy recognition only | `ADMIN_ACTION_REQUIRED` + path/secret-cleaned IT Handoff; no elevation recipes |
 
 ## macOS Full required scenarios
 
@@ -37,6 +39,9 @@ Adapters must keep these constraints fixed at `false` / refused:
 - system certificate / proxy / security-control changes
 - signed app or OpenAI binary mutation
 - active primary Codex profile mutation
+- WSL host mount roots (`/mnt/<drive>`) as trusted evidence
+- intermediate or leaf symlink laundering into refused roots
+- network/proxy/certificate/SSO/firewall live probes or settings mutation
 
 ## How to produce a macOS receipt
 
@@ -65,6 +70,8 @@ Read-only capabilities without running the harness:
 
 ```bash
 node bin/changeguard.js platform-status
+# Optional: --adapter=linux|wsl|windows|macos|unknown|enterprise_managed
+# Optional: --receipt=<windows-receipt.json> --plan
 # MCP: changeguard_platform_status
 ```
 
@@ -75,13 +82,23 @@ node bin/changeguard.js platform-status
 1. macOS Scenario Harness receipt (Ticket 13; `receipt_id` + `scenarios` + `isolation`)
 2. Windows 11 support receipt (Ticket 14; `host_kind` + `critical_scenarios`)
 
+Ticket 15 lightweight capability claims use `schemas/platform-capability.schema.json`
+and `SupportReceipt` in `src/platform/support-receipt.ts` — a **distinct** contract
+from the harness receipts above. Validators never share a second truth source:
+
+- macOS: `src/platform/receipt.ts`
+- Windows: `src/platform/windows/`
+- Linux/WSL capability matrix: `src/platform/capability.ts` + `support-receipt.ts`
+
 Receipts must not contain usernames, home paths, disposable clone paths, or raw
-temp paths. The two variants never share a second truth source: validators live
-under `src/platform/receipt.ts` (macOS) and `src/platform/windows/` (Windows).
+temp paths.
+
+IT Handoff wire shape: `schemas/it-handoff.schema.json`.
 
 ## Residual product boundaries
 
 - Ticket 06 CLI/Desktop **version** rollback remains `preview_only` / Desktop may be `limited`.
 - Ticket 10 upstream capsules remain `preview_only` / `local_only` / `external_write: false`.
 - Gate C / registration / publication / upload / external submission remain unauthorized until separate approval.
-- Ticket 13 does **not** mark the whole product complete; Tickets 14–17 remain open.
+- Ticket 15 framework is integrated; Linux/WSL remain **Limited / Read-only** without real-machine host receipts. This does **not** mark the whole product complete; Tickets 16–17 remain open. Broader product status stays `IN_PROGRESS`.
+- Public CLI/MCP write paths are gated by trusted host capability; unknown/Linux/WSL/managed policies fail closed. External JSON/CLI/MCP arguments cannot downgrade the host or enable writes.

@@ -15,12 +15,13 @@
  *   changeguard scan-system                    (production registered system adapter)
  *   changeguard session-start <inventory-root> [--hook-trust=…]  (manual fixture path)
  *   changeguard lifecycle <operation> <isolated-target> [--key=value …]
- *   changeguard platform-status [--probe-host=true|false] [--receipt=<path>] [--plan]
+ *   changeguard platform-status [--probe-host=true|false] [--receipt=<path>] [--plan] [--adapter=<id>]
  *   changeguard platform-receipt-validate <receipt.json>
  *
  * Ticket 11 production seams inject no real gh/browser adapter (capability unavailable).
  * Ticket 13 platform seams are read-only (no harness spawn; Full only with real-machine receipt).
  * Ticket 14 Windows support remains PREVIEW without a real Windows 11 host receipt.
+ * Ticket 15 Linux/WSL capability matrix is Limited/Read-only without a real-machine receipt.
  */
 import fs from "node:fs";
 import { diagnose } from "../core/diagnose.js";
@@ -30,11 +31,6 @@ import {
   rollbackRepair,
   verifyRepair,
 } from "../core/recovery/index.js";
-import {
-  platformStatus,
-  resolvePublicRepairCapability,
-} from "../platform/index.js";
-import type { AdapterId } from "../platform/types.js";
 import {
   dispatchLifecycle,
   type LifecycleDispatchArgs,
@@ -71,13 +67,24 @@ import {
 } from "../upstream/actions/index.js";
 import {
   platformStatus,
+  resolvePublicRepairCapability,
   validatePlatformSupportReceipt,
   loadAndEvaluateReceiptFile,
   realMachineRunnerPlan,
   windows11SupportStatus,
+  type AdapterId,
   type PlatformStatusResult,
   type ReceiptValidationResult,
 } from "../platform/index.js";
+
+const PLATFORM_ADAPTERS = new Set<AdapterId>([
+  "unknown",
+  "macos",
+  "windows",
+  "linux",
+  "wsl",
+  "enterprise_managed",
+]);
 
 function printJson(value: unknown, exitCode: number): never {
   const text = assertNoLeakPaths(redactText(JSON.stringify(value, null, 2)));
@@ -176,9 +183,11 @@ function actionConfirmUsageError(): never {
 }
 
 /**
- * Unified platform-status (Tickets 13 + 14).
+ * Unified platform-status (Tickets 13 + 14 + 15).
  * - Always includes macOS/host capability fields from platformStatus.
  * - Always includes Windows support evaluation under `status` (default PREVIEW).
+ * - Always includes Ticket 15 capability matrix under `reports` / `default_status`.
+ * - --adapter=<id> filters the capability matrix (does not upgrade Full).
  * - --receipt=<path> evaluates a Windows support receipt file (never fabricates Full).
  * - --plan includes the Windows real-machine runner plan.
  * - --probe-host controls host install probing for capabilities.
@@ -187,6 +196,9 @@ function runPlatformStatus(rest: string[]): void {
   let probeHost = true;
   let receiptPath: string | null = null;
   let showPlan = false;
+  let adapter: AdapterId | undefined;
+  const usage =
+    "Usage: changeguard platform-status [--probe-host=true|false] [--receipt=<path>] [--plan] [--adapter=<id>]";
   for (const a of rest) {
     if (a === "--probe-host=false" || a === "--probe-host=0") {
       probeHost = false;
@@ -218,14 +230,32 @@ function runPlatformStatus(rest: string[]): void {
       showPlan = true;
       continue;
     }
+    if (a.startsWith("--adapter=")) {
+      const v = a.slice("--adapter=".length) as AdapterId;
+      if (!PLATFORM_ADAPTERS.has(v)) {
+        printJson(
+          {
+            schema_version: 1,
+            ok: false,
+            error_code: "USAGE",
+            error_message: usage,
+            network_used: false,
+            target_mutated: false,
+            repair_applied: false,
+          },
+          2,
+        );
+      }
+      adapter = v;
+      continue;
+    }
     if (a.startsWith("-")) {
       printJson(
         {
           schema_version: 1,
           ok: false,
           error_code: "USAGE",
-          error_message:
-            "Usage: changeguard platform-status [--probe-host=true|false] [--receipt=<path>] [--plan]",
+          error_message: usage,
           network_used: false,
           target_mutated: false,
           repair_applied: false,
@@ -238,8 +268,7 @@ function runPlatformStatus(rest: string[]): void {
         schema_version: 1,
         ok: false,
         error_code: "USAGE",
-        error_message:
-          "Usage: changeguard platform-status [--probe-host=true|false] [--receipt=<path>] [--plan]",
+        error_message: usage,
         network_used: false,
         target_mutated: false,
         repair_applied: false,
@@ -248,7 +277,10 @@ function runPlatformStatus(rest: string[]): void {
     );
   }
 
-  const base: PlatformStatusResult = platformStatus({ probeHost });
+  const base: PlatformStatusResult = platformStatus({
+    probeHost,
+    ...(adapter ? { adapter } : {}),
+  });
   let winStatus = windows11SupportStatus(null);
   let loadOk = true;
   let error_code: string | null = base.error_code;

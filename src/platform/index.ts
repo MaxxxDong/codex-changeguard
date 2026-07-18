@@ -1,10 +1,10 @@
 /**
- * Unified platform support surface (Tickets 13 + 14).
+ * Unified platform support surface (Tickets 13 + 14 + 15).
  *
- * macOS harness receipts (Ticket 13) and Windows 11 support receipts
- * (Ticket 14) are distinct contracts under one package API. They share
- * exported names only at the package boundary; internal modules never
- * overwrite each other.
+ * macOS harness receipts (Ticket 13), Windows 11 support receipts (Ticket 14),
+ * and Linux/WSL/enterprise capability matrix (Ticket 15) share one package API.
+ * Internal modules never overwrite each other; SupportReceipt (T15 lightweight)
+ * is distinct from PlatformSupportReceipt / WindowsPlatformSupportReceipt.
  */
 export type {
   PlatformSupportLevel,
@@ -21,6 +21,23 @@ export type {
   ReceiptValidationResult,
   CodexVersionProvenance,
   MacosRequiredScenarioId,
+  // Ticket 15
+  PlatformCapabilityStatus,
+  AdapterId,
+  RuntimeDomain,
+  DiscoveryKind,
+  DiscoveryObservation,
+  PlatformGap,
+  OfficialReference,
+  SupportReceipt,
+  PlatformCapabilityReport,
+  NetworkCompareBranch,
+  NetworkCompareObservation,
+  NetworkCompareResult,
+  ITHandoffMinimalEvidence,
+  ITHandoff,
+  WriteGateInput,
+  WriteGateResult,
 } from "./types.js";
 export { MACOS_REQUIRED_SCENARIO_IDS } from "./types.js";
 export {
@@ -97,3 +114,51 @@ export {
   windowsLiveAttestationFromReceipt,
   windowsLiveWitnessMatchesReceipt,
 } from "./windows/index.js";
+
+// Ticket 15 — Linux / WSL / enterprise capability, discovery, IT handoff.
+export {
+  buildCapabilityReport,
+  defaultCapabilityStatus,
+  detectHostAdapter,
+  evaluateWriteGate,
+  INTERNAL_FIXTURE_SEAM_ENV,
+  INTERNAL_FIXTURE_SEAM_VALUE,
+  isolatedFixtureRepairCapabilityOptions,
+  productionRepairCapabilityOptions,
+  resolveEffectiveStatus,
+  resolvePublicRepairCapability,
+  runtimeDomainFor,
+} from "./capability.js";
+export type { PublicRepairCapabilityOptions } from "./capability.js";
+
+export {
+  discoverBoundedSurfaces,
+  isHostMountPath,
+} from "./discovery.js";
+
+export {
+  enumerateLinuxCliCandidates,
+  linuxCapabilityReport,
+  linuxCliPaths,
+  LINUX_REGISTERED_CLI_PATHS,
+} from "./linux-adapter.js";
+
+export {
+  assertNoIdentityCollapse,
+  enumerateWslCliCandidates,
+  wslCapabilityReport,
+  wslCliPaths,
+  WSL_REGISTERED_CLI_PATHS,
+} from "./wsl-adapter.js";
+
+export {
+  assertSafeHandoffText,
+  buildITHandoff,
+} from "./it-handoff.js";
+
+export { compareNetworkPaths } from "./network-compare.js";
+
+export {
+  syntheticLimitedReceipt,
+  validateSupportReceipt,
+} from "./support-receipt.js";

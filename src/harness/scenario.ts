@@ -104,9 +104,12 @@ export function runCliJson(
   stderr: string;
   result: Record<string, unknown> | null;
 } {
+  // Default harness env enables the internal isolated-fixture PREVIEW seam for
+  // repair paths. Callers may override via opts.env (e.g. Windows host injection
+  // or production fail-closed env without the seam).
   const res = spawnSync(process.execPath, [cliEntry(), ...args], {
     encoding: "utf8",
-    env: { ...process.env, NO_COLOR: "1", ...(opts?.env ?? {}) },
+    env: harnessProcessEnv({ ...process.env, ...(opts?.env ?? {}) }),
     maxBuffer: 4 * 1024 * 1024,
   });
   let result: Record<string, unknown> | null = null;

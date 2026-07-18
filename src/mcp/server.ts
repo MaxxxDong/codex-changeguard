@@ -8,7 +8,8 @@
  * + Ticket 10 upstream draft preview (local-only capsule; never external write)
  * + Ticket 11 confirmed upstream action preview/confirm (no real adapter by default)
  * + Ticket 13 platform status / receipt validation (macOS capabilities; no harness spawn)
- * + Ticket 14 Windows 11 support status (PREVIEW without real-machine host receipt).
+ * + Ticket 14 Windows 11 support status (PREVIEW without real-machine host receipt)
+ * + Ticket 15 Linux/WSL/enterprise capability matrix (Limited/Read-only without real-machine receipt).
  *
  * Wire protocol: newline-delimited JSON-RPC 2.0 over stdio.
  * Request frames are accumulated as bounded bytes (not unbounded readline).
@@ -57,13 +58,24 @@ import {
 } from "../upstream/actions/index.js";
 import {
   platformStatus,
+  resolvePublicRepairCapability,
   validatePlatformSupportReceipt,
   loadAndEvaluateReceiptFile,
   realMachineRunnerPlan,
   windows11SupportStatus,
+  type AdapterId,
   type PlatformStatusResult,
   type ReceiptValidationResult,
 } from "../platform/index.js";
+
+const PLATFORM_ADAPTERS = new Set<AdapterId>([
+  "unknown",
+  "macos",
+  "windows",
+  "linux",
+  "wsl",
+  "enterprise_managed",
+]);
 
 const TOOL_DIAGNOSE = "changeguard_diagnose";
 const TOOL_IMPACT = "changeguard_impact";
@@ -439,7 +451,7 @@ function toolSchemas() {
     {
       name: TOOL_PLATFORM_STATUS,
       description:
-        "Unified platform status (Tickets 13+14): read-only host capabilities (macOS adapter when on darwin) plus Windows 11 support evaluation under `status` (default PREVIEW). Optional macOS harness receipt object, optional Windows receipt file path, optional runner plan. Never mutates host, never executes binaries, never fabricates Full from synthetic evidence.",
+        "Unified platform status (Tickets 13+14+15): read-only host capabilities (macOS adapter when on darwin), Windows 11 support evaluation under `status` (default PREVIEW), and Linux/WSL/enterprise capability matrix under `reports` (Limited/Read-only without real-machine receipt). Optional macOS harness receipt object, optional Windows receipt file path, optional runner plan, optional adapter filter. Never mutates host, never executes binaries, never fabricates Full from synthetic evidence.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -448,6 +460,19 @@ function toolSchemas() {
             type: "boolean",
             description:
               "When true (default), probe registered Desktop/PATH candidates without executing them.",
+          },
+          adapter: {
+            type: "string",
+            enum: [
+              "unknown",
+              "macos",
+              "windows",
+              "linux",
+              "wsl",
+              "enterprise_managed",
+            ],
+            description:
+              "Optional Ticket 15 capability-matrix adapter filter. Does not upgrade Full.",
           },
           receipt: {
             description:
@@ -1013,7 +1038,7 @@ function handleToolsCall(params: unknown): {
   }
 
   if (p.name === TOOL_PLATFORM_STATUS) {
-    const allowed = new Set(["probe_host", "receipt", "plan"]);
+    const allowed = new Set(["probe_host", "receipt", "plan", "adapter"]);
     for (const k of Object.keys(a)) {
       if (!allowed.has(k)) {
         throw Object.assign(new Error("Unknown or extra arguments."), {
@@ -1036,6 +1061,16 @@ function handleToolsCall(params: unknown): {
       });
     }
     const includePlan = a.plan === true;
+
+    let adapter: AdapterId | undefined;
+    if (a.adapter !== undefined) {
+      if (typeof a.adapter !== "string" || !PLATFORM_ADAPTERS.has(a.adapter as AdapterId)) {
+        throw Object.assign(new Error("Invalid adapter."), {
+          code: "INVALID_ARGS",
+        });
+      }
+      adapter = a.adapter as AdapterId;
+    }
 
     // receipt: string path → Windows support receipt; object → macOS harness receipt.
     let macosReceipt: unknown = undefined;
@@ -1071,6 +1106,7 @@ function handleToolsCall(params: unknown): {
     const base = platformStatus({
       probeHost,
       receipt: macosReceipt,
+      ...(adapter ? { adapter } : {}),
     });
     const payload = {
       ...base,

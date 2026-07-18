@@ -362,6 +362,11 @@ export function previewRepair(
   const winRefuse = refuseWindowsWriteScope("preview", targetReal, options);
   if (winRefuse) return winRefuse;
 
+  // Normalize Ticket 15 capability options fail-closed (no silent PREVIEW).
+  // Managed-policy IT Handoff is evaluated later on the config path before the
+  // write gate so LIMITED/READ_ONLY still surfaces ADMIN_ACTION_REQUIRED.
+  const capOpts = normalizeRepairCapability(options);
+
   // Ticket 08 plugin-cache pack takes precedence when inventory is present.
   if (isPluginCacheTarget(targetReal)) {
     return previewPluginCacheRepair(targetReal, capOpts);

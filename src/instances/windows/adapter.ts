@@ -461,13 +461,20 @@ export function enumerateWindowsCandidates(
     }
   }
 
-  // Filter version_metadata_abs to trusted roots.
+  // Filter version_metadata_abs to trusted roots; bind Ticket 15 runtime domains
+  // so Windows host and WSL identities never collapse.
   for (const c of out) {
     const trusted = c.trusted_metadata_roots ?? [];
     if (c.version_metadata_abs) {
       c.version_metadata_abs = c.version_metadata_abs.filter((m) =>
         trusted.some((t) => isInsideRoot(t, m)),
       );
+    }
+    if (c.runtime_domain == null || c.runtime_domain === undefined) {
+      c.runtime_domain =
+        c.platform === "wsl" || c.install_source === "wsl"
+          ? "wsl_distro"
+          : "windows_host";
     }
   }
 

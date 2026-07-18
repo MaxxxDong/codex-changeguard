@@ -260,6 +260,11 @@ export interface SystemEnumerateCaps {
    */
   wslPaths?: string[];
   /**
+   * Native Linux registered CLI absolute paths (platform=linux only).
+   * install_source will be path (never wsl).
+   */
+  linuxPaths?: string[];
+  /**
    * When platform=windows, also emit registered wslPaths as independent
    * WSL identities (Ticket 14 host coexistence). Default true on windows.
    */

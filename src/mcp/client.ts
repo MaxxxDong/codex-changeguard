@@ -14,8 +14,9 @@ export interface McpClientOptions {
   serverEntry?: string;
   timeoutMs?: number;
   /**
-   * Extra env for the MCP server child. Tests may inject trusted host
-   * platform (dual-key harness env), never product tool JSON.
+   * Child process env. Defaults enable the internal fixture PREVIEW seam
+   * (this client is test-only). Pass production-like env to assert fail-closed,
+   * or dual-key Windows host injection env for Ticket 14 tests.
    */
   env?: NodeJS.ProcessEnv;
 }
@@ -33,7 +34,7 @@ export class McpTestClient {
   >();
   private readonly timeoutMs: number;
   private readonly serverEntry: string;
-  private readonly extraEnv: NodeJS.ProcessEnv;
+  private readonly env: NodeJS.ProcessEnv;
   /** Accumulates partial stdout chunks until a full NDJSON line is available. */
   private partialStdout = "";
   private initialized = false;
@@ -43,14 +44,24 @@ export class McpTestClient {
     const here = path.dirname(fileURLToPath(import.meta.url));
     this.serverEntry =
       opts.serverEntry ?? path.join(here, "server.js");
-    this.extraEnv = opts.env ?? {};
+    // When caller supplies env, merge onto process.env but do not re-inject the
+    // fixture seam (production fail-closed tests delete the seam key).
+    // When omitted, enable the internal isolated-fixture PREVIEW seam.
+    this.env =
+      opts.env !== undefined
+        ? { ...process.env, NO_COLOR: "1", ...opts.env }
+        : {
+            ...process.env,
+            NO_COLOR: "1",
+            [INTERNAL_FIXTURE_SEAM_ENV]: INTERNAL_FIXTURE_SEAM_VALUE,
+          };
   }
 
   start(): void {
     if (this.child) return;
     this.child = spawn(process.execPath, [this.serverEntry], {
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, NO_COLOR: "1", ...this.extraEnv },
+      env: this.env,
     });
     // Handle partial stdout chunks manually so incomplete frames wait for more data.
     this.child.stdout.setEncoding("utf8");

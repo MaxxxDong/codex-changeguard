@@ -48,6 +48,7 @@ import {
   hostCoarseFingerprintOf,
   MACOS_REQUIRED_SCENARIO_IDS,
   ReceiptValidationError,
+  isolatedFixtureRepairCapabilityOptions,
 } from "../src/platform/index.js";
 import { diagnose } from "../src/core/diagnose.js";
 import {
@@ -396,12 +397,17 @@ test("user-owned repair binds exact instance; reuses backup/apply/verify/rollbac
   assert.equal(scope.bound_instance?.instance_id, pathInst!.instance_id);
 
   // Full repair cycle via Ticket 02/08 engine on the isolated user-owned target.
-  const preview = previewRepair(target);
+  // Ticket 15: in-process mutation requires explicit capability (fail-closed default).
+  const fixtureCap = isolatedFixtureRepairCapabilityOptions();
+  const preview = previewRepair(target, fixtureCap);
   assert.equal(preview.ok, true, preview.error_message ?? "preview");
   assert.ok(preview.capsule);
   const token = preview.authorization;
   assert.ok(token);
-  const applied = applyRepair(target, { authorization: token! });
+  const applied = applyRepair(target, {
+    authorization: token!,
+    ...fixtureCap,
+  });
   assert.equal(applied.ok, true, applied.error_message ?? "apply");
   // Apply path may already report RESOLVED_VERIFIED; verify/rollback remain safe.
   const verified = verifyRepair(target);
@@ -931,9 +937,12 @@ test("P1: shared recovery gate refuses Program Files / signed exe / unknown on W
   assert.equal(managedPrev.admin_handoff!.policy_class, "msix_package");
 
   // User-owned cache allowed on Windows host → may preview
+  // Ticket 15: pair host context with isolated-fixture capability (test seam only).
+  const fixtureCap = isolatedFixtureRepairCapabilityOptions();
   const userPrev = previewRepair(userTarget, {
     hostPlatform: "win32",
     userOwnedRoots: [roots.userOwned, roots.local],
+    ...fixtureCap,
   });
   assert.equal(userPrev.ok, true, userPrev.error_message ?? "user cache preview");
   assert.ok(userPrev.authorization);
@@ -944,6 +953,7 @@ test("P1: shared recovery gate refuses Program Files / signed exe / unknown on W
   const badApply = applyRepair(unknownTarget, {
     authorization: token,
     hostPlatform: "win32",
+    ...fixtureCap,
   });
   assert.equal(badApply.ok, false);
   assert.equal(badApply.error_code, "ADMIN_ACTION_REQUIRED");
@@ -953,6 +963,7 @@ test("P1: shared recovery gate refuses Program Files / signed exe / unknown on W
     authorization: token,
     hostPlatform: "win32",
     userOwnedRoots: [roots.userOwned, roots.local],
+    ...fixtureCap,
   });
   assert.equal(goodApply.ok, true, goodApply.error_message ?? "user apply");
 });
