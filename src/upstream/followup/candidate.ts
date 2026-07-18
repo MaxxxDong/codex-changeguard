@@ -4,8 +4,10 @@
  * RECOMMEND_UPGRADE or SUPERSEDED_BY_UPSTREAM_FIX.
  *
  * Supersession requires:
- * 1. Measured registered-probe / core-regression evidence (fault absent + core ok)
- * 2. Allowlisted official evidence item digest (64 hex)
+ * 1. Positive measured contract (baseline repro + fault absent + core ok)
+ *    bound to candidate_version — never absence-as-success / caller booleans
+ * 2. Real pinned official evidence item: digest + canonical URL both match
+ *    exactly one bundled-snapshot item suitable as an upstream-fix reference
  *
  * Never download/install/mutate OpenAI binaries; guidance only.
  * Never automatically uninstall a user workaround.
@@ -13,16 +15,157 @@
 import { runCanary, supersedeRecipe } from "../../core/lifecycle/index.js";
 import { resolveTargetDirectory } from "../../core/path-safety.js";
 import type { VersionGuidance } from "../../core/lifecycle/types.js";
-import { measureCandidateFaultAndCore } from "./probes.js";
+import {
+  assertOfficialUrl,
+  AllowlistError,
+  loadBundledSnapshot,
+  SnapshotError,
+} from "../../evidence/index.js";
+import type { OfficialEvidenceItem } from "../../evidence/types.js";
+import { loadCandidateMeasurement } from "./probes.js";
 import type {
   CandidateValidationInput,
   CandidateValidationResult,
   FollowupProbeResult,
 } from "./types.js";
-import { MAX_RECIPE_ID_LEN, MAX_VERSION_LEN } from "./limits.js";
+import {
+  MAX_RECIPE_ID_LEN,
+  MAX_VERSION_LEN,
+  UPSTREAM_FIX_EVIDENCE_KINDS,
+  UPSTREAM_FIX_MAINTAINER_STATUSES,
+} from "./limits.js";
 import { parseCanonicalIssue, IssueUrlError } from "./issue-url.js";
 
 const SHA256_HEX = /^[a-f0-9]{64}$/;
+const FIX_KIND_SET = new Set<string>(UPSTREAM_FIX_EVIDENCE_KINDS);
+const FIX_STATUS_SET = new Set<string>(UPSTREAM_FIX_MAINTAINER_STATUSES);
+
+function isSuitableUpstreamFix(item: OfficialEvidenceItem): boolean {
+  if (!FIX_KIND_SET.has(item.kind)) return false;
+  if (!FIX_STATUS_SET.has(item.maintainer_status)) return false;
+  if (item.quarantine !== null) return false;
+  return true;
+}
+
+/**
+ * Bind caller digest+ref to exactly one real official-evidence snapshot item.
+ * Fail closed on forge, mismatch, ambiguity, non-official URL, unsuitable kinds.
+ */
+export function bindOfficialEvidenceItem(input: {
+  official_evidence_item_digest: string;
+  official_evidence_ref: string;
+  /** Optional bounded local snapshot path (tests/orchestration); validated by loadBundledSnapshot. */
+  snapshot_path?: string;
+}):
+  | { ok: true; item: OfficialEvidenceItem; canonical_url: string }
+  | { ok: false; code: string; message: string } {
+  const digest = input.official_evidence_item_digest;
+  const ref = input.official_evidence_ref;
+  if (typeof digest !== "string" || !SHA256_HEX.test(digest)) {
+    return {
+      ok: false,
+      code: "OFFICIAL_EVIDENCE_REQUIRED",
+      message: "Allowlisted official evidence item digest required (64 hex).",
+    };
+  }
+  if (typeof ref !== "string" || ref.length === 0 || ref.length > 256) {
+    return {
+      ok: false,
+      code: "OFFICIAL_EVIDENCE_REQUIRED",
+      message: "Official evidence ref required.",
+    };
+  }
+
+  let canonical_url: string;
+  try {
+    ({ canonical_url } = assertOfficialUrl(ref));
+  } catch (e) {
+    if (e instanceof AllowlistError) {
+      return {
+        ok: false,
+        code: "OFFICIAL_EVIDENCE_REF_REFUSED",
+        message: e.message,
+      };
+    }
+    return {
+      ok: false,
+      code: "OFFICIAL_EVIDENCE_REF_REFUSED",
+      message: "Official evidence ref refused.",
+    };
+  }
+
+  let snapshot;
+  try {
+    snapshot = loadBundledSnapshot(input.snapshot_path);
+  } catch (e) {
+    if (e instanceof SnapshotError) {
+      return {
+        ok: false,
+        code: "OFFICIAL_SNAPSHOT_REFUSED",
+        message: e.message,
+      };
+    }
+    return {
+      ok: false,
+      code: "OFFICIAL_SNAPSHOT_REFUSED",
+      message: "Official evidence snapshot load failed.",
+    };
+  }
+
+  const matches = snapshot.items.filter(
+    (it) =>
+      it.content_sha256 === digest && it.canonical_url === canonical_url,
+  );
+  if (matches.length === 0) {
+    // Distinguish digest-only vs ref-only for clearer fail-closed diagnostics.
+    const byDigest = snapshot.items.filter((it) => it.content_sha256 === digest);
+    const byUrl = snapshot.items.filter((it) => it.canonical_url === canonical_url);
+    if (byDigest.length === 0 && byUrl.length === 0) {
+      return {
+        ok: false,
+        code: "OFFICIAL_EVIDENCE_UNBOUND",
+        message:
+          "Digest and ref do not bind to any pinned official evidence item.",
+      };
+    }
+    if (byDigest.length > 0 && byUrl.length === 0) {
+      return {
+        ok: false,
+        code: "OFFICIAL_EVIDENCE_REF_MISMATCH",
+        message: "Official evidence ref does not match digest-bound item URL.",
+      };
+    }
+    if (byDigest.length === 0 && byUrl.length > 0) {
+      return {
+        ok: false,
+        code: "OFFICIAL_EVIDENCE_DIGEST_MISMATCH",
+        message: "Official evidence digest does not match ref-bound item.",
+      };
+    }
+    return {
+      ok: false,
+      code: "OFFICIAL_EVIDENCE_MISMATCH",
+      message: "Official evidence digest/ref pair does not match a single item.",
+    };
+  }
+  if (matches.length > 1) {
+    return {
+      ok: false,
+      code: "OFFICIAL_EVIDENCE_AMBIGUOUS",
+      message: "Official evidence digest/ref matches multiple snapshot items.",
+    };
+  }
+  const item = matches[0]!;
+  if (!isSuitableUpstreamFix(item)) {
+    return {
+      ok: false,
+      code: "OFFICIAL_EVIDENCE_UNSUITABLE",
+      message:
+        "Bound evidence item is not suitable as an upstream-fix reference.",
+    };
+  }
+  return { ok: true, item, canonical_url };
+}
 
 export function validateCandidateFix(
   input: CandidateValidationInput,
@@ -32,11 +175,15 @@ export function validateCandidateFix(
     code: string,
     message: string,
     probes: FollowupProbeResult[] = [],
+    measured: {
+      measured_fault_absent: boolean | null;
+      measured_core_ok: boolean | null;
+    } = { measured_fault_absent: null, measured_core_ok: null },
   ): CandidateValidationResult => ({
     ok: false,
     status,
-    measured_fault_absent: null,
-    measured_core_ok: null,
+    measured_fault_absent: measured.measured_fault_absent,
+    measured_core_ok: measured.measured_core_ok,
     version_guidance: null,
     recipe_status: null,
     recipe_recommendable: null,
@@ -87,42 +234,60 @@ export function validateCandidateFix(
   ) {
     return baseFail("INVALID_INPUT", "INVALID_RECIPE", "Invalid recipe_id.");
   }
-  if (
-    typeof input.official_evidence_item_digest !== "string" ||
-    !SHA256_HEX.test(input.official_evidence_item_digest)
-  ) {
-    return baseFail(
-      "REFUSED",
-      "OFFICIAL_EVIDENCE_REQUIRED",
-      "Allowlisted official evidence item digest required (64 hex).",
-    );
-  }
-  if (
-    typeof input.official_evidence_ref !== "string" ||
-    input.official_evidence_ref.length === 0 ||
-    input.official_evidence_ref.length > 256
-  ) {
-    return baseFail(
-      "REFUSED",
-      "OFFICIAL_EVIDENCE_REQUIRED",
-      "Official evidence ref required.",
-    );
-  }
 
   // Explicitly ignore caller-declared authority flags for decisions.
   void input.original_fault_absent;
   void input.core_regressions_passed;
   void input.verified;
 
-  const measured = measureCandidateFaultAndCore(input.targetPath);
-  const { measured_fault_absent, measured_core_ok, probe_results } = measured;
+  // ── Positive measurement (never absence-as-success) ──────────────────────
+  const measured = loadCandidateMeasurement(
+    input.targetPath,
+    input.candidate_version,
+  );
+  const { measured_fault_absent, measured_core_ok, probe_results, verdict } =
+    measured;
+
+  if (verdict === "inconclusive") {
+    return baseFail(
+      "REFUSED",
+      measured.error_code ?? "MEASUREMENT_INCONCLUSIVE",
+      measured.detail ||
+        "Positive candidate measurement inconclusive; active workaround preserved.",
+      probe_results,
+      { measured_fault_absent, measured_core_ok },
+    );
+  }
+
+  // Bind official evidence BEFORE any RECOMMEND_UPGRADE / supersession path.
+  // Negative measurement may still report CANDIDATE_REGRESSED without requiring
+  // a successful bind (preserve workaround); forged digests must not unlock upgrade.
+  const bind =
+    verdict === "positive"
+      ? bindOfficialEvidenceItem({
+          official_evidence_item_digest: input.official_evidence_item_digest,
+          official_evidence_ref: input.official_evidence_ref,
+          snapshot_path: input.snapshot_path,
+        })
+      : null;
+
+  if (verdict === "positive" && bind && !bind.ok) {
+    return baseFail(
+      "REFUSED",
+      bind.code,
+      bind.message,
+      probe_results,
+      { measured_fault_absent, measured_core_ok },
+    );
+  }
 
   // Drive canary with MEASURED values only (canary_executed true + measured flags).
+  // Inconclusive already returned; negative/positive always have concrete booleans.
   const canary = runCanary({
     targetPath: input.targetPath,
     candidate_version: input.candidate_version,
-    original_fault_absent: measured_fault_absent,
-    core_regressions_passed: measured_core_ok,
+    original_fault_absent: measured_fault_absent === true,
+    core_regressions_passed: measured_core_ok === true,
     canary_executed: true,
     measured_outcomes: true,
     nowMs: input.nowMs,
@@ -138,7 +303,7 @@ export function validateCandidateFix(
       version_guidance,
       recipe_status: null,
       recipe_recommendable: null,
-      official_evidence_item_digest: input.official_evidence_item_digest,
+      official_evidence_item_digest: null,
       binary_downloaded: false,
       binary_installed: false,
       workaround_uninstalled: false,
@@ -150,7 +315,7 @@ export function validateCandidateFix(
     };
   }
 
-  if (!measured_fault_absent || !measured_core_ok) {
+  if (verdict === "negative" || !measured_fault_absent || !measured_core_ok) {
     return {
       ok: true,
       status: "CANDIDATE_REGRESSED",
@@ -159,7 +324,7 @@ export function validateCandidateFix(
       version_guidance: version_guidance ?? "HOLD_KNOWN_GOOD",
       recipe_status: "ACTIVE_WORKAROUND",
       recipe_recommendable: true,
-      official_evidence_item_digest: input.official_evidence_item_digest,
+      official_evidence_item_digest: null,
       binary_downloaded: false,
       binary_installed: false,
       workaround_uninstalled: false,
@@ -179,15 +344,27 @@ export function validateCandidateFix(
     };
   }
 
-  // Measured pass + allowlisted official evidence digest → supersede temporary recipe.
-  // verified/measured_validation are set only after independent probe measurement above;
-  // caller-supplied verified=true alone never reaches this branch without measures.
+  // Positive measurement + bound official evidence → supersede temporary recipe.
+  // verified/measured_validation are set only after independent binding above.
+  if (!bind || !bind.ok) {
+    return baseFail(
+      "REFUSED",
+      "OFFICIAL_EVIDENCE_REQUIRED",
+      "Official evidence binding required before supersession.",
+      probe_results,
+      { measured_fault_absent, measured_core_ok },
+    );
+  }
+
+  const boundDigest = bind.item.content_sha256;
+  const boundRef = bind.canonical_url;
+
   const sup = supersedeRecipe({
     targetPath: input.targetPath,
     recipe_id: input.recipe_id,
     upstream: {
-      ref: input.official_evidence_ref,
-      evidence_digest: input.official_evidence_item_digest,
+      ref: boundRef,
+      evidence_digest: boundDigest,
       verified: true,
       measured_validation: true,
     },
@@ -203,7 +380,7 @@ export function validateCandidateFix(
       version_guidance: "RECOMMEND_UPGRADE",
       recipe_status: null,
       recipe_recommendable: null,
-      official_evidence_item_digest: input.official_evidence_item_digest,
+      official_evidence_item_digest: boundDigest,
       binary_downloaded: false,
       binary_installed: false,
       workaround_uninstalled: false,
@@ -224,19 +401,19 @@ export function validateCandidateFix(
     version_guidance: "RECOMMEND_UPGRADE",
     recipe_status: recipe?.status ?? "SUPERSEDED_BY_UPSTREAM_FIX",
     recipe_recommendable: recipe ? recipe.recommendable : false,
-    official_evidence_item_digest: input.official_evidence_item_digest,
+    official_evidence_item_digest: boundDigest,
     binary_downloaded: false,
     binary_installed: false,
     workaround_uninstalled: false,
     detail:
-      "Measured candidate validation passed with official evidence digest; recipe SUPERSEDED_BY_UPSTREAM_FIX. Guidance only — no binary install/uninstall.",
+      "Measured candidate validation passed with bound official evidence; recipe SUPERSEDED_BY_UPSTREAM_FIX. Guidance only — no binary install/uninstall.",
     probe_results,
     evidence: [
       ...canary.evidence,
       ...sup.evidence,
       {
         kind: "followup_candidate_superseded",
-        detail: `recipe_id=${input.recipe_id};digest=${input.official_evidence_item_digest.slice(0, 12)}…`,
+        detail: `recipe_id=${input.recipe_id};digest=${boundDigest.slice(0, 12)}…;url_bound=true`,
         measured: true,
       },
     ],

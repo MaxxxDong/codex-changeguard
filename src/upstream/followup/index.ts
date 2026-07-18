@@ -35,6 +35,10 @@ export {
   REFRESH_MIN_INTERVAL_MS,
   FOLLOWUP_LEDGER_STATE_FILE,
   FOLLOWUP_LEDGER_CAPACITY,
+  FOLLOWUP_LEDGER_LOCK_NAME,
+  FOLLOWUP_LEDGER_LOCK_STALE_MS,
+  FOLLOWUP_LEDGER_LOCK_WAIT_MS,
+  CANDIDATE_MEASUREMENT_REL,
   FORBIDDEN_FOLLOWUP_KEYS,
   MAINTAINER_INTENTS,
   UPSTREAM_DISPOSITIONS,
@@ -67,6 +71,12 @@ export {
   runRegisteredProbe,
   runRegisteredProbes,
   measureCandidateFaultAndCore,
+  loadCandidateMeasurement,
+  sealCandidateMeasurement,
+} from "./probes.js";
+export type {
+  CandidateMeasurementResult,
+  CandidateMeasurementVerdict,
 } from "./probes.js";
 
 export {
@@ -76,12 +86,13 @@ export {
   emptyFollowupLedger,
   FollowupLedgerError,
   findSubscription,
+  withFollowupLedgerTransaction,
 } from "./ledger.js";
 export type { FollowupLedgerErrorCode } from "./ledger.js";
 
 export { buildEvidenceCapsule, buildReplyDraft } from "./capsule.js";
 
-export { validateCandidateFix } from "./candidate.js";
+export { validateCandidateFix, bindOfficialEvidenceItem } from "./candidate.js";
 
 export {
   subscribeIssue,

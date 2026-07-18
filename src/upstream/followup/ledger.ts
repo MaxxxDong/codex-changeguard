@@ -1,6 +1,7 @@
 /**
  * Fail-closed subscription / follow-up ledger under ChangeGuard-owned state.
  * Strict schema, no symlink following, size/cap controls, corruption refusal.
+ * Mutations run under an exclusive atomic-mkdir lock (Ticket 11 pattern).
  * No secrets, tokens, raw session material, or unnecessary absolute paths.
  */
 import fs from "node:fs";
@@ -10,15 +11,24 @@ import {
   FOLLOWUP_LEDGER_CAPACITY,
   FOLLOWUP_LEDGER_DIR_MODE,
   FOLLOWUP_LEDGER_FILE_MODE,
+  FOLLOWUP_LEDGER_LOCK_NAME,
+  FOLLOWUP_LEDGER_LOCK_POLL_MS,
+  FOLLOWUP_LEDGER_LOCK_STALE_MS,
+  FOLLOWUP_LEDGER_LOCK_WAIT_MS,
   FOLLOWUP_LEDGER_MAX_BYTES,
+  FOLLOWUP_LEDGER_OWNER_BYTES,
   FOLLOWUP_LEDGER_STATE_FILE,
   MAX_EVENTS_PER_ISSUE,
   MAX_SUBSCRIPTIONS,
+  MAINTAINER_INTENTS,
+  REGISTERED_PROBE_IDS,
   UPSTREAM_DISPOSITIONS,
 } from "./limits.js";
 import type {
   FollowupEventRecord,
   FollowupLedger,
+  MaintainerIntent,
+  RegisteredProbeId,
   SubscriptionRecord,
   UpstreamDisposition,
 } from "./types.js";
@@ -32,7 +42,8 @@ export type FollowupLedgerErrorCode =
   | "LEDGER_SIZE"
   | "LEDGER_ROOT"
   | "LEDGER_CORRUPT"
-  | "LEDGER_DIGEST";
+  | "LEDGER_DIGEST"
+  | "LEDGER_LOCK";
 
 export class FollowupLedgerError extends Error {
   readonly code: FollowupLedgerErrorCode;
@@ -44,6 +55,8 @@ export class FollowupLedgerError extends Error {
 }
 
 const DISPOSITION_SET = new Set<string>(UPSTREAM_DISPOSITIONS);
+const INTENT_SET = new Set<string>(MAINTAINER_INTENTS);
+const PROBE_SET = new Set<string>(REGISTERED_PROBE_IDS);
 const SHA256_HEX = /^[a-f0-9]{64}$/;
 
 const SUB_KEYS = [
@@ -365,6 +378,42 @@ function parseEvent(raw: unknown): FollowupEventRecord {
   if (!Array.isArray(o.probe_ids) || o.probe_ids.length > 16) {
     throw new FollowupLedgerError("LEDGER_SCHEMA", "Event probe_ids refused.");
   }
+  const intents: MaintainerIntent[] = [];
+  const seenIntents = new Set<string>();
+  for (const item of o.intents) {
+    if (typeof item !== "string" || !INTENT_SET.has(item)) {
+      throw new FollowupLedgerError(
+        "LEDGER_SCHEMA",
+        "Event intents item refused (closed allowlist).",
+      );
+    }
+    if (seenIntents.has(item)) {
+      throw new FollowupLedgerError(
+        "LEDGER_SCHEMA",
+        "Event intents duplicate refused.",
+      );
+    }
+    seenIntents.add(item);
+    intents.push(item as MaintainerIntent);
+  }
+  const probe_ids: RegisteredProbeId[] = [];
+  const seenProbes = new Set<string>();
+  for (const item of o.probe_ids) {
+    if (typeof item !== "string" || !PROBE_SET.has(item)) {
+      throw new FollowupLedgerError(
+        "LEDGER_SCHEMA",
+        "Event probe_ids item refused (closed allowlist).",
+      );
+    }
+    if (seenProbes.has(item)) {
+      throw new FollowupLedgerError(
+        "LEDGER_SCHEMA",
+        "Event probe_ids duplicate refused.",
+      );
+    }
+    seenProbes.add(item);
+    probe_ids.push(item as RegisteredProbeId);
+  }
   if (
     o.evidence_capsule_id !== null &&
     (typeof o.evidence_capsule_id !== "string" || o.evidence_capsule_id.length > 128)
@@ -383,8 +432,8 @@ function parseEvent(raw: unknown): FollowupEventRecord {
     disposition: o.disposition as UpstreamDisposition,
     event_digest: o.event_digest,
     processed_at_ms: o.processed_at_ms,
-    intents: o.intents as FollowupEventRecord["intents"],
-    probe_ids: o.probe_ids as FollowupEventRecord["probe_ids"],
+    intents,
+    probe_ids,
     evidence_capsule_id: o.evidence_capsule_id as string | null,
     reply_draft_digest: o.reply_draft_digest as string | null,
   };
@@ -488,6 +537,236 @@ export function saveFollowupLedger(root: string, ledger: FollowupLedger, nowMs: 
   const bytes = Buffer.from(`${JSON.stringify(sealed, null, 2)}\n`, "utf8");
   atomicWriteFile(root, FOLLOWUP_LEDGER_STATE_FILE, bytes);
   return sealed;
+}
+
+// --- exclusive lock (atomic mkdir; owner token; stale reclaim; fail-closed) ---
+// Pattern mirrored from Ticket 11 confirmation ledger (no flock / child_process).
+
+interface LockOwnerDoc {
+  owner: string;
+  pid: number;
+  created_at_ms: number;
+}
+
+function lockDirPath(root: string): string {
+  return path.join(root, FOLLOWUP_LEDGER_LOCK_NAME);
+}
+
+function lockOwnerPath(lockDir: string): string {
+  return path.join(lockDir, "owner.json");
+}
+
+function sleepMs(ms: number): void {
+  if (ms <= 0) return;
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      /* spin fallback */
+    }
+  }
+}
+
+function readLockMeta(
+  lockDir: string,
+): { owner: string; created_at_ms: number; ageAnchorMs: number } | null {
+  try {
+    const st = fs.lstatSync(lockDir);
+    if (st.isSymbolicLink() || !st.isDirectory()) {
+      return null;
+    }
+    const op = lockOwnerPath(lockDir);
+    const ost = fs.lstatSync(op);
+    if (ost.isSymbolicLink() || !ost.isFile()) {
+      return null;
+    }
+    if (ost.size > 4096) return null;
+    const raw = JSON.parse(fs.readFileSync(op, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    if (typeof raw.owner !== "string" || !/^[a-f0-9]{16,64}$/i.test(raw.owner)) {
+      return null;
+    }
+    if (typeof raw.created_at_ms !== "number" || !Number.isFinite(raw.created_at_ms)) {
+      return null;
+    }
+    const ageAnchorMs = Math.min(raw.created_at_ms, st.mtimeMs, ost.mtimeMs);
+    return {
+      owner: raw.owner.toLowerCase(),
+      created_at_ms: raw.created_at_ms,
+      ageAnchorMs,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Free a lock directory name without rmdir/rm (boundary forbids those).
+ * Unlink owner file when present, then rename the dir to a unique tomb.
+ */
+function releaseLockDir(lockDir: string, root: string, kind: string): void {
+  try {
+    const op = lockOwnerPath(lockDir);
+    try {
+      const st = fs.lstatSync(op);
+      if (!st.isSymbolicLink() && st.isFile()) fs.unlinkSync(op);
+    } catch {
+      /* best-effort */
+    }
+  } catch {
+    /* best-effort */
+  }
+  const tomb = path.join(
+    root,
+    `.${FOLLOWUP_LEDGER_LOCK_NAME}.${kind}.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString("hex")}`,
+  );
+  try {
+    fs.renameSync(lockDir, tomb);
+  } catch {
+    /* concurrent reclaim / already gone */
+  }
+  try {
+    const op2 = lockOwnerPath(tomb);
+    const st2 = fs.lstatSync(op2);
+    if (!st2.isSymbolicLink() && st2.isFile()) fs.unlinkSync(op2);
+  } catch {
+    /* already unlinked or absent */
+  }
+}
+
+function tryReclaimStaleLock(root: string, nowMs: number): boolean {
+  const lockDir = lockDirPath(root);
+  let st: fs.Stats;
+  try {
+    st = fs.lstatSync(lockDir);
+  } catch {
+    return false;
+  }
+  if (st.isSymbolicLink()) {
+    throw new FollowupLedgerError("LEDGER_SYMLINK", "Symlink ledger lock refused.");
+  }
+  if (!st.isDirectory()) {
+    return false;
+  }
+  const meta = readLockMeta(lockDir);
+  const ageAnchor = meta?.ageAnchorMs ?? st.mtimeMs;
+  if (nowMs - ageAnchor < FOLLOWUP_LEDGER_LOCK_STALE_MS) {
+    return false; // live lock
+  }
+  const before = lockDirPath(root);
+  releaseLockDir(lockDir, root, "stale");
+  try {
+    fs.lstatSync(before);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+function tryAcquireLockOnce(
+  root: string,
+  owner: string,
+  nowMs: number,
+): boolean {
+  ensureRoot(root);
+  const lockDir = lockDirPath(root);
+  try {
+    fs.mkdirSync(lockDir, { mode: FOLLOWUP_LEDGER_DIR_MODE });
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err && err.code === "EEXIST") return false;
+    throw new FollowupLedgerError("LEDGER_IO", "Lock mkdir failed.");
+  }
+  try {
+    const st = fs.lstatSync(lockDir);
+    if (st.isSymbolicLink() || !st.isDirectory()) {
+      throw new FollowupLedgerError("LEDGER_SYMLINK", "Lock path refused.");
+    }
+  } catch (e) {
+    if (e instanceof FollowupLedgerError) throw e;
+    throw new FollowupLedgerError("LEDGER_IO", "Lock path stat failed.");
+  }
+  const doc: LockOwnerDoc = {
+    owner,
+    pid: process.pid,
+    created_at_ms: nowMs,
+  };
+  const bytes = Buffer.from(`${JSON.stringify(doc)}\n`, "utf8");
+  try {
+    fs.writeFileSync(lockOwnerPath(lockDir), bytes, {
+      flag: "wx",
+      mode: FOLLOWUP_LEDGER_FILE_MODE,
+    });
+  } catch {
+    releaseLockDir(lockDir, root, "abort");
+    return false;
+  }
+  return true;
+}
+
+function acquireExclusiveLock(root: string, nowMs: number): string {
+  const owner = crypto
+    .randomBytes(FOLLOWUP_LEDGER_OWNER_BYTES)
+    .toString("hex");
+  const deadline = nowMs + FOLLOWUP_LEDGER_LOCK_WAIT_MS;
+  let attemptNow = nowMs;
+  while (true) {
+    if (tryAcquireLockOnce(root, owner, attemptNow)) {
+      return owner;
+    }
+    try {
+      if (tryReclaimStaleLock(root, attemptNow)) {
+        if (tryAcquireLockOnce(root, owner, attemptNow)) {
+          return owner;
+        }
+      }
+    } catch (e) {
+      if (e instanceof FollowupLedgerError) throw e;
+    }
+    if (attemptNow >= deadline) {
+      throw new FollowupLedgerError(
+        "LEDGER_LOCK",
+        "Follow-up ledger lock busy (fail-closed).",
+      );
+    }
+    const remaining = deadline - attemptNow;
+    sleepMs(Math.min(FOLLOWUP_LEDGER_LOCK_POLL_MS, remaining));
+    attemptNow = Date.now();
+  }
+}
+
+function releaseExclusiveLock(root: string, owner: string): void {
+  const lockDir = lockDirPath(root);
+  const meta = readLockMeta(lockDir);
+  if (!meta || meta.owner !== owner.toLowerCase()) {
+    return;
+  }
+  releaseLockDir(lockDir, root, "release");
+}
+
+/**
+ * Run a full follow-up ledger transaction under exclusive lock:
+ * load → mutate → save. Fail-closed on busy/unsafe/stale lock conditions.
+ */
+export function withFollowupLedgerTransaction<T>(
+  root: string,
+  nowMs: number,
+  fn: (ledger: FollowupLedger) => { ledger: FollowupLedger; result: T; persist?: boolean },
+): T {
+  const owner = acquireExclusiveLock(root, nowMs);
+  try {
+    const current = loadFollowupLedger(root, nowMs);
+    const out = fn(current);
+    if (out.persist !== false) {
+      saveFollowupLedger(root, out.ledger, nowMs);
+    }
+    return out.result;
+  } finally {
+    releaseExclusiveLock(root, owner);
+  }
 }
 
 export function findSubscription(

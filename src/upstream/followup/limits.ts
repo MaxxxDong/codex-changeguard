@@ -24,6 +24,36 @@ export const FOLLOWUP_LEDGER_STATE_FILE = "followup-ledger.json";
 export const FOLLOWUP_LEDGER_DIR_MODE = 0o700;
 export const FOLLOWUP_LEDGER_FILE_MODE = 0o600;
 
+/**
+ * Cross-process exclusive ledger lock (atomic mkdir; no flock/child_process).
+ * Mirrors Ticket 11 confirmation-ledger lock semantics; fail-closed on busy.
+ */
+export const FOLLOWUP_LEDGER_LOCK_NAME = "followup-ledger.lock";
+export const FOLLOWUP_LEDGER_LOCK_STALE_MS = 30_000;
+export const FOLLOWUP_LEDGER_LOCK_WAIT_MS = 2_000;
+export const FOLLOWUP_LEDGER_LOCK_POLL_MS = 25;
+export const FOLLOWUP_LEDGER_OWNER_BYTES = 16;
+
+/** Positive candidate-measurement contract (registered path under isolated target). */
+export const CANDIDATE_MEASUREMENT_REL = "canary/candidate-measurement.json";
+export const CANDIDATE_MEASUREMENT_MAX_BYTES = 4_096;
+export const CANDIDATE_MEASUREMENT_SCHEMA_VERSION = 1;
+
+/** Official evidence kinds accepted as an upstream-fix reference (closed). */
+export const UPSTREAM_FIX_EVIDENCE_KINDS = Object.freeze([
+  "release",
+  "tag",
+  "commit",
+  "pr",
+  "diff",
+] as const);
+
+/** Maintainer statuses accepted for upstream-fix references (closed). */
+export const UPSTREAM_FIX_MAINTAINER_STATUSES = Object.freeze([
+  "official",
+  "maintainer",
+] as const);
+
 export const OFFICIAL_HOST = "github.com";
 export const OFFICIAL_REPOSITORY = "openai/codex";
 

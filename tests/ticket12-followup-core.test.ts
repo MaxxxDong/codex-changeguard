@@ -11,10 +11,14 @@ import path from "node:path";
 import test from "node:test";
 import {
   applyDispositionPolicy,
+  bindOfficialEvidenceItem,
   detectMaintainerIntents,
   dispatchFollowup,
+  FOLLOWUP_LEDGER_LOCK_NAME,
+  FOLLOWUP_LEDGER_LOCK_WAIT_MS,
   FOLLOWUP_LEDGER_STATE_FILE,
   FollowupLedgerError,
+  CANDIDATE_MEASUREMENT_REL,
   isCanonicalIssueUrl,
   isFollowupOperation,
   isMaintainerIntent,
@@ -24,7 +28,6 @@ import {
   mapIntentsToProbes,
   MAX_FOLLOWUP_REQUEST_BYTES,
   MAX_SUBSCRIPTIONS,
-  measureCandidateFaultAndCore,
   OFFICIAL_HOST,
   OFFICIAL_REPOSITORY,
   parseCanonicalIssue,
@@ -36,11 +39,13 @@ import {
   resolveFollowupStateRoot,
   runRegisteredProbe,
   saveFollowupLedger,
+  sealCandidateMeasurement,
   sessionFollowupHint,
   subscribeIssue,
   unsubscribeIssue,
   validateCandidate,
   validateCandidateFix,
+  withFollowupLedgerTransaction,
   followupStatus,
   emptyFollowupLedger,
   IssueUrlError,
@@ -51,12 +56,28 @@ import {
   buildReplyDraft,
 } from "../src/upstream/followup/index.js";
 import type { FollowupResult } from "../src/upstream/followup/index.js";
+import { sha256Text } from "../src/evidence/canonical.js";
 import { makeTempDir } from "./helpers.js";
 import { copyFixtureToTemp } from "../src/harness/scenario.js";
 
 const NOW = Date.parse("2026-07-18T12:00:00.000Z");
-const DIGEST_A = "a".repeat(64);
-const DIGEST_B = "b".repeat(64);
+
+/** Real pinned official release item from fixtures/official-evidence/snapshot.json */
+const OFFICIAL_RELEASE_DIGEST =
+  "d6baa84959e55d2ff20e36a9ea3d0ecee77b1f430c0505a54ef5909f82adb9ef";
+const OFFICIAL_RELEASE_URL =
+  "https://github.com/openai/codex/releases/tag/rust-v0.50.0";
+/** Second real item for supersession-conflict scenarios */
+const OFFICIAL_COMMIT_DIGEST =
+  "e5c910be6ae7984b3802f6207ff5a32fc72053a598df03edc1860dde7abec9c0";
+const OFFICIAL_COMMIT_URL =
+  "https://github.com/openai/codex/commit/abc123def4567890abc123def4567890abc123de";
+/** User-reported issue — real digest/URL but unsuitable as upstream-fix ref */
+const USER_ISSUE_DIGEST =
+  "1ecfc4694106202a809de97f869196cd60ed47632d12afcaa3a7c1ddc664b0a7";
+const USER_ISSUE_URL = "https://github.com/openai/codex/issues/32925";
+
+const FORGED_DIGEST = "a".repeat(64);
 
 function makeTarget(prefix = "cg-t12-tgt-"): string {
   const tmp = makeTempDir(prefix);
@@ -69,6 +90,27 @@ function makeStateDir(prefix = "cg-t12-state-"): string {
 
 function sha256(s: string): string {
   return crypto.createHash("sha256").update(s, "utf8").digest("hex");
+}
+
+/** Write a sealed positive candidate-measurement contract under the isolated target. */
+function writePositiveMeasurement(
+  target: string,
+  candidate_version: string,
+  overrides: Partial<{
+    baseline_fault_reproduced: boolean;
+    candidate_fault_absent: boolean;
+    core_regressions_passed: boolean;
+  }> = {},
+): void {
+  const doc = sealCandidateMeasurement({
+    candidate_version,
+    baseline_fault_reproduced: overrides.baseline_fault_reproduced ?? true,
+    candidate_fault_absent: overrides.candidate_fault_absent ?? true,
+    core_regressions_passed: overrides.core_regressions_passed ?? true,
+  });
+  const abs = path.join(target, CANDIDATE_MEASUREMENT_REL);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  fs.writeFileSync(abs, `${JSON.stringify(doc, null, 2)}\n`, "utf8");
 }
 
 function assertNoLeak(text: string): void {
@@ -659,21 +701,20 @@ test("Ticket12 adversarial: absolute/.. target paths refused", () => {
   }
 });
 
-// ─── Candidate validation (measured only) ──────────────────────────────────
+// ─── Candidate validation (positive measurement + bound official evidence) ─
 
-test("Ticket12 scenario: candidate fix pass → SUPERSEDED_BY_UPSTREAM_FIX (measured + digest)", () => {
+test("Ticket12 scenario: candidate fix pass → SUPERSEDED_BY_UPSTREAM_FIX (positive measurement + bound official)", () => {
   const target = makeTarget();
-  // Ensure canary markers: fault absent (no original-fault.present), core ok
-  fs.mkdirSync(path.join(target, "canary"), { recursive: true });
-  // no fault marker; no core-regression.fail
+  const version = "0.50.0-candidate";
+  writePositiveMeasurement(target, version);
 
   const r = validateCandidate({
     targetPath: target,
     issue_number: 500,
-    candidate_version: "0.2.0-candidate",
+    candidate_version: version,
     recipe_id: "tmp-workaround-t12",
-    official_evidence_item_digest: DIGEST_A,
-    official_evidence_ref: "https://github.com/openai/codex/releases/tag/rust-v0.2.0",
+    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
+    official_evidence_ref: OFFICIAL_RELEASE_URL,
     // Adversarial: caller tries to force authority without measurement — ignored
     original_fault_absent: false,
     core_regressions_passed: false,
@@ -689,26 +730,29 @@ test("Ticket12 scenario: candidate fix pass → SUPERSEDED_BY_UPSTREAM_FIX (meas
   assert.equal(r.candidate?.measured_fault_absent, true);
   assert.equal(r.candidate?.measured_core_ok, true);
   assert.equal(r.candidate?.version_guidance, "RECOMMEND_UPGRADE");
+  assert.equal(r.candidate?.official_evidence_item_digest, OFFICIAL_RELEASE_DIGEST);
   assert.equal(r.candidate?.binary_downloaded, false);
   assert.equal(r.candidate?.binary_installed, false);
   assert.equal(r.candidate?.workaround_uninstalled, false);
-  // measured evidence present
   assert.ok(r.evidence.some((e) => e.measured === true));
 });
 
 test("Ticket12 scenario: candidate regression keeps workaround; no binary/uninstall", () => {
   const target = makeTarget();
-  fs.mkdirSync(path.join(target, "canary"), { recursive: true });
-  fs.writeFileSync(path.join(target, "canary", "original-fault.present"), "still broken\n");
-  fs.writeFileSync(path.join(target, "canary", "core-regression.fail"), "core fail\n");
+  const version = "0.2.0-bad";
+  // Valid measurement document with negative phases (fault still present / core fail)
+  writePositiveMeasurement(target, version, {
+    candidate_fault_absent: false,
+    core_regressions_passed: false,
+  });
 
   const r = validateCandidate({
     targetPath: target,
     issue_number: 501,
-    candidate_version: "0.2.0-bad",
+    candidate_version: version,
     recipe_id: "tmp-workaround-reg",
-    official_evidence_item_digest: DIGEST_A,
-    official_evidence_ref: "ref://official/501",
+    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
+    official_evidence_ref: OFFICIAL_RELEASE_URL,
     // Caller lies that everything passed
     original_fault_absent: true,
     core_regressions_passed: true,
@@ -726,66 +770,292 @@ test("Ticket12 scenario: candidate regression keeps workaround; no binary/uninst
   assert.equal(r.candidate?.workaround_uninstalled, false);
 });
 
-test("Ticket12 adversarial: verified=true alone / missing official digest / unmeasured fake verification fails", () => {
+test("Ticket12 adversarial: empty target / absent measurement is inconclusive (not SUPERSEDED)", () => {
   const target = makeTarget();
+  // Empty canary dir (or missing) must NOT prove success
   fs.mkdirSync(path.join(target, "canary"), { recursive: true });
 
-  const noDigest = validateCandidateFix({
+  const r = validateCandidateFix({
     targetPath: target,
     issue_number: 502,
     candidate_version: "1.0.0",
     recipe_id: "r1",
-    official_evidence_item_digest: "not-hex",
-    official_evidence_ref: "ref",
+    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
+    official_evidence_ref: OFFICIAL_RELEASE_URL,
     verified: true,
     original_fault_absent: true,
     core_regressions_passed: true,
     nowMs: NOW,
   });
-  assert.equal(noDigest.ok, false);
-  assert.equal(noDigest.error_code, "OFFICIAL_EVIDENCE_REQUIRED");
+  assert.equal(r.ok, false);
+  assert.equal(r.status, "REFUSED");
+  assert.ok(
+    r.error_code === "MEASUREMENT_ABSENT" ||
+      r.error_code === "MEASUREMENT_INCONCLUSIVE",
+  );
+  assert.notEqual(r.status, "SUPERSEDED");
+});
 
-  const emptyDigest = validateCandidateFix({
+test("Ticket12 adversarial: missing one positive phase is inconclusive", () => {
+  const target = makeTarget();
+  const version = "1.0.0";
+  // baseline not reproduced → inconclusive (cannot prove fix)
+  writePositiveMeasurement(target, version, {
+    baseline_fault_reproduced: false,
+    candidate_fault_absent: true,
+    core_regressions_passed: true,
+  });
+  const r = validateCandidateFix({
+    targetPath: target,
+    issue_number: 502,
+    candidate_version: version,
+    recipe_id: "r1",
+    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
+    official_evidence_ref: OFFICIAL_RELEASE_URL,
+    nowMs: NOW,
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.error_code, "MEASUREMENT_BASELINE_MISSING");
+});
+
+test("Ticket12 adversarial: malformed/tampered measurement digest refused", () => {
+  const target = makeTarget();
+  const version = "1.0.0";
+  writePositiveMeasurement(target, version);
+  const abs = path.join(target, CANDIDATE_MEASUREMENT_REL);
+  const raw = JSON.parse(fs.readFileSync(abs, "utf8")) as Record<string, unknown>;
+  raw.content_sha256 = "f".repeat(64);
+  fs.writeFileSync(abs, `${JSON.stringify(raw, null, 2)}\n`);
+
+  const r = validateCandidateFix({
+    targetPath: target,
+    issue_number: 502,
+    candidate_version: version,
+    recipe_id: "r1",
+    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
+    official_evidence_ref: OFFICIAL_RELEASE_URL,
+    nowMs: NOW,
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.error_code, "MEASUREMENT_DIGEST");
+});
+
+test("Ticket12 adversarial: candidate-version mismatch refused", () => {
+  const target = makeTarget();
+  writePositiveMeasurement(target, "1.0.0");
+  const r = validateCandidateFix({
+    targetPath: target,
+    issue_number: 502,
+    candidate_version: "2.0.0",
+    recipe_id: "r1",
+    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
+    official_evidence_ref: OFFICIAL_RELEASE_URL,
+    nowMs: NOW,
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.error_code, "MEASUREMENT_VERSION_MISMATCH");
+});
+
+test("Ticket12 adversarial: symlinked measurement refused", () => {
+  const target = makeTarget();
+  const version = "1.0.0";
+  const realDir = path.join(target, "canary-real");
+  fs.mkdirSync(realDir, { recursive: true });
+  const realFile = path.join(realDir, "candidate-measurement.json");
+  const doc = sealCandidateMeasurement({
+    candidate_version: version,
+    baseline_fault_reproduced: true,
+    candidate_fault_absent: true,
+    core_regressions_passed: true,
+  });
+  fs.writeFileSync(realFile, `${JSON.stringify(doc, null, 2)}\n`);
+  const canaryDir = path.join(target, "canary");
+  fs.mkdirSync(canaryDir, { recursive: true });
+  const link = path.join(canaryDir, "candidate-measurement.json");
+  try {
+    fs.symlinkSync(realFile, link);
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === "EPERM" || err.code === "EACCES") return;
+    throw e;
+  }
+  const r = validateCandidateFix({
+    targetPath: target,
+    issue_number: 502,
+    candidate_version: version,
+    recipe_id: "r1",
+    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
+    official_evidence_ref: OFFICIAL_RELEASE_URL,
+    nowMs: NOW,
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.error_code, "MEASUREMENT_SYMLINK");
+});
+
+test("Ticket12 adversarial: caller booleans only never supersede", () => {
+  const target = makeTarget();
+  // No measurement file; only caller flags
+  const r = validateCandidateFix({
     targetPath: target,
     issue_number: 502,
     candidate_version: "1.0.0",
     recipe_id: "r1",
-    official_evidence_item_digest: "",
-    official_evidence_ref: "ref",
+    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
+    official_evidence_ref: OFFICIAL_RELEASE_URL,
+    verified: true,
+    original_fault_absent: true,
+    core_regressions_passed: true,
+    nowMs: NOW,
+  });
+  assert.equal(r.ok, false);
+  assert.notEqual(r.status, "SUPERSEDED");
+  assert.ok(
+    r.error_code === "MEASUREMENT_ABSENT" ||
+      r.error_code === "MEASUREMENT_INCONCLUSIVE",
+  );
+});
+
+test("Ticket12 adversarial: forged well-shaped digest / unbound official evidence refused", () => {
+  const target = makeTarget();
+  const version = "1.0.0";
+  writePositiveMeasurement(target, version);
+
+  const forged = validateCandidateFix({
+    targetPath: target,
+    issue_number: 502,
+    candidate_version: version,
+    recipe_id: "r1",
+    official_evidence_item_digest: FORGED_DIGEST,
+    official_evidence_ref: OFFICIAL_RELEASE_URL,
     verified: true,
     nowMs: NOW,
   });
-  assert.equal(emptyDigest.ok, false);
+  assert.equal(forged.ok, false);
+  assert.ok(
+    forged.error_code === "OFFICIAL_EVIDENCE_UNBOUND" ||
+      forged.error_code === "OFFICIAL_EVIDENCE_DIGEST_MISMATCH" ||
+      forged.error_code === "OFFICIAL_EVIDENCE_MISMATCH",
+  );
 
-  // Direct measure path ignores caller — presence of fault marker wins
-  fs.writeFileSync(path.join(target, "canary", "original-fault.present"), "x");
-  const m = measureCandidateFaultAndCore(target);
-  assert.equal(m.measured_fault_absent, false);
+  const badShape = validateCandidateFix({
+    targetPath: target,
+    issue_number: 502,
+    candidate_version: version,
+    recipe_id: "r1",
+    official_evidence_item_digest: "not-hex",
+    official_evidence_ref: OFFICIAL_RELEASE_URL,
+    verified: true,
+    nowMs: NOW,
+  });
+  assert.equal(badShape.ok, false);
+  assert.equal(badShape.error_code, "OFFICIAL_EVIDENCE_REQUIRED");
+});
+
+test("Ticket12 adversarial: official ref/digest mismatch and non-official ref refused", () => {
+  const target = makeTarget();
+  const version = "1.0.0";
+  writePositiveMeasurement(target, version);
+
+  const mismatch = validateCandidateFix({
+    targetPath: target,
+    issue_number: 502,
+    candidate_version: version,
+    recipe_id: "r1",
+    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
+    official_evidence_ref: OFFICIAL_COMMIT_URL, // real URL but wrong for digest
+    nowMs: NOW,
+  });
+  assert.equal(mismatch.ok, false);
+  assert.ok(
+    mismatch.error_code === "OFFICIAL_EVIDENCE_REF_MISMATCH" ||
+      mismatch.error_code === "OFFICIAL_EVIDENCE_MISMATCH",
+  );
+
+  const nonOfficial = validateCandidateFix({
+    targetPath: target,
+    issue_number: 502,
+    candidate_version: version,
+    recipe_id: "r1",
+    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
+    official_evidence_ref: "https://evil.example/openai/codex/releases/tag/x",
+    nowMs: NOW,
+  });
+  assert.equal(nonOfficial.ok, false);
+  assert.equal(nonOfficial.error_code, "OFFICIAL_EVIDENCE_REF_REFUSED");
+
+  const freeForm = validateCandidateFix({
+    targetPath: target,
+    issue_number: 502,
+    candidate_version: version,
+    recipe_id: "r1",
+    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
+    official_evidence_ref: "ref://official/501",
+    nowMs: NOW,
+  });
+  assert.equal(freeForm.ok, false);
+  assert.equal(freeForm.error_code, "OFFICIAL_EVIDENCE_REF_REFUSED");
+});
+
+test("Ticket12 adversarial: unsuitable upstream-fix evidence (user_reported issue) refused", () => {
+  const target = makeTarget();
+  const version = "1.0.0";
+  writePositiveMeasurement(target, version);
+  const r = validateCandidateFix({
+    targetPath: target,
+    issue_number: 502,
+    candidate_version: version,
+    recipe_id: "r1",
+    official_evidence_item_digest: USER_ISSUE_DIGEST,
+    official_evidence_ref: USER_ISSUE_URL,
+    nowMs: NOW,
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.error_code, "OFFICIAL_EVIDENCE_UNSUITABLE");
+});
+
+test("Ticket12: bindOfficialEvidenceItem requires exact digest+URL match", () => {
+  const ok = bindOfficialEvidenceItem({
+    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
+    official_evidence_ref: OFFICIAL_RELEASE_URL,
+  });
+  assert.equal(ok.ok, true);
+  if (ok.ok) {
+    assert.equal(ok.item.content_sha256, OFFICIAL_RELEASE_DIGEST);
+    assert.equal(ok.canonical_url, OFFICIAL_RELEASE_URL);
+  }
+  const bad = bindOfficialEvidenceItem({
+    official_evidence_item_digest: FORGED_DIGEST,
+    official_evidence_ref: OFFICIAL_RELEASE_URL,
+  });
+  assert.equal(bad.ok, false);
 });
 
 test("Ticket12 adversarial: supersession evidence digest conflict refused", () => {
   const target = makeTarget();
-  fs.mkdirSync(path.join(target, "canary"), { recursive: true });
+  writePositiveMeasurement(target, "1.0.0");
+  writePositiveMeasurement(target, "1.0.1"); // overwrite with second version later
 
+  writePositiveMeasurement(target, "1.0.0");
   const first = validateCandidate({
     targetPath: target,
     issue_number: 503,
     candidate_version: "1.0.0",
     recipe_id: "recipe-conflict",
-    official_evidence_item_digest: DIGEST_A,
-    official_evidence_ref: "ref-a",
+    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
+    official_evidence_ref: OFFICIAL_RELEASE_URL,
     nowMs: NOW,
   });
   assert.equal(first.ok, true);
   assert.equal(first.status, "SUPERSEDED");
 
+  writePositiveMeasurement(target, "1.0.1");
   const second = validateCandidate({
     targetPath: target,
     issue_number: 503,
     candidate_version: "1.0.1",
     recipe_id: "recipe-conflict",
-    official_evidence_item_digest: DIGEST_B,
-    official_evidence_ref: "ref-b",
+    official_evidence_item_digest: OFFICIAL_COMMIT_DIGEST,
+    official_evidence_ref: OFFICIAL_COMMIT_URL,
     nowMs: NOW + 1,
   });
   assert.equal(second.ok, false);
@@ -794,6 +1064,191 @@ test("Ticket12 adversarial: supersession evidence digest conflict refused", () =
       second.candidate?.error_code === "SUPERSESSION_EVIDENCE_CONFLICT" ||
       second.status === "REFUSED",
   );
+});
+
+function writeLedgerRaw(
+  stateDir: string,
+  material: {
+    schema_version: 1;
+    subscriptions: unknown[];
+    events: unknown[];
+    updated_at_ms: number;
+  },
+): void {
+  const ledger_digest = sha256Text(
+    JSON.stringify({
+      schema_version: material.schema_version,
+      subscriptions: material.subscriptions,
+      events: material.events,
+      updated_at_ms: material.updated_at_ms,
+    }),
+  );
+  const abs = path.join(stateDir, FOLLOWUP_LEDGER_STATE_FILE);
+  fs.writeFileSync(
+    abs,
+    `${JSON.stringify({ ...material, ledger_digest }, null, 2)}\n`,
+    "utf8",
+  );
+}
+
+test("Ticket12 adversarial: unknown persisted intent/probe fails LEDGER_SCHEMA", () => {
+  const stateDir = makeStateDir();
+  // Unknown intent
+  writeLedgerRaw(stateDir, {
+    schema_version: 1,
+    subscriptions: [],
+    events: [
+      {
+        event_id: "ev-bad-intent",
+        issue_number: 1,
+        disposition: "needs_info",
+        event_digest: "d".repeat(64),
+        processed_at_ms: NOW,
+        intents: ["run_shell"],
+        probe_ids: ["core_health_readonly"],
+        evidence_capsule_id: null,
+        reply_draft_digest: null,
+      },
+    ],
+    updated_at_ms: NOW,
+  });
+  assert.throws(
+    () => loadFollowupLedger(stateDir, NOW),
+    (e: unknown) => e instanceof FollowupLedgerError && e.code === "LEDGER_SCHEMA",
+  );
+
+  // Unknown probe
+  const stateDir2 = makeStateDir();
+  writeLedgerRaw(stateDir2, {
+    schema_version: 1,
+    subscriptions: [],
+    events: [
+      {
+        event_id: "ev-bad-probe",
+        issue_number: 1,
+        disposition: "needs_info",
+        event_digest: "e".repeat(64),
+        processed_at_ms: NOW,
+        intents: ["request_logs"],
+        probe_ids: ["arbitrary_rm"],
+        evidence_capsule_id: null,
+        reply_draft_digest: null,
+      },
+    ],
+    updated_at_ms: NOW,
+  });
+  assert.throws(
+    () => loadFollowupLedger(stateDir2, NOW),
+    (e: unknown) => e instanceof FollowupLedgerError && e.code === "LEDGER_SCHEMA",
+  );
+
+  // Non-string intent
+  const stateDir3 = makeStateDir();
+  writeLedgerRaw(stateDir3, {
+    schema_version: 1,
+    subscriptions: [],
+    events: [
+      {
+        event_id: "ev-bad-type",
+        issue_number: 1,
+        disposition: "needs_info",
+        event_digest: "f".repeat(64),
+        processed_at_ms: NOW,
+        intents: [42],
+        probe_ids: [],
+        evidence_capsule_id: null,
+        reply_draft_digest: null,
+      },
+    ],
+    updated_at_ms: NOW,
+  });
+  assert.throws(
+    () => loadFollowupLedger(stateDir3, NOW),
+    (e: unknown) => e instanceof FollowupLedgerError && e.code === "LEDGER_SCHEMA",
+  );
+
+  // Duplicate intent
+  const stateDir4 = makeStateDir();
+  writeLedgerRaw(stateDir4, {
+    schema_version: 1,
+    subscriptions: [],
+    events: [
+      {
+        event_id: "ev-dup",
+        issue_number: 1,
+        disposition: "needs_info",
+        event_digest: "a".repeat(64),
+        processed_at_ms: NOW,
+        intents: ["request_logs", "request_logs"],
+        probe_ids: [],
+        evidence_capsule_id: null,
+        reply_draft_digest: null,
+      },
+    ],
+    updated_at_ms: NOW,
+  });
+  assert.throws(
+    () => loadFollowupLedger(stateDir4, NOW),
+    (e: unknown) => e instanceof FollowupLedgerError && e.code === "LEDGER_SCHEMA",
+  );
+});
+
+test("Ticket12 adversarial: follow-up ledger lock contention fails closed (LEDGER_LOCK)", () => {
+  const stateDir = makeStateDir();
+  // Use wall-clock now so lock age math matches acquireExclusiveLock deadline/stale checks.
+  const wallNow = Date.now();
+  saveFollowupLedger(stateDir, emptyFollowupLedger(wallNow), wallNow);
+
+  // Hold a live exclusive lock (fresh owner) so transactional mutation fails closed.
+  const lockDir = path.join(stateDir, FOLLOWUP_LEDGER_LOCK_NAME);
+  fs.mkdirSync(lockDir, { mode: 0o700 });
+  fs.writeFileSync(
+    path.join(lockDir, "owner.json"),
+    `${JSON.stringify({
+      owner: "ab".repeat(8),
+      pid: 1,
+      created_at_ms: wallNow,
+    })}\n`,
+    { flag: "wx", mode: 0o600 },
+  );
+
+  assert.throws(
+    () =>
+      withFollowupLedgerTransaction(stateDir, wallNow, (ledger) => ({
+        ledger,
+        persist: false,
+        result: true,
+      })),
+    (e: unknown) => e instanceof FollowupLedgerError && e.code === "LEDGER_LOCK",
+  );
+
+  // Engine path maps lock busy to LEDGER_ERROR (same wall clock so lock is not "stale")
+  const target = makeTarget();
+  const sub = subscribeIssue({
+    targetPath: target,
+    issue: 88,
+    nowMs: Date.now(),
+    stateDir,
+  });
+  assert.equal(sub.ok, false);
+  assert.equal(sub.status, "LEDGER_ERROR");
+  assert.equal(sub.error_code, "LEDGER_LOCK");
+
+  // Cleanup lock so later tests in same process are not affected if stateDir reused
+  try {
+    fs.unlinkSync(path.join(lockDir, "owner.json"));
+  } catch {
+    /* best-effort */
+  }
+  try {
+    fs.renameSync(
+      lockDir,
+      path.join(stateDir, `.${FOLLOWUP_LEDGER_LOCK_NAME}.testfree.${Date.now()}`),
+    );
+  } catch {
+    /* best-effort */
+  }
+  void FOLLOWUP_LEDGER_LOCK_WAIT_MS;
 });
 
 // ─── Capsule / reply draft privacy ─────────────────────────────────────────

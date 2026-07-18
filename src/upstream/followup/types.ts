@@ -169,6 +169,7 @@ export interface CandidateValidationInput {
   /**
    * Allowlisted official evidence item content_sha256 (64 hex).
    * Required for supersession; never accepted as free-form "verified".
+   * Must bind to exactly one pinned snapshot item with matching canonical URL.
    */
   official_evidence_item_digest: string;
   official_evidence_ref: string;
@@ -179,6 +180,12 @@ export interface CandidateValidationInput {
   original_fault_absent?: boolean;
   core_regressions_passed?: boolean;
   verified?: boolean;
+  /**
+   * Optional bounded local official-evidence snapshot path for tests/orchestration.
+   * Validated exclusively by loadBundledSnapshot; production omits → bundled default.
+   * Never accepts raw objects or network URLs.
+   */
+  snapshot_path?: string;
   nowMs?: number;
 }
 

@@ -25,7 +25,7 @@ import {
   FollowupLedgerError,
   loadFollowupLedger,
   resolveFollowupStateRoot,
-  saveFollowupLedger,
+  withFollowupLedgerTransaction,
   upsertSubscription,
 } from "./ledger.js";
 import { buildEvidenceCapsule, buildReplyDraft } from "./capsule.js";
@@ -42,6 +42,7 @@ import {
 import type {
   CandidateValidationInput,
   FollowupEventRecord,
+  FollowupLedger,
   FollowupOperation,
   FollowupResult,
   FollowupStatus,
@@ -186,72 +187,80 @@ export function subscribeIssue(input: SubscribeInput): FollowupResult {
     const ref = parseCanonicalIssue(input.issue);
     const nowMs = nowOf(input.nowMs);
     const root = stateRoot(input.stateDir);
-    let ledger = loadFollowupLedger(root, nowMs);
-    const existing = findSubscription(ledger, ref.issue_number);
-    if (existing) {
-      // Idempotent re-subscribe
-      return baseResult({
-        ok: true,
-        operation: op,
-        status: "OK",
-        subscription: existing,
-        ledger,
-        user_resolution: userReceipt(
-          "DIAGNOSIS_COMPLETE",
-          `Already subscribed to #${ref.issue_number}.`,
-        ),
-        upstream_contribution: upstreamReceipt(
-          "CANDIDATE_ONLY",
-          "Local subscription only; no network.",
-          [ref.canonical_url],
-        ),
-        evidence: [
-          {
-            kind: "followup_subscribe_idempotent",
-            detail: `issue=${ref.issue_number}`,
-            measured: true,
-          },
-        ],
-        target_mutated: false,
-        adapter_status: "not_applicable",
-      });
-    }
-    const sub: SubscriptionRecord = {
-      issue_number: ref.issue_number,
-      canonical_url: ref.canonical_url,
-      subscribed_at_ms: nowMs,
-      last_refresh_at_ms: null,
-      last_event_digest: null,
-      last_disposition: null,
-      duplicate_of_issue: null,
-      active: true,
-    };
-    ledger = upsertSubscription(ledger, sub, nowMs);
-    ledger = saveFollowupLedger(root, ledger, nowMs);
-    return baseResult({
-      ok: true,
-      operation: op,
-      status: "OK",
-      subscription: sub,
-      ledger,
-      user_resolution: userReceipt(
-        "DIAGNOSIS_COMPLETE",
-        `Subscribed to #${ref.issue_number} (explicit local only).`,
-      ),
-      upstream_contribution: upstreamReceipt(
-        "CANDIDATE_ONLY",
-        "Local subscription recorded; no crawler or daemon.",
-        [ref.canonical_url],
-      ),
-      evidence: [
-        {
-          kind: "followup_subscribed",
-          detail: `issue=${ref.issue_number}`,
-          measured: true,
-        },
-      ],
-      target_mutated: true,
-      adapter_status: "not_applicable",
+    return withFollowupLedgerTransaction(root, nowMs, (ledger) => {
+      const existing = findSubscription(ledger, ref.issue_number);
+      if (existing) {
+        // Idempotent re-subscribe — no persist
+        return {
+          ledger,
+          persist: false,
+          result: baseResult({
+            ok: true,
+            operation: op,
+            status: "OK",
+            subscription: existing,
+            ledger,
+            user_resolution: userReceipt(
+              "DIAGNOSIS_COMPLETE",
+              `Already subscribed to #${ref.issue_number}.`,
+            ),
+            upstream_contribution: upstreamReceipt(
+              "CANDIDATE_ONLY",
+              "Local subscription only; no network.",
+              [ref.canonical_url],
+            ),
+            evidence: [
+              {
+                kind: "followup_subscribe_idempotent",
+                detail: `issue=${ref.issue_number}`,
+                measured: true,
+              },
+            ],
+            target_mutated: false,
+            adapter_status: "not_applicable",
+          }),
+        };
+      }
+      const sub: SubscriptionRecord = {
+        issue_number: ref.issue_number,
+        canonical_url: ref.canonical_url,
+        subscribed_at_ms: nowMs,
+        last_refresh_at_ms: null,
+        last_event_digest: null,
+        last_disposition: null,
+        duplicate_of_issue: null,
+        active: true,
+      };
+      const next = upsertSubscription(ledger, sub, nowMs);
+      return {
+        ledger: next,
+        persist: true,
+        result: baseResult({
+          ok: true,
+          operation: op,
+          status: "OK",
+          subscription: sub,
+          ledger: next,
+          user_resolution: userReceipt(
+            "DIAGNOSIS_COMPLETE",
+            `Subscribed to #${ref.issue_number} (explicit local only).`,
+          ),
+          upstream_contribution: upstreamReceipt(
+            "CANDIDATE_ONLY",
+            "Local subscription recorded; no crawler or daemon.",
+            [ref.canonical_url],
+          ),
+          evidence: [
+            {
+              kind: "followup_subscribed",
+              detail: `issue=${ref.issue_number}`,
+              measured: true,
+            },
+          ],
+          target_mutated: true,
+          adapter_status: "not_applicable",
+        }),
+      };
     });
   } catch (e) {
     if (e instanceof Error && e.message.startsWith("Forbidden key")) {
@@ -268,47 +277,55 @@ export function unsubscribeIssue(input: UnsubscribeInput): FollowupResult {
     const ref = parseCanonicalIssue(input.issue);
     const nowMs = nowOf(input.nowMs);
     const root = stateRoot(input.stateDir);
-    let ledger = loadFollowupLedger(root, nowMs);
-    const existing = findSubscription(ledger, ref.issue_number);
-    if (!existing) {
-      return baseResult({
-        ok: true,
-        operation: op,
-        status: "OK",
-        subscription: null,
-        ledger,
-        user_resolution: userReceipt(
-          "DIAGNOSIS_COMPLETE",
-          `No active subscription for #${ref.issue_number}.`,
-        ),
-        target_mutated: false,
-        adapter_status: "not_applicable",
-        contribution_claim: "none",
-      });
-    }
-    const sub: SubscriptionRecord = { ...existing, active: false };
-    ledger = upsertSubscription(ledger, sub, nowMs);
-    ledger = saveFollowupLedger(root, ledger, nowMs);
-    return baseResult({
-      ok: true,
-      operation: op,
-      status: "OK",
-      subscription: sub,
-      ledger,
-      user_resolution: userReceipt(
-        "DIAGNOSIS_COMPLETE",
-        `Unsubscribed from #${ref.issue_number}.`,
-      ),
-      evidence: [
-        {
-          kind: "followup_unsubscribed",
-          detail: `issue=${ref.issue_number}`,
-          measured: true,
-        },
-      ],
-      target_mutated: true,
-      adapter_status: "not_applicable",
-      contribution_claim: "none",
+    return withFollowupLedgerTransaction(root, nowMs, (ledger) => {
+      const existing = findSubscription(ledger, ref.issue_number);
+      if (!existing) {
+        return {
+          ledger,
+          persist: false,
+          result: baseResult({
+            ok: true,
+            operation: op,
+            status: "OK",
+            subscription: null,
+            ledger,
+            user_resolution: userReceipt(
+              "DIAGNOSIS_COMPLETE",
+              `No active subscription for #${ref.issue_number}.`,
+            ),
+            target_mutated: false,
+            adapter_status: "not_applicable",
+            contribution_claim: "none",
+          }),
+        };
+      }
+      const sub: SubscriptionRecord = { ...existing, active: false };
+      const next = upsertSubscription(ledger, sub, nowMs);
+      return {
+        ledger: next,
+        persist: true,
+        result: baseResult({
+          ok: true,
+          operation: op,
+          status: "OK",
+          subscription: sub,
+          ledger: next,
+          user_resolution: userReceipt(
+            "DIAGNOSIS_COMPLETE",
+            `Unsubscribed from #${ref.issue_number}.`,
+          ),
+          evidence: [
+            {
+              kind: "followup_unsubscribed",
+              detail: `issue=${ref.issue_number}`,
+              measured: true,
+            },
+          ],
+          target_mutated: true,
+          adapter_status: "not_applicable",
+          contribution_claim: "none",
+        }),
+      };
     });
   } catch (e) {
     return mapError(op, e);
@@ -422,51 +439,54 @@ export function refreshFollowup(input: RefreshInput): FollowupResult {
       // Even with approval, this core phase never opens sockets — local event only.
       // Adapter remains unavailable; network_used stays false.
     }
-    let ledger = loadFollowupLedger(root, nowMs);
     if (!input.event) {
-      // Touch refresh timestamps for due subscriptions (local only).
-      let changed = false;
-      for (const s of ledger.subscriptions) {
-        if (!s.active) continue;
-        const due =
-          s.last_refresh_at_ms === null ||
-          nowMs - s.last_refresh_at_ms >= REFRESH_MIN_INTERVAL_MS;
-        if (due) {
-          ledger = upsertSubscription(
-            ledger,
-            { ...s, last_refresh_at_ms: nowMs },
-            nowMs,
-          );
-          changed = true;
+      // Touch refresh timestamps for due subscriptions (local only) under lock.
+      return withFollowupLedgerTransaction(root, nowMs, (ledger) => {
+        let next: FollowupLedger = ledger;
+        let changed = false;
+        for (const s of ledger.subscriptions) {
+          if (!s.active) continue;
+          const due =
+            s.last_refresh_at_ms === null ||
+            nowMs - s.last_refresh_at_ms >= REFRESH_MIN_INTERVAL_MS;
+          if (due) {
+            next = upsertSubscription(
+              next,
+              { ...s, last_refresh_at_ms: nowMs },
+              nowMs,
+            );
+            changed = true;
+          }
         }
-      }
-      if (changed) {
-        ledger = saveFollowupLedger(root, ledger, nowMs);
-      }
-      return baseResult({
-        ok: true,
-        operation: op,
-        status: "NO_NEW_EVIDENCE",
-        ledger,
-        reply_draft: buildReplyDraft({
-          capsule: null,
-          disposition: "open_active",
-          no_new_evidence: true,
-          injection: false,
-        }),
-        user_resolution: userReceipt(
-          "DIAGNOSIS_COMPLETE",
-          "No local event snapshot; zero network; no new evidence.",
-        ),
-        evidence: [
-          {
-            kind: "followup_no_new_evidence",
-            detail: "refresh_without_event",
-            measured: true,
-          },
-        ],
-        target_mutated: changed,
-        adapter_status: "unavailable",
+        return {
+          ledger: next,
+          persist: changed,
+          result: baseResult({
+            ok: true,
+            operation: op,
+            status: "NO_NEW_EVIDENCE",
+            ledger: next,
+            reply_draft: buildReplyDraft({
+              capsule: null,
+              disposition: "open_active",
+              no_new_evidence: true,
+              injection: false,
+            }),
+            user_resolution: userReceipt(
+              "DIAGNOSIS_COMPLETE",
+              "No local event snapshot; zero network; no new evidence.",
+            ),
+            evidence: [
+              {
+                kind: "followup_no_new_evidence",
+                detail: "refresh_without_event",
+                measured: true,
+              },
+            ],
+            target_mutated: changed,
+            adapter_status: "unavailable",
+          }),
+        };
       });
     }
     return processFollowupEvent({
@@ -556,7 +576,6 @@ export function processFollowupEvent(input: ProcessEventInput): FollowupResult {
     resolveTargetDirectory(input.targetPath);
     const nowMs = nowOf(input.nowMs);
     const root = stateRoot(input.stateDir);
-    let ledger = loadFollowupLedger(root, nowMs);
 
     let parsed: ParsedEvent;
     try {
@@ -567,16 +586,6 @@ export function processFollowupEvent(input: ProcessEventInput): FollowupResult {
     }
 
     const ref = parseCanonicalIssue(parsed.issue_number);
-    const sub = findSubscription(ledger, ref.issue_number);
-    if (!sub) {
-      return fail(
-        op,
-        "UNAUTHORIZED_ISSUE",
-        "NOT_SUBSCRIBED",
-        "Issue is not on the explicit local subscription list.",
-      );
-    }
-
     const event_digest = sha256Canonical({
       issue_number: parsed.issue_number,
       disposition: parsed.disposition,
@@ -584,42 +593,12 @@ export function processFollowupEvent(input: ProcessEventInput): FollowupResult {
       duplicate_of_issue: parsed.duplicate_of_issue,
     });
 
-    // Idempotent replay: same digest → no new evidence
-    if (sub.last_event_digest === event_digest) {
-      return baseResult({
-        ok: true,
-        operation: op,
-        status: "NO_NEW_EVIDENCE",
-        subscription: sub,
-        ledger,
-        reply_draft: buildReplyDraft({
-          capsule: null,
-          disposition: parsed.disposition,
-          no_new_evidence: true,
-          injection: false,
-        }),
-        user_resolution: userReceipt(
-          "DIAGNOSIS_COMPLETE",
-          "Event already processed (idempotent); no new evidence.",
-        ),
-        evidence: [
-          {
-            kind: "followup_replay",
-            detail: `issue=${ref.issue_number}`,
-            measured: true,
-          },
-        ],
-        target_mutated: false,
-        adapter_status: "unavailable",
-      });
-    }
-
+    // Probes/intents are pure/local and do not touch the ledger; compute outside
+    // the lock window when possible, but subscription checks + mutations are locked.
     const disposition = applyDispositionPolicy({
       disposition: parsed.disposition,
       duplicate_of_issue: parsed.duplicate_of_issue,
     });
-
-    // Never auto-reopen / cross-post / comment / react
     if (
       disposition.auto_reopen ||
       disposition.cross_post ||
@@ -635,8 +614,6 @@ export function processFollowupEvent(input: ProcessEventInput): FollowupResult {
       ? []
       : runRegisteredProbes(input.targetPath, probe_plan.runnable);
 
-    // Always build a local capsule (privacy flags / quarantine) so Ticket 11
-    // confirmation can bind to a stable capsule_id; never auto-posts.
     const capsule = buildEvidenceCapsule({
       issue_number: ref.issue_number,
       canonical_url: ref.canonical_url,
@@ -652,111 +629,164 @@ export function processFollowupEvent(input: ProcessEventInput): FollowupResult {
       injection: intentResult.instruction_like,
     });
 
-    // Update subscription + migration
-    let nextSub: SubscriptionRecord = {
-      ...sub,
-      last_refresh_at_ms: nowMs,
-      last_event_digest: event_digest,
-      last_disposition: parsed.disposition,
-      duplicate_of_issue: disposition.migrate_to_issue,
-    };
-
-    // Duplicate migration: deactivate source, subscribe to canonical if known
-    if (
-      parsed.disposition === "duplicate" &&
-      disposition.migrate_to_issue !== null
-    ) {
-      nextSub = { ...nextSub, active: false };
-      ledger = upsertSubscription(ledger, nextSub, nowMs);
-      const migRef = parseCanonicalIssue(disposition.migrate_to_issue);
-      const existingMig = findSubscription(ledger, migRef.issue_number);
-      if (!existingMig) {
-        ledger = upsertSubscription(
+    return withFollowupLedgerTransaction(root, nowMs, (ledger) => {
+      const sub = findSubscription(ledger, ref.issue_number);
+      if (!sub) {
+        return {
           ledger,
-          {
-            issue_number: migRef.issue_number,
-            canonical_url: migRef.canonical_url,
-            subscribed_at_ms: nowMs,
-            last_refresh_at_ms: nowMs,
-            last_event_digest: null,
-            last_disposition: "open_active",
-            duplicate_of_issue: null,
-            active: true,
-          },
-          nowMs,
-        );
+          persist: false,
+          result: fail(
+            op,
+            "UNAUTHORIZED_ISSUE",
+            "NOT_SUBSCRIBED",
+            "Issue is not on the explicit local subscription list.",
+          ),
+        };
       }
-    } else {
-      ledger = upsertSubscription(ledger, nextSub, nowMs);
-    }
 
-    const eventRec: FollowupEventRecord = {
-      event_id: parsed.event_id,
-      issue_number: ref.issue_number,
-      disposition: parsed.disposition,
-      event_digest,
-      processed_at_ms: nowMs,
-      intents: intentResult.intents,
-      probe_ids: probe_plan.probe_ids,
-      evidence_capsule_id: capsule?.capsule_id ?? null,
-      reply_draft_digest: reply_draft.content_digest,
-    };
-    ledger = appendEvent(ledger, eventRec, nowMs);
-    ledger = saveFollowupLedger(root, ledger, nowMs);
+      // Idempotent replay: same digest → no new evidence
+      if (sub.last_event_digest === event_digest) {
+        return {
+          ledger,
+          persist: false,
+          result: baseResult({
+            ok: true,
+            operation: op,
+            status: "NO_NEW_EVIDENCE",
+            subscription: sub,
+            ledger,
+            reply_draft: buildReplyDraft({
+              capsule: null,
+              disposition: parsed.disposition,
+              no_new_evidence: true,
+              injection: false,
+            }),
+            user_resolution: userReceipt(
+              "DIAGNOSIS_COMPLETE",
+              "Event already processed (idempotent); no new evidence.",
+            ),
+            evidence: [
+              {
+                kind: "followup_replay",
+                detail: `issue=${ref.issue_number}`,
+                measured: true,
+              },
+            ],
+            target_mutated: false,
+            adapter_status: "unavailable",
+          }),
+        };
+      }
 
-    const status: FollowupStatus = intentResult.instruction_like
-      ? "REFUSED"
-      : reply_draft.draft_status === "READY"
-        ? "REPLY_DRAFT_READY"
-        : "DISPOSITION_APPLIED";
+      // Update subscription + migration
+      let nextSub: SubscriptionRecord = {
+        ...sub,
+        last_refresh_at_ms: nowMs,
+        last_event_digest: event_digest,
+        last_disposition: parsed.disposition,
+        duplicate_of_issue: disposition.migrate_to_issue,
+      };
 
-    const evidence: MeasuredEvidence[] = [
-      {
-        kind: "followup_disposition",
-        detail: `disposition=${parsed.disposition};auto_reopen=false`,
-        measured: true,
-      },
-      {
-        kind: "followup_intents",
-        detail: intentResult.intents.join(","),
-        measured: true,
-      },
-    ];
-    if (capsule) {
-      evidence.push({
-        kind: "followup_evidence_capsule",
-        detail: capsule.capsule_id,
-        measured: true,
-      });
-    }
+      let nextLedger = ledger;
+      if (
+        parsed.disposition === "duplicate" &&
+        disposition.migrate_to_issue !== null
+      ) {
+        nextSub = { ...nextSub, active: false };
+        nextLedger = upsertSubscription(nextLedger, nextSub, nowMs);
+        const migRef = parseCanonicalIssue(disposition.migrate_to_issue);
+        const existingMig = findSubscription(nextLedger, migRef.issue_number);
+        if (!existingMig) {
+          nextLedger = upsertSubscription(
+            nextLedger,
+            {
+              issue_number: migRef.issue_number,
+              canonical_url: migRef.canonical_url,
+              subscribed_at_ms: nowMs,
+              last_refresh_at_ms: nowMs,
+              last_event_digest: null,
+              last_disposition: "open_active",
+              duplicate_of_issue: null,
+              active: true,
+            },
+            nowMs,
+          );
+        }
+      } else {
+        nextLedger = upsertSubscription(nextLedger, nextSub, nowMs);
+      }
 
-    return baseResult({
-      ok: !intentResult.instruction_like,
-      operation: op,
-      status,
-      subscription: nextSub,
-      disposition,
-      intents: intentResult.intents,
-      probe_plan,
-      evidence_capsule: capsule,
-      reply_draft,
-      ledger,
-      user_resolution: userReceipt(
-        intentResult.instruction_like ? "INCONCLUSIVE" : "DIAGNOSIS_COMPLETE",
-        disposition.user_guidance,
-      ),
-      upstream_contribution: upstreamReceipt(
-        "CANDIDATE_ONLY",
-        "Reply draft is local-only; Ticket 11 confirmation required before any write. Adapter unavailable in production.",
-        [ref.canonical_url],
-      ),
-      evidence,
-      target_mutated: true,
-      adapter_status: "unavailable",
-      error_code: intentResult.instruction_like ? "INJECTION_QUARANTINED" : null,
-      error_message: intentResult.instruction_like
-        ? "Maintainer prose contained instruction-like content; quarantined; no probes; no draft export of raw text."
-        : null,
+      const eventRec: FollowupEventRecord = {
+        event_id: parsed.event_id,
+        issue_number: ref.issue_number,
+        disposition: parsed.disposition,
+        event_digest,
+        processed_at_ms: nowMs,
+        intents: intentResult.intents,
+        probe_ids: probe_plan.probe_ids,
+        evidence_capsule_id: capsule?.capsule_id ?? null,
+        reply_draft_digest: reply_draft.content_digest,
+      };
+      nextLedger = appendEvent(nextLedger, eventRec, nowMs);
+
+      const status: FollowupStatus = intentResult.instruction_like
+        ? "REFUSED"
+        : reply_draft.draft_status === "READY"
+          ? "REPLY_DRAFT_READY"
+          : "DISPOSITION_APPLIED";
+
+      const evidence: MeasuredEvidence[] = [
+        {
+          kind: "followup_disposition",
+          detail: `disposition=${parsed.disposition};auto_reopen=false`,
+          measured: true,
+        },
+        {
+          kind: "followup_intents",
+          detail: intentResult.intents.join(","),
+          measured: true,
+        },
+      ];
+      if (capsule) {
+        evidence.push({
+          kind: "followup_evidence_capsule",
+          detail: capsule.capsule_id,
+          measured: true,
+        });
+      }
+
+      return {
+        ledger: nextLedger,
+        persist: true,
+        result: baseResult({
+          ok: !intentResult.instruction_like,
+          operation: op,
+          status,
+          subscription: nextSub,
+          disposition,
+          intents: intentResult.intents,
+          probe_plan,
+          evidence_capsule: capsule,
+          reply_draft,
+          ledger: nextLedger,
+          user_resolution: userReceipt(
+            intentResult.instruction_like ? "INCONCLUSIVE" : "DIAGNOSIS_COMPLETE",
+            disposition.user_guidance,
+          ),
+          upstream_contribution: upstreamReceipt(
+            "CANDIDATE_ONLY",
+            "Reply draft is local-only; Ticket 11 confirmation required before any write. Adapter unavailable in production.",
+            [ref.canonical_url],
+          ),
+          evidence,
+          target_mutated: true,
+          adapter_status: "unavailable",
+          error_code: intentResult.instruction_like ? "INJECTION_QUARANTINED" : null,
+          error_message: intentResult.instruction_like
+            ? "Maintainer prose contained instruction-like content; quarantined; no probes; no draft export of raw text."
+            : null,
+        }),
+      };
     });
   } catch (e) {
     return mapError(op, e);
