@@ -721,4 +721,3 @@ test("binding: confirmation binds capsule hash + privacy + nonce", () => {
   assert.ok(binding.binding_sha256);
   assert.ok(binding.idempotency_key.startsWith("idk_"));
 });
-
