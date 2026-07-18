@@ -18,12 +18,12 @@ import {
   REPAIR_BACKUP_MIN_AGE_MS,
   REPAIR_BACKUP_MIN_STARTS,
   LIFECYCLE_LEDGER_REL,
-  isRecipeRecommendable,
   dispatchLifecycle,
   previewCliVersionRollback,
   isTrustedRollbackProvenance,
   TRUSTED_PROVENANCE_ALLOWLIST,
   runCanary,
+  supersedeRecipe,
 } from "../src/core/lifecycle/index.js";
 import {
   LedgerError,
@@ -601,6 +601,8 @@ test("Ticket06: canary pass/fail guidance exact enum", () => {
     "--surface=plugin",
   ]);
 
+  // Ticket 12 authority: public/CLI boolean-only path cannot RECOMMEND_UPGRADE.
+  // All-true executed canary without live witness → availability guidance only.
   const pass = runLifecycle(target, "canary", [
     "--candidate-version=0.42.0",
     "--original-fault-absent=true",
@@ -608,7 +610,8 @@ test("Ticket06: canary pass/fail guidance exact enum", () => {
     "--canary-executed=true",
   ]);
   assert.equal(pass.exitCode, 0, pass.stdout);
-  assert.equal(pass.result!.version_guidance, "RECOMMEND_UPGRADE");
+  assert.equal(pass.result!.version_guidance, "UPGRADE_CANARY_AVAILABLE");
+  assert.notEqual(pass.result!.version_guidance, "RECOMMEND_UPGRADE");
 
   const fail = runLifecycle(target, "canary", [
     "--candidate-version=0.42.1",
@@ -717,38 +720,25 @@ test("Ticket06 P1-A: CLI/MCP omitted canary_executed equivalence", async () => {
   }
 });
 
-test("Ticket06: upstream supersession marks recipe SUPERSEDED_BY_UPSTREAM_FIX", () => {
+test("Ticket06: upstream supersession requires live measurement witness (boolean path closed)", () => {
   const tmp = makeTempDir("cg-t06-sup-");
   const target = copyFixtureToTemp("fixtures/lifecycle", tmp);
   const digest = sha256Text("upstream-fix-evidence-v1");
 
+  // Ticket 12 authority: CLI/public verified booleans alone cannot supersede.
   const sup = runLifecycle(target, "supersede_recipe", [
     "--recipe-id=workaround-process-shim",
     "--upstream-ref=openai/codex#32925",
     `--upstream-evidence-digest=${digest}`,
     "--upstream-verified=true",
   ]);
-  assert.equal(sup.exitCode, 0, sup.stdout);
-  const recipe = sup.result!.recipe as {
-    status: string;
-    recommendable: boolean;
-  };
-  assert.equal(recipe.status, "SUPERSEDED_BY_UPSTREAM_FIX");
-  assert.equal(recipe.recommendable, false);
-  const led = ledgerOf(sup.result);
-  assert.equal(isRecipeRecommendable(led, "workaround-process-shim"), false);
+  assert.notEqual(sup.exitCode, 0, sup.stdout);
+  assert.ok(
+    sup.result!.error_code === "LIVE_WITNESS_REQUIRED" ||
+      sup.result!.error_code === "UPSTREAM_NOT_VERIFIED",
+  );
 
-  // Conflicting evidence refused (replay/TOCTOU)
-  const conflict = runLifecycle(target, "supersede_recipe", [
-    "--recipe-id=workaround-process-shim",
-    "--upstream-ref=openai/codex#99999",
-    `--upstream-evidence-digest=${sha256Text("different")}`,
-    "--upstream-verified=true",
-  ]);
-  assert.notEqual(conflict.exitCode, 0);
-  assert.equal(conflict.result!.error_code, "SUPERSESSION_EVIDENCE_CONFLICT");
-
-  // Unverified refused
+  // Unverified still refused
   const unver = runLifecycle(target, "supersede_recipe", [
     "--recipe-id=other",
     "--upstream-ref=openai/codex#1",
@@ -757,6 +747,21 @@ test("Ticket06: upstream supersession marks recipe SUPERSEDED_BY_UPSTREAM_FIX", 
   ]);
   assert.notEqual(unver.exitCode, 0);
   assert.equal(unver.result!.error_code, "UPSTREAM_NOT_VERIFIED");
+
+  // Direct core seam without witness also refuses (no SUPERSEDED_BY_UPSTREAM_FIX).
+  const core = supersedeRecipe({
+    targetPath: target,
+    recipe_id: "workaround-process-shim",
+    candidate_version: "0.50.0",
+    upstream: {
+      ref: "openai/codex#32925",
+      evidence_digest: digest,
+      verified: true,
+      measured_validation: true,
+    },
+  });
+  assert.equal(core.ok, false);
+  assert.equal(core.error_code, "LIVE_WITNESS_REQUIRED");
 });
 
 test("Ticket06: corrupt/tampered/symlink ledger refused", () => {

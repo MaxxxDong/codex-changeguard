@@ -71,8 +71,9 @@ export {
   runRegisteredProbe,
   runRegisteredProbes,
   measureCandidateFaultAndCore,
+  measureWithRegisteredProfile,
   loadCandidateMeasurement,
-  sealCandidateMeasurement,
+  PROTECTED_PROCESS_SHIM_PROFILE_V1,
 } from "./probes.js";
 export type {
   CandidateMeasurementResult,
@@ -92,7 +93,11 @@ export type { FollowupLedgerErrorCode } from "./ledger.js";
 
 export { buildEvidenceCapsule, buildReplyDraft } from "./capsule.js";
 
-export { validateCandidateFix, bindOfficialEvidenceItem } from "./candidate.js";
+export {
+  validateCandidateFix,
+  bindOfficialEvidenceItem,
+  bindCandidateVersionToOfficial,
+} from "./candidate.js";
 
 export {
   subscribeIssue,

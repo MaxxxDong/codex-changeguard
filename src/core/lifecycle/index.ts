@@ -61,3 +61,19 @@ export {
   parseCliInstallSource,
   rawCliInstallSource,
 } from "./types.js";
+
+/** Ticket 12 live measurement authority (no public witness sealer). */
+export {
+  PROTECTED_PROCESS_SHIM_PROFILE_V1,
+  runRegisteredLiveMeasurement,
+  isLiveMeasurementWitness,
+  readLiveMeasurementAttestation,
+} from "./live-measurement.js";
+export type {
+  RegisteredMeasurementProfileId,
+  RegisteredMeasurementInput,
+  RegisteredLiveMeasurementResult,
+  LiveMeasurementWitness,
+  LiveMeasurementAttestation,
+  LiveMeasurementVerdict,
+} from "./live-measurement.js";

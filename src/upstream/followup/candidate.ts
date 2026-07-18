@@ -4,10 +4,14 @@
  * RECOMMEND_UPGRADE or SUPERSEDED_BY_UPSTREAM_FIX.
  *
  * Supersession requires:
- * 1. Positive measured contract (baseline repro + fault absent + core ok)
- *    bound to candidate_version — never absence-as-success / caller booleans
+ * 1. Positive registered live measurement (process-local witness) —
+ *    baseline repro + candidate fault absent + core ok, bound to
+ *    candidate_version / profile / artifact digests — never absence-as-success
+ *    or caller booleans or persisted self-attestation JSON
  * 2. Real pinned official evidence item: digest + canonical URL both match
  *    exactly one bundled-snapshot item suitable as an upstream-fix reference
+ * 3. Candidate version meaningfully bound to the official item
+ *    (version_range.to or normalized release/tag version token)
  *
  * Never download/install/mutate OpenAI binaries; guidance only.
  * Never automatically uninstall a user workaround.
@@ -22,7 +26,11 @@ import {
   SnapshotError,
 } from "../../evidence/index.js";
 import type { OfficialEvidenceItem } from "../../evidence/types.js";
-import { loadCandidateMeasurement } from "./probes.js";
+import {
+  measureWithRegisteredProfile,
+  loadCandidateMeasurement,
+  PROTECTED_PROCESS_SHIM_PROFILE_V1,
+} from "./probes.js";
 import type {
   CandidateValidationInput,
   CandidateValidationResult,
@@ -45,6 +53,79 @@ function isSuitableUpstreamFix(item: OfficialEvidenceItem): boolean {
   if (!FIX_STATUS_SET.has(item.maintainer_status)) return false;
   if (item.quarantine !== null) return false;
   return true;
+}
+
+/**
+ * Normalize a version label for binding comparison.
+ * Strips common release/tag prefixes (rust-v, v, desktop-win-) and lowercases.
+ */
+function normalizeVersionToken(raw: string): string {
+  let s = raw.trim().toLowerCase();
+  // Drop trailing prerelease/build suffixes for binding against release "to".
+  // Keep the core numeric-ish token.
+  s = s.replace(/^rust-v/, "");
+  s = s.replace(/^desktop-win-/, "");
+  s = s.replace(/^notes-unmapped-/, "");
+  s = s.replace(/^v/, "");
+  return s;
+}
+
+/**
+ * Bind requested candidate_version to a suitable official evidence item.
+ * Prefer version_range.to; also accept exact normalized title/tag token match.
+ * Fail closed when the official item cannot bind a candidate version.
+ */
+export function bindCandidateVersionToOfficial(
+  candidate_version: string,
+  item: OfficialEvidenceItem,
+): { ok: true; bound_token: string } | { ok: false; code: string; message: string } {
+  const cand = normalizeVersionToken(candidate_version);
+  if (!cand) {
+    return {
+      ok: false,
+      code: "CANDIDATE_VERSION_UNBOUND",
+      message: "Candidate version cannot bind to official release token.",
+    };
+  }
+
+  const tokens = new Set<string>();
+  if (item.version_range?.to) {
+    tokens.add(normalizeVersionToken(item.version_range.to));
+  }
+  // Release/tag title often embeds the version (e.g. rust-v0.50.0).
+  if (typeof item.title === "string" && item.title.length > 0) {
+    tokens.add(normalizeVersionToken(item.title));
+  }
+  // Canonical URL last path segment as a token source.
+  try {
+    const u = new URL(item.canonical_url);
+    const seg = u.pathname.split("/").filter(Boolean).pop();
+    if (seg) tokens.add(normalizeVersionToken(seg));
+  } catch {
+    /* ignore */
+  }
+
+  tokens.delete("");
+  if (tokens.size === 0) {
+    return {
+      ok: false,
+      code: "CANDIDATE_VERSION_UNBOUND",
+      message:
+        "Official evidence item has no bindable release/version token for candidate_version.",
+    };
+  }
+
+  // Exact normalized token match against version_range.to / title / tag segment.
+  if (tokens.has(cand)) {
+    return { ok: true, bound_token: cand };
+  }
+
+  return {
+    ok: false,
+    code: "CANDIDATE_VERSION_MISMATCH",
+    message:
+      "Requested candidate_version is not meaningfully bound to the official evidence release/tag version.",
+  };
 }
 
 /**
@@ -240,13 +321,60 @@ export function validateCandidateFix(
   void input.core_regressions_passed;
   void input.verified;
 
-  // ── Positive measurement (never absence-as-success) ──────────────────────
-  const measured = loadCandidateMeasurement(
+  // Profile must be the closed Phase-A id (or fail closed).
+  const profile_id =
+    typeof input.measurement_profile_id === "string"
+      ? input.measurement_profile_id
+      : "";
+  if (!profile_id) {
+    return baseFail(
+      "REFUSED",
+      "UNSUPPORTED_PROFILE",
+      "measurement_profile_id required (closed registered profile only).",
+    );
+  }
+
+  if (
+    typeof input.baselineTargetPath !== "string" ||
+    input.baselineTargetPath.length === 0
+  ) {
+    return baseFail(
+      "REFUSED",
+      "BASELINE_REQUIRED",
+      "baselineTargetPath required for registered live measurement.",
+    );
+  }
+
+  // Adversarial: if legacy self-attestation JSON is present, refuse as authority
+  // before even running live probes (content hash is not measurement authority).
+  const legacy = loadCandidateMeasurement(
     input.targetPath,
     input.candidate_version,
   );
-  const { measured_fault_absent, measured_core_ok, probe_results, verdict } =
-    measured;
+  if (legacy.error_code === "MEASUREMENT_SELF_ATTESTATION_DEPRECATED") {
+    return baseFail(
+      "REFUSED",
+      legacy.error_code,
+      legacy.detail,
+      legacy.probe_results,
+    );
+  }
+
+  // ── Positive measurement via closed registered live profile ──────────────
+  const measured = measureWithRegisteredProfile({
+    targetPath: input.targetPath,
+    baselineTargetPath: input.baselineTargetPath,
+    candidate_version: input.candidate_version,
+    profile_id,
+    nowMs: input.nowMs,
+  });
+  const {
+    measured_fault_absent,
+    measured_core_ok,
+    probe_results,
+    verdict,
+    witness,
+  } = measured;
 
   if (verdict === "inconclusive") {
     return baseFail(
@@ -281,8 +409,36 @@ export function validateCandidateFix(
     );
   }
 
-  // Drive canary with MEASURED values only (canary_executed true + measured flags).
-  // Inconclusive already returned; negative/positive always have concrete booleans.
+  // Version binding: positive path requires candidate_version meaningfully
+  // bound to the official release/tag token.
+  if (verdict === "positive" && bind && bind.ok) {
+    const vbind = bindCandidateVersionToOfficial(
+      input.candidate_version,
+      bind.item,
+    );
+    if (!vbind.ok) {
+      return baseFail(
+        "REFUSED",
+        vbind.code,
+        vbind.message,
+        probe_results,
+        { measured_fault_absent, measured_core_ok },
+      );
+    }
+  }
+
+  // Drive canary with MEASURED values + live witness only.
+  // Public boolean path cannot recommend upgrade without witness.
+  if (verdict === "positive" && !witness) {
+    return baseFail(
+      "REFUSED",
+      "LIVE_WITNESS_REQUIRED",
+      "Positive measurement missing process-local live witness.",
+      probe_results,
+      { measured_fault_absent, measured_core_ok },
+    );
+  }
+
   const canary = runCanary({
     targetPath: input.targetPath,
     candidate_version: input.candidate_version,
@@ -290,6 +446,7 @@ export function validateCandidateFix(
     core_regressions_passed: measured_core_ok === true,
     canary_executed: true,
     measured_outcomes: true,
+    live_measurement_witness: witness ?? undefined,
     nowMs: input.nowMs,
   });
 
@@ -329,13 +486,13 @@ export function validateCandidateFix(
       binary_installed: false,
       workaround_uninstalled: false,
       detail:
-        "Candidate fix failed measured probes; hold KNOWN_GOOD / keep workaround. No binary install; no auto-uninstall.",
+        "Candidate fix failed measured probes; hold KNOWN_GOOD / keep workaround. No binary install; no auto-uninstall. Artifact-level disposable pair evidence only.",
       probe_results,
       evidence: [
         ...canary.evidence,
         {
           kind: "followup_candidate_regressed",
-          detail: `fault_absent=${measured_fault_absent};core_ok=${measured_core_ok}`,
+          detail: `fault_absent=${measured_fault_absent};core_ok=${measured_core_ok};profile=${profile_id}`,
           measured: true,
         },
       ],
@@ -345,7 +502,6 @@ export function validateCandidateFix(
   }
 
   // Positive measurement + bound official evidence → supersede temporary recipe.
-  // verified/measured_validation are set only after independent binding above.
   if (!bind || !bind.ok) {
     return baseFail(
       "REFUSED",
@@ -356,12 +512,30 @@ export function validateCandidateFix(
     );
   }
 
+  if (canary.version_guidance !== "RECOMMEND_UPGRADE") {
+    return baseFail(
+      "REFUSED",
+      "LIVE_WITNESS_REQUIRED",
+      "Canary did not obtain live-witness RECOMMEND_UPGRADE; supersession refused.",
+      probe_results,
+      { measured_fault_absent, measured_core_ok },
+    );
+  }
+
   const boundDigest = bind.item.content_sha256;
   const boundRef = bind.canonical_url;
+
+  const digests = measured.public_digests;
+  const digestNote =
+    digests && digests.candidate_artifact_sha256
+      ? `candidate_artifact=${digests.candidate_artifact_sha256.slice(0, 12)}…`
+      : "candidate_artifact=unknown";
 
   const sup = supersedeRecipe({
     targetPath: input.targetPath,
     recipe_id: input.recipe_id,
+    candidate_version: input.candidate_version,
+    live_measurement_witness: witness,
     upstream: {
       ref: boundRef,
       evidence_digest: boundDigest,
@@ -406,14 +580,15 @@ export function validateCandidateFix(
     binary_installed: false,
     workaround_uninstalled: false,
     detail:
-      "Measured candidate validation passed with bound official evidence; recipe SUPERSEDED_BY_UPSTREAM_FIX. Guidance only — no binary install/uninstall.",
+      `Measured candidate validation passed with live witness + bound official evidence; recipe SUPERSEDED_BY_UPSTREAM_FIX. ` +
+      `Artifact-level disposable pair evidence (${digestNote}; profile=${PROTECTED_PROCESS_SHIM_PROFILE_V1}) — not cryptographic proof of an installed binary identity. Guidance only — no binary install/uninstall.`,
     probe_results,
     evidence: [
       ...canary.evidence,
       ...sup.evidence,
       {
         kind: "followup_candidate_superseded",
-        detail: `recipe_id=${input.recipe_id};digest=${boundDigest.slice(0, 12)}…;url_bound=true`,
+        detail: `recipe_id=${input.recipe_id};digest=${boundDigest.slice(0, 12)}…;url_bound=true;live_witness=true;${digestNote}`,
         measured: true,
       },
     ],

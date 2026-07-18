@@ -76,6 +76,10 @@ import {
   parseProvenanceTrust,
   rawCliInstallSource,
 } from "./types.js";
+import {
+  consumeWitnessForSupersede,
+  recordCanaryWithLiveWitness,
+} from "./live-measurement.js";
 
 function userReceipt(
   status: UserResolutionStatus,
@@ -994,18 +998,28 @@ export function runCanary(input: CanaryInput): LifecycleResult {
     const nowMs = nowOf(input.nowMs);
     // Fail closed: only exact true means executed. Omitted/false → availability only.
     const executed = input.canary_executed === true;
+
+    // Ticket 12 authority: RECOMMEND_UPGRADE requires a process-local live
+    // measurement witness. Public/CLI boolean inputs may report availability,
+    // HOLD, or general guidance only — never upgrade without the witness.
+    const liveAuth = recordCanaryWithLiveWitness(input.live_measurement_witness, {
+      candidate_version: input.candidate_version,
+    });
+    const hasLiveAuthority = liveAuth.ok === true;
+
     let guidance: VersionGuidance;
     let detail: string;
     if (!executed) {
       guidance = "UPGRADE_CANARY_AVAILABLE";
       detail = "Canary available in isolated profile; not yet executed.";
     } else if (
+      hasLiveAuthority &&
       input.original_fault_absent === true &&
       input.core_regressions_passed === true
     ) {
       guidance = "RECOMMEND_UPGRADE";
       detail =
-        "Canary passed: original fault absent and core regressions passed in isolated profile.";
+        "Live-measured canary passed: original fault absent and core regressions passed (process-local witness). Artifact-level evidence — not installed-binary identity.";
     } else if (
       input.original_fault_absent === false ||
       input.core_regressions_passed === false
@@ -1013,6 +1027,16 @@ export function runCanary(input: CanaryInput): LifecycleResult {
       guidance = "HOLD_KNOWN_GOOD";
       detail =
         "Canary failed: hold KNOWN_GOOD; original fault and/or core regressions not clean.";
+    } else if (
+      executed &&
+      input.original_fault_absent === true &&
+      input.core_regressions_passed === true &&
+      !hasLiveAuthority
+    ) {
+      // Boolean-only all-true path: availability / general guidance only.
+      guidance = "UPGRADE_CANARY_AVAILABLE";
+      detail =
+        "Canary flags reported but live measurement witness absent; upgrade not recommended (authority closed).";
     } else {
       guidance = "GENERAL_UPDATE_ONLY";
       detail = "Insufficient canary evidence; general update guidance only.";
@@ -1027,9 +1051,8 @@ export function runCanary(input: CanaryInput): LifecycleResult {
       detail,
     };
 
-    // Ticket 12: only exact true means outcomes were independently measured.
-    // Caller-declared flags alone remain measured=false (never fake measurement).
-    const outcomesMeasured = input.measured_outcomes === true;
+    // Ticket 12: measured=true only with live witness authority (not caller booleans).
+    const outcomesMeasured = hasLiveAuthority && input.measured_outcomes === true;
 
     // Persist under default instance ledger when present.
     // Corrupt/tampered ledgers must fail closed (never recommend upgrade).
@@ -1070,8 +1093,8 @@ export function runCanary(input: CanaryInput): LifecycleResult {
       evidence: [
         {
           kind: "canary_result",
-          detail: `guidance=${guidance};executed=${executed};fault_absent=${canary.original_fault_absent};core_ok=${canary.core_regressions_passed};measured_outcomes=${outcomesMeasured}`,
-          // Only Ticket 12 measured probe path may claim measured=true.
+          detail: `guidance=${guidance};executed=${executed};fault_absent=${canary.original_fault_absent};core_ok=${canary.core_regressions_passed};measured_outcomes=${outcomesMeasured};live_witness=${hasLiveAuthority}`,
+          // Only Ticket 12 live-witness path may claim measured=true.
           measured: outcomesMeasured,
         },
       ],
@@ -1102,7 +1125,6 @@ export function supersedeRecipe(input: SupersedeInput): LifecycleResult {
       );
     }
     // Ticket 12: explicit measured_validation=false refuses supersession.
-    // Omitted remains T06-compatible; T12 always sets true after measured probes.
     if (input.upstream.measured_validation === false) {
       return fail(
         op,
@@ -1118,6 +1140,9 @@ export function supersedeRecipe(input: SupersedeInput): LifecycleResult {
     ) {
       return fail(op, "INVALID_UPSTREAM", "Invalid upstream evidence.");
     }
+
+    // Load ledger first so corrupt/tampered ledgers fail closed before any
+    // authority decision (including live-witness checks).
     const nowMs = nowOf(input.nowMs);
     const ledger = loadLedger(targetReal, "default", nowMs);
     const existing = ledger.recipes.find((r) => r.recipe_id === input.recipe_id);
@@ -1134,6 +1159,28 @@ export function supersedeRecipe(input: SupersedeInput): LifecycleResult {
         "Recipe already superseded with different upstream evidence.",
       );
     }
+
+    // Ticket 12 authority: process-local live witness required.
+    // verified/measured_validation booleans alone never mark SUPERSEDED.
+    const candidateVersion =
+      typeof input.candidate_version === "string" &&
+      input.candidate_version.length > 0
+        ? input.candidate_version
+        : null;
+    if (!candidateVersion) {
+      return fail(
+        op,
+        "LIVE_WITNESS_REQUIRED",
+        "Supersession requires candidate_version bound to a live measurement witness.",
+      );
+    }
+    const liveAuth = consumeWitnessForSupersede(input.live_measurement_witness, {
+      candidate_version: candidateVersion,
+    });
+    if (!liveAuth.ok) {
+      return fail(op, liveAuth.code, liveAuth.message);
+    }
+
     const recipe = {
       recipe_id: input.recipe_id,
       status: "SUPERSEDED_BY_UPSTREAM_FIX" as const,
@@ -1172,7 +1219,7 @@ export function supersedeRecipe(input: SupersedeInput): LifecycleResult {
       evidence: [
         {
           kind: "recipe_superseded",
-          detail: `recipe_id=${input.recipe_id};ref=${input.upstream.ref}`,
+          detail: `recipe_id=${input.recipe_id};ref=${input.upstream.ref};live_witness=true`,
           measured: true,
         },
       ],

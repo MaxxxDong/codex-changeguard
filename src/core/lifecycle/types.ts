@@ -292,9 +292,9 @@ export interface UpstreamEvidenceRef {
   evidence_digest: string;
   verified: boolean;
   /**
-   * Ticket 12: when true, supersession was bound to measured probe/core evidence
-   * plus this allowlisted official evidence digest. Optional for legacy T06
-   * supersede_recipe CLI; Ticket 12 always sets this after measured validation.
+   * Ticket 12: caller-declared measured_validation alone never authorizes
+   * supersession. A process-local live measurement witness is required.
+   * Retained only for fail-closed refusal when explicitly false.
    */
   measured_validation?: boolean;
 }
@@ -432,9 +432,15 @@ export interface CanaryInput {
   /**
    * Ticket 12: when true, outcome flags are independently measured by registered
    * probes (evidence.measured=true). Caller-declared alone remains measured=false.
-   * Does not by itself grant RECOMMEND_UPGRADE without canary_executed.
+   * Does not by itself grant RECOMMEND_UPGRADE without a live measurement witness.
    */
   measured_outcomes?: boolean;
+  /**
+   * Process-local live measurement witness (Ticket 12). Ordinary/public callers
+   * cannot supply this via CLI/MCP JSON. Without a valid witness, even
+   * canary_executed + all-true booleans cannot yield RECOMMEND_UPGRADE.
+   */
+  live_measurement_witness?: unknown;
   nowMs?: number;
 }
 
@@ -442,6 +448,13 @@ export interface SupersedeInput {
   targetPath: string;
   recipe_id: string;
   upstream: UpstreamEvidenceRef;
+  /**
+   * Process-local live measurement witness required for SUPERSEDED_BY_UPSTREAM_FIX.
+   * verified/measured_validation booleans alone never authorize supersession.
+   */
+  live_measurement_witness?: unknown;
+  /** Candidate version the witness must bind to (Ticket 12 positive path). */
+  candidate_version?: string;
   nowMs?: number;
 }
 

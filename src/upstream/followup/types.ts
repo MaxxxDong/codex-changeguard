@@ -162,10 +162,24 @@ export interface DispositionPolicyResult {
 }
 
 export interface CandidateValidationInput {
+  /**
+   * Disposable candidate root (measured for fault-absent + core health).
+   * Must be a real distinct disposable isolated target.
+   */
   targetPath: string;
+  /**
+   * Separate disposable baseline root that must reproduce the original fault.
+   * Required for the registered live measurement profile.
+   */
+  baselineTargetPath: string;
   issue_number: number;
   candidate_version: string;
   recipe_id: string;
+  /**
+   * Closed registered measurement profile id (Phase A: protected_process_shim_v1).
+   * Unknown / omitted profiles fail closed (UNSUPPORTED_PROFILE).
+   */
+  measurement_profile_id: string;
   /**
    * Allowlisted official evidence item content_sha256 (64 hex).
    * Required for supersession; never accepted as free-form "verified".

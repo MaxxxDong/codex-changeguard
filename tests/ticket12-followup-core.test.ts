@@ -39,7 +39,7 @@ import {
   resolveFollowupStateRoot,
   runRegisteredProbe,
   saveFollowupLedger,
-  sealCandidateMeasurement,
+  PROTECTED_PROCESS_SHIM_PROFILE_V1,
   sessionFollowupHint,
   subscribeIssue,
   unsubscribeIssue,
@@ -54,9 +54,16 @@ import {
   REGISTERED_PROBE_IDS,
   buildEvidenceCapsule,
   buildReplyDraft,
+  measureWithRegisteredProfile,
 } from "../src/upstream/followup/index.js";
 import type { FollowupResult } from "../src/upstream/followup/index.js";
-import { sha256Text } from "../src/evidence/canonical.js";
+import {
+  isLiveMeasurementWitness,
+  runCanary,
+  supersedeRecipe,
+} from "../src/core/lifecycle/index.js";
+import { removeProtectedProcessBlock } from "../src/core/recovery/protected-process.js";
+import { sha256Canonical, sha256Text } from "../src/evidence/canonical.js";
 import { makeTempDir } from "./helpers.js";
 import { copyFixtureToTemp } from "../src/harness/scenario.js";
 
@@ -67,6 +74,8 @@ const OFFICIAL_RELEASE_DIGEST =
   "d6baa84959e55d2ff20e36a9ea3d0ecee77b1f430c0505a54ef5909f82adb9ef";
 const OFFICIAL_RELEASE_URL =
   "https://github.com/openai/codex/releases/tag/rust-v0.50.0";
+/** Bound candidate version label for rust-v0.50.0 release (version_range.to). */
+const OFFICIAL_BOUND_VERSION = "0.50.0";
 /** Second real item for supersession-conflict scenarios */
 const OFFICIAL_COMMIT_DIGEST =
   "e5c910be6ae7984b3802f6207ff5a32fc72053a598df03edc1860dde7abec9c0";
@@ -78,6 +87,8 @@ const USER_ISSUE_DIGEST =
 const USER_ISSUE_URL = "https://github.com/openai/codex/issues/32925";
 
 const FORGED_DIGEST = "a".repeat(64);
+const ARTIFACT_REL = "artifacts/browser-client.mjs";
+const PROFILE = PROTECTED_PROCESS_SHIM_PROFILE_V1;
 
 function makeTarget(prefix = "cg-t12-tgt-"): string {
   const tmp = makeTempDir(prefix);
@@ -92,25 +103,96 @@ function sha256(s: string): string {
   return crypto.createHash("sha256").update(s, "utf8").digest("hex");
 }
 
-/** Write a sealed positive candidate-measurement contract under the isolated target. */
-function writePositiveMeasurement(
+/**
+ * Disposable baseline: protected-process fault fixture (fault present).
+ * Disposable candidate: same fixture with T02 deterministic repair applied to
+ * the registered artifact bytes (fault absent + core health passes).
+ * Ticket 12 validation itself remains read-only over these artifacts.
+ */
+function makeBaselineCandidatePair(prefix = "cg-t12-pair-"): {
+  baseline: string;
+  candidate: string;
+} {
+  const baseline = copyFixtureToTemp(
+    "fixtures/protected-process",
+    makeTempDir(`${prefix}base-`),
+  );
+  const candidate = copyFixtureToTemp(
+    "fixtures/protected-process",
+    makeTempDir(`${prefix}cand-`),
+  );
+  const artPath = path.join(candidate, ARTIFACT_REL);
+  const src = fs.readFileSync(artPath, "utf8");
+  const plan = removeProtectedProcessBlock(src);
+  assert.ok(plan, "T02 repair must transform protected-process artifact");
+  fs.writeFileSync(artPath, plan.next, "utf8");
+  return { baseline, candidate };
+}
+
+/** Hand-written self-consistent all-true legacy measurement JSON (adversarial). */
+function writeLegacySelfAttestation(
   target: string,
   candidate_version: string,
-  overrides: Partial<{
-    baseline_fault_reproduced: boolean;
-    candidate_fault_absent: boolean;
-    core_regressions_passed: boolean;
-  }> = {},
 ): void {
-  const doc = sealCandidateMeasurement({
+  const digest = sha256Canonical({
+    schema_version: 1,
     candidate_version,
-    baseline_fault_reproduced: overrides.baseline_fault_reproduced ?? true,
-    candidate_fault_absent: overrides.candidate_fault_absent ?? true,
-    core_regressions_passed: overrides.core_regressions_passed ?? true,
+    baseline_fault_reproduced: true,
+    candidate_fault_absent: true,
+    core_regressions_passed: true,
+    content_sha256: null,
   });
   const abs = path.join(target, CANDIDATE_MEASUREMENT_REL);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
-  fs.writeFileSync(abs, `${JSON.stringify(doc, null, 2)}\n`, "utf8");
+  fs.writeFileSync(
+    abs,
+    `${JSON.stringify(
+      {
+        schema_version: 1,
+        candidate_version,
+        baseline_fault_reproduced: true,
+        candidate_fault_absent: true,
+        core_regressions_passed: true,
+        content_sha256: digest,
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+}
+
+function baseValidateInput(
+  candidate: string,
+  baseline: string,
+  overrides: Partial<{
+    candidate_version: string;
+    recipe_id: string;
+    issue_number: number;
+    official_evidence_item_digest: string;
+    official_evidence_ref: string;
+    measurement_profile_id: string;
+    original_fault_absent: boolean;
+    core_regressions_passed: boolean;
+    verified: boolean;
+  }> = {},
+) {
+  return {
+    targetPath: candidate,
+    baselineTargetPath: baseline,
+    measurement_profile_id: overrides.measurement_profile_id ?? PROFILE,
+    issue_number: overrides.issue_number ?? 500,
+    candidate_version: overrides.candidate_version ?? OFFICIAL_BOUND_VERSION,
+    recipe_id: overrides.recipe_id ?? "tmp-workaround-t12",
+    official_evidence_item_digest:
+      overrides.official_evidence_item_digest ?? OFFICIAL_RELEASE_DIGEST,
+    official_evidence_ref:
+      overrides.official_evidence_ref ?? OFFICIAL_RELEASE_URL,
+    original_fault_absent: overrides.original_fault_absent,
+    core_regressions_passed: overrides.core_regressions_passed,
+    verified: overrides.verified,
+    nowMs: NOW,
+  };
 }
 
 function assertNoLeak(text: string): void {
@@ -701,26 +783,18 @@ test("Ticket12 adversarial: absolute/.. target paths refused", () => {
   }
 });
 
-// ─── Candidate validation (positive measurement + bound official evidence) ─
+// ─── Candidate validation (live registered measurement + bound official) ───
 
-test("Ticket12 scenario: candidate fix pass → SUPERSEDED_BY_UPSTREAM_FIX (positive measurement + bound official)", () => {
-  const target = makeTarget();
-  const version = "0.50.0-candidate";
-  writePositiveMeasurement(target, version);
-
-  const r = validateCandidate({
-    targetPath: target,
-    issue_number: 500,
-    candidate_version: version,
-    recipe_id: "tmp-workaround-t12",
-    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
-    official_evidence_ref: OFFICIAL_RELEASE_URL,
-    // Adversarial: caller tries to force authority without measurement — ignored
-    original_fault_absent: false,
-    core_regressions_passed: false,
-    verified: false,
-    nowMs: NOW,
-  });
+test("Ticket12 scenario: live registered positive path → SUPERSEDED_BY_UPSTREAM_FIX", () => {
+  const { baseline, candidate } = makeBaselineCandidatePair();
+  const r = validateCandidate(
+    baseValidateInput(candidate, baseline, {
+      // Adversarial caller flags ignored
+      original_fault_absent: false,
+      core_regressions_passed: false,
+      verified: false,
+    }),
+  );
   assertSafeResult(r);
   assert.equal(r.ok, true);
   assert.equal(r.status, "SUPERSEDED");
@@ -735,170 +809,63 @@ test("Ticket12 scenario: candidate fix pass → SUPERSEDED_BY_UPSTREAM_FIX (posi
   assert.equal(r.candidate?.binary_installed, false);
   assert.equal(r.candidate?.workaround_uninstalled, false);
   assert.ok(r.evidence.some((e) => e.measured === true));
+  assert.match(r.candidate?.detail ?? "", /artifact-level/i);
+  assert.equal(/\/Users\//.test(JSON.stringify(r)), false);
 });
 
-test("Ticket12 scenario: candidate regression keeps workaround; no binary/uninstall", () => {
-  const target = makeTarget();
-  const version = "0.2.0-bad";
-  // Valid measurement document with negative phases (fault still present / core fail)
-  writePositiveMeasurement(target, version, {
-    candidate_fault_absent: false,
-    core_regressions_passed: false,
-  });
-
-  const r = validateCandidate({
-    targetPath: target,
-    issue_number: 501,
-    candidate_version: version,
-    recipe_id: "tmp-workaround-reg",
-    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
-    official_evidence_ref: OFFICIAL_RELEASE_URL,
-    // Caller lies that everything passed
-    original_fault_absent: true,
-    core_regressions_passed: true,
-    verified: true,
-    nowMs: NOW,
-  });
+test("Ticket12 scenario: candidate still faulty → CANDIDATE_REGRESSED; no binary/uninstall", () => {
+  // Both roots have the fault (no repair on candidate)
+  const baseline = copyFixtureToTemp(
+    "fixtures/protected-process",
+    makeTempDir("cg-t12-reg-base-"),
+  );
+  const candidate = copyFixtureToTemp(
+    "fixtures/protected-process",
+    makeTempDir("cg-t12-reg-cand-"),
+  );
+  const r = validateCandidate(
+    baseValidateInput(candidate, baseline, {
+      recipe_id: "tmp-workaround-reg",
+      issue_number: 501,
+      original_fault_absent: true,
+      core_regressions_passed: true,
+      verified: true,
+    }),
+  );
   assertSafeResult(r);
   assert.equal(r.ok, true);
   assert.equal(r.status, "CANDIDATE_REGRESSED");
   assert.equal(r.candidate?.measured_fault_absent, false);
-  assert.equal(r.candidate?.measured_core_ok, false);
   assert.equal(r.candidate?.recipe_status, "ACTIVE_WORKAROUND");
   assert.equal(r.candidate?.recipe_recommendable, true);
   assert.equal(r.candidate?.binary_installed, false);
   assert.equal(r.candidate?.workaround_uninstalled, false);
 });
 
-test("Ticket12 adversarial: empty target / absent measurement is inconclusive (not SUPERSEDED)", () => {
-  const target = makeTarget();
-  // Empty canary dir (or missing) must NOT prove success
-  fs.mkdirSync(path.join(target, "canary"), { recursive: true });
-
-  const r = validateCandidateFix({
-    targetPath: target,
-    issue_number: 502,
-    candidate_version: "1.0.0",
-    recipe_id: "r1",
-    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
-    official_evidence_ref: OFFICIAL_RELEASE_URL,
-    verified: true,
-    original_fault_absent: true,
-    core_regressions_passed: true,
-    nowMs: NOW,
-  });
-  assert.equal(r.ok, false);
-  assert.equal(r.status, "REFUSED");
-  assert.ok(
-    r.error_code === "MEASUREMENT_ABSENT" ||
-      r.error_code === "MEASUREMENT_INCONCLUSIVE",
+test("Ticket12 adversarial: all-true self-consistent legacy measurement JSON never unlocks", () => {
+  const { baseline, candidate } = makeBaselineCandidatePair();
+  writeLegacySelfAttestation(candidate, OFFICIAL_BOUND_VERSION);
+  const r = validateCandidateFix(
+    baseValidateInput(candidate, baseline, {
+      verified: true,
+      original_fault_absent: true,
+      core_regressions_passed: true,
+    }),
   );
+  assert.equal(r.ok, false);
   assert.notEqual(r.status, "SUPERSEDED");
-});
-
-test("Ticket12 adversarial: missing one positive phase is inconclusive", () => {
-  const target = makeTarget();
-  const version = "1.0.0";
-  // baseline not reproduced → inconclusive (cannot prove fix)
-  writePositiveMeasurement(target, version, {
-    baseline_fault_reproduced: false,
-    candidate_fault_absent: true,
-    core_regressions_passed: true,
-  });
-  const r = validateCandidateFix({
-    targetPath: target,
-    issue_number: 502,
-    candidate_version: version,
-    recipe_id: "r1",
-    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
-    official_evidence_ref: OFFICIAL_RELEASE_URL,
-    nowMs: NOW,
-  });
-  assert.equal(r.ok, false);
-  assert.equal(r.error_code, "MEASUREMENT_BASELINE_MISSING");
-});
-
-test("Ticket12 adversarial: malformed/tampered measurement digest refused", () => {
-  const target = makeTarget();
-  const version = "1.0.0";
-  writePositiveMeasurement(target, version);
-  const abs = path.join(target, CANDIDATE_MEASUREMENT_REL);
-  const raw = JSON.parse(fs.readFileSync(abs, "utf8")) as Record<string, unknown>;
-  raw.content_sha256 = "f".repeat(64);
-  fs.writeFileSync(abs, `${JSON.stringify(raw, null, 2)}\n`);
-
-  const r = validateCandidateFix({
-    targetPath: target,
-    issue_number: 502,
-    candidate_version: version,
-    recipe_id: "r1",
-    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
-    official_evidence_ref: OFFICIAL_RELEASE_URL,
-    nowMs: NOW,
-  });
-  assert.equal(r.ok, false);
-  assert.equal(r.error_code, "MEASUREMENT_DIGEST");
-});
-
-test("Ticket12 adversarial: candidate-version mismatch refused", () => {
-  const target = makeTarget();
-  writePositiveMeasurement(target, "1.0.0");
-  const r = validateCandidateFix({
-    targetPath: target,
-    issue_number: 502,
-    candidate_version: "2.0.0",
-    recipe_id: "r1",
-    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
-    official_evidence_ref: OFFICIAL_RELEASE_URL,
-    nowMs: NOW,
-  });
-  assert.equal(r.ok, false);
-  assert.equal(r.error_code, "MEASUREMENT_VERSION_MISMATCH");
-});
-
-test("Ticket12 adversarial: symlinked measurement refused", () => {
-  const target = makeTarget();
-  const version = "1.0.0";
-  const realDir = path.join(target, "canary-real");
-  fs.mkdirSync(realDir, { recursive: true });
-  const realFile = path.join(realDir, "candidate-measurement.json");
-  const doc = sealCandidateMeasurement({
-    candidate_version: version,
-    baseline_fault_reproduced: true,
-    candidate_fault_absent: true,
-    core_regressions_passed: true,
-  });
-  fs.writeFileSync(realFile, `${JSON.stringify(doc, null, 2)}\n`);
-  const canaryDir = path.join(target, "canary");
-  fs.mkdirSync(canaryDir, { recursive: true });
-  const link = path.join(canaryDir, "candidate-measurement.json");
-  try {
-    fs.symlinkSync(realFile, link);
-  } catch (e) {
-    const err = e as NodeJS.ErrnoException;
-    if (err.code === "EPERM" || err.code === "EACCES") return;
-    throw e;
-  }
-  const r = validateCandidateFix({
-    targetPath: target,
-    issue_number: 502,
-    candidate_version: version,
-    recipe_id: "r1",
-    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
-    official_evidence_ref: OFFICIAL_RELEASE_URL,
-    nowMs: NOW,
-  });
-  assert.equal(r.ok, false);
-  assert.equal(r.error_code, "MEASUREMENT_SYMLINK");
+  assert.equal(r.error_code, "MEASUREMENT_SELF_ATTESTATION_DEPRECATED");
+  assert.notEqual(r.version_guidance, "RECOMMEND_UPGRADE");
 });
 
 test("Ticket12 adversarial: caller booleans only never supersede", () => {
   const target = makeTarget();
-  // No measurement file; only caller flags
   const r = validateCandidateFix({
     targetPath: target,
+    baselineTargetPath: target,
+    measurement_profile_id: PROFILE,
     issue_number: 502,
-    candidate_version: "1.0.0",
+    candidate_version: OFFICIAL_BOUND_VERSION,
     recipe_id: "r1",
     official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
     official_evidence_ref: OFFICIAL_RELEASE_URL,
@@ -909,27 +876,112 @@ test("Ticket12 adversarial: caller booleans only never supersede", () => {
   });
   assert.equal(r.ok, false);
   assert.notEqual(r.status, "SUPERSEDED");
+});
+
+test("Ticket12 adversarial: no profile / unknown profile fail closed", () => {
+  const { baseline, candidate } = makeBaselineCandidatePair();
+  const missing = validateCandidateFix(
+    baseValidateInput(candidate, baseline, { measurement_profile_id: "" }),
+  );
+  assert.equal(missing.ok, false);
+  assert.equal(missing.error_code, "UNSUPPORTED_PROFILE");
+
+  const unknown = validateCandidateFix(
+    baseValidateInput(candidate, baseline, {
+      measurement_profile_id: "not_a_real_profile_v9",
+    }),
+  );
+  assert.equal(unknown.ok, false);
+  assert.equal(unknown.error_code, "UNSUPPORTED_PROFILE");
+});
+
+test("Ticket12 adversarial: same root for baseline and candidate refused", () => {
+  const baseline = copyFixtureToTemp(
+    "fixtures/protected-process",
+    makeTempDir("cg-t12-same-"),
+  );
+  // Repair in place then use same root as both
+  const artPath = path.join(baseline, ARTIFACT_REL);
+  const plan = removeProtectedProcessBlock(fs.readFileSync(artPath, "utf8"));
+  assert.ok(plan);
+  // Keep fault for baseline semantics — use unrepaired as both roots.
+  const unrepaired = copyFixtureToTemp(
+    "fixtures/protected-process",
+    makeTempDir("cg-t12-same2-"),
+  );
+  const r = validateCandidateFix(
+    baseValidateInput(unrepaired, unrepaired),
+  );
+  assert.equal(r.ok, false);
+  assert.equal(r.error_code, "ROOT_EQUALITY_REFUSED");
+  void plan;
+});
+
+test("Ticket12 adversarial: baseline fault not reproduced is inconclusive", () => {
+  // Baseline is already repaired (no fault) → cannot prove fix
+  const { candidate } = makeBaselineCandidatePair();
+  const baselineRepaired = copyFixtureToTemp(
+    "fixtures/protected-process",
+    makeTempDir("cg-t12-base-ok-"),
+  );
+  const artPath = path.join(baselineRepaired, ARTIFACT_REL);
+  const plan = removeProtectedProcessBlock(fs.readFileSync(artPath, "utf8"));
+  assert.ok(plan);
+  fs.writeFileSync(artPath, plan.next, "utf8");
+
+  const r = validateCandidateFix(
+    baseValidateInput(candidate, baselineRepaired),
+  );
+  assert.equal(r.ok, false);
+  assert.equal(r.error_code, "MEASUREMENT_BASELINE_MISSING");
+});
+
+test("Ticket12 adversarial: candidate fault absent but core health fails → regressed", () => {
+  const baseline = copyFixtureToTemp(
+    "fixtures/protected-process",
+    makeTempDir("cg-t12-core-base-"),
+  );
+  const candidate = copyFixtureToTemp(
+    "fixtures/protected-process",
+    makeTempDir("cg-t12-core-cand-"),
+  );
+  // Remove shim but destroy marker export so core health fails.
+  const artPath = path.join(candidate, ARTIFACT_REL);
+  const plan = removeProtectedProcessBlock(fs.readFileSync(artPath, "utf8"));
+  assert.ok(plan);
+  const broken = plan.next.replace(/export const marker\b[\s\S]*$/m, "export const not_marker = 1;\n");
+  fs.writeFileSync(artPath, broken, "utf8");
+
+  const r = validateCandidateFix(baseValidateInput(candidate, baseline));
+  assert.equal(r.ok, true);
+  assert.equal(r.status, "CANDIDATE_REGRESSED");
+  assert.equal(r.measured_fault_absent, true);
+  assert.equal(r.measured_core_ok, false);
+});
+
+test("Ticket12 adversarial: candidate version vs official release mismatch refused", () => {
+  const { baseline, candidate } = makeBaselineCandidatePair();
+  const r = validateCandidateFix(
+    baseValidateInput(candidate, baseline, {
+      candidate_version: "9.9.9-unrelated",
+    }),
+  );
+  assert.equal(r.ok, false);
   assert.ok(
-    r.error_code === "MEASUREMENT_ABSENT" ||
-      r.error_code === "MEASUREMENT_INCONCLUSIVE",
+    r.error_code === "CANDIDATE_VERSION_MISMATCH" ||
+      r.error_code === "CANDIDATE_VERSION_UNBOUND",
   );
 });
 
-test("Ticket12 adversarial: forged well-shaped digest / unbound official evidence refused", () => {
-  const target = makeTarget();
-  const version = "1.0.0";
-  writePositiveMeasurement(target, version);
+test("Ticket12 adversarial: forged official digest/ref refused", () => {
+  const { baseline, candidate } = makeBaselineCandidatePair();
 
-  const forged = validateCandidateFix({
-    targetPath: target,
-    issue_number: 502,
-    candidate_version: version,
-    recipe_id: "r1",
-    official_evidence_item_digest: FORGED_DIGEST,
-    official_evidence_ref: OFFICIAL_RELEASE_URL,
-    verified: true,
-    nowMs: NOW,
-  });
+  const forged = validateCandidateFix(
+    baseValidateInput(candidate, baseline, {
+      official_evidence_item_digest: FORGED_DIGEST,
+      verified: true,
+    }),
+  );
   assert.equal(forged.ok, false);
   assert.ok(
     forged.error_code === "OFFICIAL_EVIDENCE_UNBOUND" ||
@@ -937,78 +989,43 @@ test("Ticket12 adversarial: forged well-shaped digest / unbound official evidenc
       forged.error_code === "OFFICIAL_EVIDENCE_MISMATCH",
   );
 
-  const badShape = validateCandidateFix({
-    targetPath: target,
-    issue_number: 502,
-    candidate_version: version,
-    recipe_id: "r1",
-    official_evidence_item_digest: "not-hex",
-    official_evidence_ref: OFFICIAL_RELEASE_URL,
-    verified: true,
-    nowMs: NOW,
-  });
+  const badShape = validateCandidateFix(
+    baseValidateInput(candidate, baseline, {
+      official_evidence_item_digest: "not-hex",
+      verified: true,
+    }),
+  );
   assert.equal(badShape.ok, false);
   assert.equal(badShape.error_code, "OFFICIAL_EVIDENCE_REQUIRED");
-});
 
-test("Ticket12 adversarial: official ref/digest mismatch and non-official ref refused", () => {
-  const target = makeTarget();
-  const version = "1.0.0";
-  writePositiveMeasurement(target, version);
-
-  const mismatch = validateCandidateFix({
-    targetPath: target,
-    issue_number: 502,
-    candidate_version: version,
-    recipe_id: "r1",
-    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
-    official_evidence_ref: OFFICIAL_COMMIT_URL, // real URL but wrong for digest
-    nowMs: NOW,
-  });
+  const mismatch = validateCandidateFix(
+    baseValidateInput(candidate, baseline, {
+      official_evidence_ref: OFFICIAL_COMMIT_URL,
+    }),
+  );
   assert.equal(mismatch.ok, false);
   assert.ok(
     mismatch.error_code === "OFFICIAL_EVIDENCE_REF_MISMATCH" ||
       mismatch.error_code === "OFFICIAL_EVIDENCE_MISMATCH",
   );
 
-  const nonOfficial = validateCandidateFix({
-    targetPath: target,
-    issue_number: 502,
-    candidate_version: version,
-    recipe_id: "r1",
-    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
-    official_evidence_ref: "https://evil.example/openai/codex/releases/tag/x",
-    nowMs: NOW,
-  });
+  const nonOfficial = validateCandidateFix(
+    baseValidateInput(candidate, baseline, {
+      official_evidence_ref: "https://evil.example/openai/codex/releases/tag/x",
+    }),
+  );
   assert.equal(nonOfficial.ok, false);
   assert.equal(nonOfficial.error_code, "OFFICIAL_EVIDENCE_REF_REFUSED");
-
-  const freeForm = validateCandidateFix({
-    targetPath: target,
-    issue_number: 502,
-    candidate_version: version,
-    recipe_id: "r1",
-    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
-    official_evidence_ref: "ref://official/501",
-    nowMs: NOW,
-  });
-  assert.equal(freeForm.ok, false);
-  assert.equal(freeForm.error_code, "OFFICIAL_EVIDENCE_REF_REFUSED");
 });
 
 test("Ticket12 adversarial: unsuitable upstream-fix evidence (user_reported issue) refused", () => {
-  const target = makeTarget();
-  const version = "1.0.0";
-  writePositiveMeasurement(target, version);
-  const r = validateCandidateFix({
-    targetPath: target,
-    issue_number: 502,
-    candidate_version: version,
-    recipe_id: "r1",
-    official_evidence_item_digest: USER_ISSUE_DIGEST,
-    official_evidence_ref: USER_ISSUE_URL,
-    nowMs: NOW,
-  });
+  const { baseline, candidate } = makeBaselineCandidatePair();
+  const r = validateCandidateFix(
+    baseValidateInput(candidate, baseline, {
+      official_evidence_item_digest: USER_ISSUE_DIGEST,
+      official_evidence_ref: USER_ISSUE_URL,
+    }),
+  );
   assert.equal(r.ok, false);
   assert.equal(r.error_code, "OFFICIAL_EVIDENCE_UNSUITABLE");
 });
@@ -1030,40 +1047,231 @@ test("Ticket12: bindOfficialEvidenceItem requires exact digest+URL match", () =>
   assert.equal(bad.ok, false);
 });
 
-test("Ticket12 adversarial: supersession evidence digest conflict refused", () => {
+test("Ticket12 adversarial: direct runCanary all-true booleans cannot RECOMMEND_UPGRADE", () => {
   const target = makeTarget();
-  writePositiveMeasurement(target, "1.0.0");
-  writePositiveMeasurement(target, "1.0.1"); // overwrite with second version later
-
-  writePositiveMeasurement(target, "1.0.0");
-  const first = validateCandidate({
+  const r = runCanary({
     targetPath: target,
-    issue_number: 503,
-    candidate_version: "1.0.0",
-    recipe_id: "recipe-conflict",
-    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
-    official_evidence_ref: OFFICIAL_RELEASE_URL,
+    candidate_version: OFFICIAL_BOUND_VERSION,
+    original_fault_absent: true,
+    core_regressions_passed: true,
+    canary_executed: true,
+    measured_outcomes: true,
+  });
+  assert.equal(r.ok, true);
+  assert.notEqual(r.version_guidance, "RECOMMEND_UPGRADE");
+  assert.equal(r.version_guidance, "UPGRADE_CANARY_AVAILABLE");
+});
+
+test("Ticket12 adversarial: direct supersedeRecipe verified/measured without witness cannot supersede", () => {
+  const target = makeTarget();
+  const r = supersedeRecipe({
+    targetPath: target,
+    recipe_id: "workaround-process-shim",
+    candidate_version: OFFICIAL_BOUND_VERSION,
+    upstream: {
+      ref: OFFICIAL_RELEASE_URL,
+      evidence_digest: OFFICIAL_RELEASE_DIGEST,
+      verified: true,
+      measured_validation: true,
+    },
     nowMs: NOW,
   });
+  assert.equal(r.ok, false);
+  assert.equal(r.error_code, "LIVE_WITNESS_REQUIRED");
+});
+
+test("Ticket12 adversarial: plain-object/JSON-cloned witness cannot authorize", () => {
+  const { baseline, candidate } = makeBaselineCandidatePair();
+  const measured = measureWithRegisteredProfile({
+    targetPath: candidate,
+    baselineTargetPath: baseline,
+    candidate_version: OFFICIAL_BOUND_VERSION,
+    profile_id: PROFILE,
+    nowMs: NOW,
+  });
+  assert.equal(measured.verdict, "positive");
+  assert.ok(measured.witness);
+  assert.equal(isLiveMeasurementWitness(measured.witness), true);
+
+  const cloned = JSON.parse(JSON.stringify(measured.witness ?? {}));
+  assert.equal(isLiveMeasurementWitness(cloned), false);
+
+  const plain = {
+    profile_id: PROFILE,
+    candidate_version: OFFICIAL_BOUND_VERSION,
+    baseline_fault_present: true,
+    candidate_fault_present: false,
+    candidate_core_ok: true,
+  };
+  assert.equal(isLiveMeasurementWitness(plain), false);
+
+  const canary = runCanary({
+    targetPath: candidate,
+    candidate_version: OFFICIAL_BOUND_VERSION,
+    original_fault_absent: true,
+    core_regressions_passed: true,
+    canary_executed: true,
+    measured_outcomes: true,
+    live_measurement_witness: cloned,
+  });
+  assert.notEqual(canary.version_guidance, "RECOMMEND_UPGRADE");
+
+  const sup = supersedeRecipe({
+    targetPath: candidate,
+    recipe_id: "r-clone",
+    candidate_version: OFFICIAL_BOUND_VERSION,
+    live_measurement_witness: plain,
+    upstream: {
+      ref: OFFICIAL_RELEASE_URL,
+      evidence_digest: OFFICIAL_RELEASE_DIGEST,
+      verified: true,
+      measured_validation: true,
+    },
+    nowMs: NOW,
+  });
+  assert.equal(sup.ok, false);
+  assert.equal(sup.error_code, "LIVE_WITNESS_REQUIRED");
+});
+
+test("Ticket12 adversarial: witness replay after supersession fails closed", () => {
+  const { baseline, candidate } = makeBaselineCandidatePair();
+  const first = validateCandidate(
+    baseValidateInput(candidate, baseline, { recipe_id: "recipe-once" }),
+  );
   assert.equal(first.ok, true);
   assert.equal(first.status, "SUPERSEDED");
 
-  writePositiveMeasurement(target, "1.0.1");
-  const second = validateCandidate({
-    targetPath: target,
-    issue_number: 503,
-    candidate_version: "1.0.1",
-    recipe_id: "recipe-conflict",
-    official_evidence_item_digest: OFFICIAL_COMMIT_DIGEST,
-    official_evidence_ref: OFFICIAL_COMMIT_URL,
-    nowMs: NOW + 1,
+  // Fresh pair but try to re-use would need same witness — measure again and
+  // consume via canary+supersede, then replay supersede with same witness.
+  const measured = measureWithRegisteredProfile({
+    targetPath: candidate,
+    baselineTargetPath: baseline,
+    candidate_version: OFFICIAL_BOUND_VERSION,
+    profile_id: PROFILE,
+    nowMs: NOW + 10,
   });
-  assert.equal(second.ok, false);
-  assert.ok(
-    second.error_code === "SUPERSESSION_EVIDENCE_CONFLICT" ||
-      second.candidate?.error_code === "SUPERSESSION_EVIDENCE_CONFLICT" ||
-      second.status === "REFUSED",
+  assert.equal(measured.verdict, "positive");
+  const w = measured.witness;
+  assert.ok(w);
+
+  const canary = runCanary({
+    targetPath: candidate,
+    candidate_version: OFFICIAL_BOUND_VERSION,
+    original_fault_absent: true,
+    core_regressions_passed: true,
+    canary_executed: true,
+    measured_outcomes: true,
+    live_measurement_witness: w,
+    nowMs: NOW + 11,
+  });
+  assert.equal(canary.version_guidance, "RECOMMEND_UPGRADE");
+
+  const sup1 = supersedeRecipe({
+    targetPath: candidate,
+    recipe_id: "recipe-replay",
+    candidate_version: OFFICIAL_BOUND_VERSION,
+    live_measurement_witness: w,
+    upstream: {
+      ref: OFFICIAL_RELEASE_URL,
+      evidence_digest: OFFICIAL_RELEASE_DIGEST,
+      verified: true,
+      measured_validation: true,
+    },
+    nowMs: NOW + 12,
+  });
+  assert.equal(sup1.ok, true);
+
+  const sup2 = supersedeRecipe({
+    targetPath: candidate,
+    recipe_id: "recipe-replay-2",
+    candidate_version: OFFICIAL_BOUND_VERSION,
+    live_measurement_witness: w,
+    upstream: {
+      ref: OFFICIAL_RELEASE_URL,
+      evidence_digest: OFFICIAL_RELEASE_DIGEST,
+      verified: true,
+      measured_validation: true,
+    },
+    nowMs: NOW + 13,
+  });
+  assert.equal(sup2.ok, false);
+  assert.equal(sup2.error_code, "LIVE_WITNESS_REPLAY");
+});
+
+test("Ticket12 adversarial: supersession evidence digest conflict refused", () => {
+  const { baseline, candidate } = makeBaselineCandidatePair();
+  const first = validateCandidate(
+    baseValidateInput(candidate, baseline, {
+      recipe_id: "recipe-conflict",
+      issue_number: 503,
+    }),
   );
+  assert.equal(first.ok, true);
+  assert.equal(first.status, "SUPERSEDED");
+
+  // Second attempt with different official evidence on a fresh positive pair.
+  const pair2 = makeBaselineCandidatePair("cg-t12-conf2-");
+  const second = validateCandidate(
+    baseValidateInput(pair2.candidate, pair2.baseline, {
+      recipe_id: "recipe-conflict",
+      issue_number: 503,
+      // Commit binds version_range.to 0.50.0 as well — use same version.
+      official_evidence_item_digest: OFFICIAL_COMMIT_DIGEST,
+      official_evidence_ref: OFFICIAL_COMMIT_URL,
+    }),
+  );
+  // Conflict is on lifecycle ledger under candidate root — first supersede
+  // wrote to first candidate root; second pair is a different root so no conflict.
+  // Force conflict on same target by re-running validate on same candidate with new evidence.
+  const third = validateCandidate(
+    baseValidateInput(candidate, baseline, {
+      recipe_id: "recipe-conflict",
+      issue_number: 503,
+      official_evidence_item_digest: OFFICIAL_COMMIT_DIGEST,
+      official_evidence_ref: OFFICIAL_COMMIT_URL,
+    }),
+  );
+  assert.equal(third.ok, false);
+  assert.ok(
+    third.error_code === "SUPERSESSION_EVIDENCE_CONFLICT" ||
+      third.candidate?.error_code === "SUPERSESSION_EVIDENCE_CONFLICT" ||
+      third.status === "REFUSED",
+  );
+  void second;
+});
+
+test("Ticket12 adversarial: active/protected non-disposable roots refused", () => {
+  const { candidate } = makeBaselineCandidatePair();
+  // Active-profile-like path: home ordinary dir is not a disposable fixture child.
+  const homeOrdinary = path.join(
+    process.env.HOME ?? "/tmp",
+    "cg-t12-not-disposable-probe",
+  );
+  try {
+    fs.mkdirSync(homeOrdinary, { recursive: true });
+  } catch {
+    return;
+  }
+  const r = validateCandidateFix(
+    baseValidateInput(candidate, homeOrdinary),
+  );
+  assert.equal(r.ok, false);
+  assert.ok(
+    r.error_code === "BASELINE_ISOLATION_REFUSED" ||
+      r.error_code === "CANDIDATE_ISOLATION_REFUSED" ||
+      r.error_code === "INVALID_TARGET",
+  );
+});
+
+test("Ticket12 adversarial: no network/mutation of measured artifacts", () => {
+  const { baseline, candidate } = makeBaselineCandidatePair();
+  const baseArt = fs.readFileSync(path.join(baseline, ARTIFACT_REL));
+  const candArt = fs.readFileSync(path.join(candidate, ARTIFACT_REL));
+  const r = validateCandidate(baseValidateInput(candidate, baseline));
+  assert.equal(r.ok, true);
+  assert.equal(r.network_used, false);
+  assert.deepEqual(fs.readFileSync(path.join(baseline, ARTIFACT_REL)), baseArt);
+  assert.deepEqual(fs.readFileSync(path.join(candidate, ARTIFACT_REL)), candArt);
 });
 
 function writeLedgerRaw(

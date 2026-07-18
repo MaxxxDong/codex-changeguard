@@ -37,6 +37,10 @@ export interface FollowupDispatchArgs {
   recipe_id?: string;
   official_evidence_item_digest?: string;
   official_evidence_ref?: string;
+  /** Disposable baseline root for registered live measurement (Ticket 12). */
+  baseline_target?: string;
+  /** Closed measurement profile id (Phase A: protected_process_shim_v1). */
+  measurement_profile_id?: string;
   original_fault_absent?: boolean;
   core_regressions_passed?: boolean;
   verified?: boolean;
@@ -174,8 +178,12 @@ export function dispatchFollowup(args: FollowupDispatchArgs): FollowupResult {
           e instanceof IssueUrlError ? e.message : "Invalid issue for candidate validation.";
         return failUsage(op, msg);
       }
+      // baseline + closed profile required for live measurement authority.
+      // Missing fields fail closed inside validateCandidateFix (no CLI boolean bypass).
       return validateCandidate({
         targetPath: target,
+        baselineTargetPath: asString(args.baseline_target) ?? "",
+        measurement_profile_id: asString(args.measurement_profile_id) ?? "",
         issue_number,
         candidate_version,
         recipe_id,

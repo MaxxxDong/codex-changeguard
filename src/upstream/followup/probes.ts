@@ -2,27 +2,32 @@
  * Registered bounded probes for follow-up evidence.
  * Only allowlisted probe ids; never arbitrary paths or shell.
  *
- * Candidate validation uses a positive measurement contract:
- * absence of markers / empty dirs / caller booleans never prove success.
+ * Candidate validation authority is the process-local registered live
+ * measurement runner (Ticket 12) — never persisted self-attestation JSON.
+ * canary/candidate-measurement.json, if present, is treated as deprecated
+ * and always inconclusive for upgrade/supersession.
  */
 import fs from "node:fs";
 import path from "node:path";
 import {
   resolveTargetDirectory,
   resolveNamedCandidate,
-  readBoundedFile,
   PathSafetyError,
 } from "../../core/path-safety.js";
-import { sha256Canonical, sha256Text } from "../../evidence/canonical.js";
+import { sha256Text } from "../../evidence/canonical.js";
 import { assertNoLeakPaths, redactText } from "../../core/redact.js";
 import type { FollowupProbeResult, RegisteredProbeId } from "./types.js";
 import {
-  CANDIDATE_MEASUREMENT_MAX_BYTES,
   CANDIDATE_MEASUREMENT_REL,
-  CANDIDATE_MEASUREMENT_SCHEMA_VERSION,
   MAX_STRING,
   MAX_VERSION_LEN,
 } from "./limits.js";
+import {
+  PROTECTED_PROCESS_SHIM_PROFILE_V1,
+  runRegisteredLiveMeasurement,
+  type LiveMeasurementWitness,
+  type RegisteredLiveMeasurementResult,
+} from "../../core/lifecycle/live-measurement.js";
 
 function detailOf(s: string): string {
   return assertNoLeakPaths(redactText(s)).slice(0, MAX_STRING);
@@ -224,18 +229,7 @@ function probeLogs(targetReal: string): FollowupProbeResult {
   };
 }
 
-// ─── Positive candidate-measurement contract ───────────────────────────────
-
-const MEASUREMENT_KEYS = [
-  "schema_version",
-  "candidate_version",
-  "baseline_fault_reproduced",
-  "candidate_fault_absent",
-  "core_regressions_passed",
-  "content_sha256",
-] as const;
-
-const SHA256_HEX = /^[a-f0-9]{64}$/;
+// ─── Candidate measurement (live registered profile only) ──────────────────
 
 export type CandidateMeasurementVerdict =
   | "positive"
@@ -243,97 +237,25 @@ export type CandidateMeasurementVerdict =
   | "inconclusive";
 
 export interface CandidateMeasurementResult {
-  /** positive = all three phases true; negative = valid doc with a failed phase; inconclusive = absent/malformed. */
+  /** positive = live registered probes all pass; negative = measured fail; inconclusive = refuse. */
   verdict: CandidateMeasurementVerdict;
   measured_fault_absent: boolean | null;
   measured_core_ok: boolean | null;
   baseline_fault_reproduced: boolean | null;
   candidate_version_bound: string | null;
+  profile_id: string | null;
+  /** Process-local witness; never serializable authority. */
+  witness: LiveMeasurementWitness | null;
+  public_digests: RegisteredLiveMeasurementResult["public_digests"] | null;
   detail: string;
   error_code: string | null;
   probe_results: FollowupProbeResult[];
 }
 
-function exactKeys(obj: Record<string, unknown>, keys: readonly string[]): boolean {
-  const got = Object.keys(obj).sort();
-  const exp = [...keys].sort();
-  if (got.length !== exp.length) return false;
-  for (let i = 0; i < exp.length; i++) {
-    if (got[i] !== exp[i]) return false;
-  }
-  return true;
-}
-
-function measurementIntegrityDigest(
-  body: Omit<
-    {
-      schema_version: number;
-      candidate_version: string;
-      baseline_fault_reproduced: boolean;
-      candidate_fault_absent: boolean;
-      core_regressions_passed: boolean;
-    },
-    never
-  >,
-): string {
-  return sha256Canonical({
-    schema_version: body.schema_version,
-    candidate_version: body.candidate_version,
-    baseline_fault_reproduced: body.baseline_fault_reproduced,
-    candidate_fault_absent: body.candidate_fault_absent,
-    core_regressions_passed: body.core_regressions_passed,
-    content_sha256: null,
-  });
-}
-
-/** Build a sealed positive/negative measurement document (tests / fixtures). */
-export function sealCandidateMeasurement(input: {
-  candidate_version: string;
-  baseline_fault_reproduced: boolean;
-  candidate_fault_absent: boolean;
-  core_regressions_passed: boolean;
-}): {
-  schema_version: 1;
-  candidate_version: string;
-  baseline_fault_reproduced: boolean;
-  candidate_fault_absent: boolean;
-  core_regressions_passed: boolean;
-  content_sha256: string;
-} {
-  const body = {
-    schema_version: CANDIDATE_MEASUREMENT_SCHEMA_VERSION as 1,
-    candidate_version: input.candidate_version,
-    baseline_fault_reproduced: input.baseline_fault_reproduced,
-    candidate_fault_absent: input.candidate_fault_absent,
-    core_regressions_passed: input.core_regressions_passed,
-  };
-  return {
-    ...body,
-    content_sha256: measurementIntegrityDigest(body),
-  };
-}
-
-function inconclusive(
-  detail: string,
-  code: string,
-  probes: FollowupProbeResult[],
-): CandidateMeasurementResult {
-  return {
-    verdict: "inconclusive",
-    measured_fault_absent: null,
-    measured_core_ok: null,
-    baseline_fault_reproduced: null,
-    candidate_version_bound: null,
-    detail: detailOf(detail),
-    error_code: code,
-    probe_results: probes,
-  };
-}
-
 /**
- * Load and validate the positive candidate-measurement contract.
- * Fail closed on missing/malformed/symlink/TOCTOU/digest/version mismatch.
- * Never treats empty dirs or caller booleans as success.
+ * Legacy self-attestation path is permanently deprecated.
+ * Even a well-formed, self-consistent all-true JSON never grants a positive
+ * verdict — content hash proves integrity only, not measurement authority.
  */
 export function loadCandidateMeasurement(
   targetPath: string,
@@ -348,213 +270,169 @@ export function loadCandidateMeasurement(
     candidate_version.length === 0 ||
     candidate_version.length > MAX_VERSION_LEN
   ) {
-    return inconclusive(
-      "Invalid candidate_version for measurement bind.",
-      "INVALID_VERSION",
-      probes,
-    );
+    return {
+      verdict: "inconclusive",
+      measured_fault_absent: null,
+      measured_core_ok: null,
+      baseline_fault_reproduced: null,
+      candidate_version_bound: null,
+      profile_id: null,
+      witness: null,
+      public_digests: null,
+      detail: detailOf("Invalid candidate_version for measurement bind."),
+      error_code: "INVALID_VERSION",
+      probe_results: probes,
+    };
   }
 
   let targetReal: string;
   try {
     ({ targetReal } = resolveTargetDirectory(targetPath));
   } catch {
-    return inconclusive("Isolated target refused for measurement.", "INVALID_TARGET", probes);
-  }
-
-  let meta: ReturnType<typeof resolveNamedCandidate>;
-  try {
-    meta = resolveNamedCandidate(targetReal, CANDIDATE_MEASUREMENT_REL);
-  } catch (e) {
-    if (e instanceof PathSafetyError) {
-      if (e.code === "SYMLINK_ESCAPE") {
-        return inconclusive(
-          "Symlinked candidate measurement refused.",
-          "MEASUREMENT_SYMLINK",
-          probes,
-        );
-      }
-      if (e.code === "CANDIDATE_NOT_FOUND") {
-        return inconclusive(
-          "Positive candidate measurement absent; empty/marker absence is not success.",
-          "MEASUREMENT_ABSENT",
-          probes,
-        );
-      }
-      return inconclusive(
-        `Candidate measurement path refused: ${e.code}`,
-        "MEASUREMENT_PATH",
-        probes,
-      );
-    }
-    return inconclusive("Candidate measurement path refused.", "MEASUREMENT_PATH", probes);
-  }
-
-  if (meta.size > CANDIDATE_MEASUREMENT_MAX_BYTES) {
-    return inconclusive(
-      "Candidate measurement exceeds size limit.",
-      "MEASUREMENT_SIZE",
-      probes,
-    );
-  }
-
-  let buf: Buffer;
-  try {
-    buf = readBoundedFile(meta.real, CANDIDATE_MEASUREMENT_MAX_BYTES, meta.preOpen);
-  } catch (e) {
-    const code = e instanceof PathSafetyError ? e.code : "MEASUREMENT_READ";
-    return inconclusive(
-      `Candidate measurement unreadable: ${code}`,
-      "MEASUREMENT_READ",
-      probes,
-    );
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(buf.toString("utf8"));
-  } catch {
-    return inconclusive(
-      "Candidate measurement JSON malformed.",
-      "MEASUREMENT_MALFORMED",
-      probes,
-    );
-  }
-
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return inconclusive(
-      "Candidate measurement shape refused.",
-      "MEASUREMENT_SCHEMA",
-      probes,
-    );
-  }
-  const o = parsed as Record<string, unknown>;
-  if (!exactKeys(o, MEASUREMENT_KEYS)) {
-    return inconclusive(
-      "Candidate measurement keys refused (exact allowlist).",
-      "MEASUREMENT_SCHEMA",
-      probes,
-    );
-  }
-  if (o.schema_version !== CANDIDATE_MEASUREMENT_SCHEMA_VERSION) {
-    return inconclusive(
-      "Candidate measurement schema_version refused.",
-      "MEASUREMENT_SCHEMA",
-      probes,
-    );
-  }
-  if (
-    typeof o.candidate_version !== "string" ||
-    o.candidate_version.length === 0 ||
-    o.candidate_version.length > MAX_VERSION_LEN
-  ) {
-    return inconclusive(
-      "Candidate measurement candidate_version refused.",
-      "MEASUREMENT_SCHEMA",
-      probes,
-    );
-  }
-  if (typeof o.baseline_fault_reproduced !== "boolean") {
-    return inconclusive(
-      "baseline_fault_reproduced must be boolean.",
-      "MEASUREMENT_SCHEMA",
-      probes,
-    );
-  }
-  if (typeof o.candidate_fault_absent !== "boolean") {
-    return inconclusive(
-      "candidate_fault_absent must be boolean.",
-      "MEASUREMENT_SCHEMA",
-      probes,
-    );
-  }
-  if (typeof o.core_regressions_passed !== "boolean") {
-    return inconclusive(
-      "core_regressions_passed must be boolean.",
-      "MEASUREMENT_SCHEMA",
-      probes,
-    );
-  }
-  if (typeof o.content_sha256 !== "string" || !SHA256_HEX.test(o.content_sha256)) {
-    return inconclusive(
-      "content_sha256 must be 64 hex.",
-      "MEASUREMENT_DIGEST",
-      probes,
-    );
-  }
-
-  const expected = measurementIntegrityDigest({
-    schema_version: CANDIDATE_MEASUREMENT_SCHEMA_VERSION,
-    candidate_version: o.candidate_version,
-    baseline_fault_reproduced: o.baseline_fault_reproduced,
-    candidate_fault_absent: o.candidate_fault_absent,
-    core_regressions_passed: o.core_regressions_passed,
-  });
-  if (expected !== o.content_sha256) {
-    return inconclusive(
-      "Candidate measurement content_sha256 mismatch (tamper/malformed).",
-      "MEASUREMENT_DIGEST",
-      probes,
-    );
-  }
-
-  if (o.candidate_version !== candidate_version) {
-    return inconclusive(
-      "Measurement candidate_version does not match requested candidate.",
-      "MEASUREMENT_VERSION_MISMATCH",
-      probes,
-    );
-  }
-
-  // Baseline must have positively reproduced the fault; otherwise inconclusive.
-  if (o.baseline_fault_reproduced !== true) {
-    return inconclusive(
-      "Baseline fault was not positively reproduced; cannot prove fix.",
-      "MEASUREMENT_BASELINE_MISSING",
-      probes,
-    );
-  }
-
-  const measured_fault_absent = o.candidate_fault_absent === true;
-  const measured_core_ok = o.core_regressions_passed === true;
-
-  if (measured_fault_absent && measured_core_ok) {
     return {
-      verdict: "positive",
-      measured_fault_absent: true,
-      measured_core_ok: true,
-      baseline_fault_reproduced: true,
-      candidate_version_bound: o.candidate_version,
-      detail: detailOf(
-        "Positive measurement: baseline reproduced, candidate fault absent, core regressions passed.",
-      ),
-      error_code: null,
+      verdict: "inconclusive",
+      measured_fault_absent: null,
+      measured_core_ok: null,
+      baseline_fault_reproduced: null,
+      candidate_version_bound: null,
+      profile_id: null,
+      witness: null,
+      public_digests: null,
+      detail: detailOf("Isolated target refused for measurement."),
+      error_code: "INVALID_TARGET",
       probe_results: probes,
     };
   }
 
+  // If a legacy file exists, explicitly refuse it as authority (adversarial coverage).
+  try {
+    resolveNamedCandidate(targetReal, CANDIDATE_MEASUREMENT_REL);
+    return {
+      verdict: "inconclusive",
+      measured_fault_absent: null,
+      measured_core_ok: null,
+      baseline_fault_reproduced: null,
+      candidate_version_bound: null,
+      profile_id: null,
+      witness: null,
+      public_digests: null,
+      detail: detailOf(
+        "Legacy candidate-measurement.json is deprecated and never authorizes upgrade/supersession (self-attestation is not measurement authority).",
+      ),
+      error_code: "MEASUREMENT_SELF_ATTESTATION_DEPRECATED",
+      probe_results: probes,
+    };
+  } catch (e) {
+    if (e instanceof PathSafetyError && e.code === "SYMLINK_ESCAPE") {
+      return {
+        verdict: "inconclusive",
+        measured_fault_absent: null,
+        measured_core_ok: null,
+        baseline_fault_reproduced: null,
+        candidate_version_bound: null,
+        profile_id: null,
+        witness: null,
+        public_digests: null,
+        detail: detailOf("Symlinked candidate measurement refused."),
+        error_code: "MEASUREMENT_SYMLINK",
+        probe_results: probes,
+      };
+    }
+    // Absent or other path refusal → still not authority; direct live profile required.
+  }
+
   return {
-    verdict: "negative",
-    measured_fault_absent,
-    measured_core_ok,
-    baseline_fault_reproduced: true,
-    candidate_version_bound: o.candidate_version,
+    verdict: "inconclusive",
+    measured_fault_absent: null,
+    measured_core_ok: null,
+    baseline_fault_reproduced: null,
+    candidate_version_bound: null,
+    profile_id: null,
+    witness: null,
+    public_digests: null,
     detail: detailOf(
-      `Measured negative: fault_absent=${measured_fault_absent};core_ok=${measured_core_ok}`,
+      "Persisted candidate measurement never authorizes upgrade; use registered live profile measurement.",
     ),
-    error_code: null,
+    error_code: "MEASUREMENT_AUTHORITY_REQUIRED",
     probe_results: probes,
   };
 }
 
 /**
- * Measured canary probes for candidate-fix validation in a disposable target.
- * Returns independently measured flags — caller-declared values are ignored.
- * Absence/empty-dir never proves success (inconclusive).
+ * Run the closed registered live measurement profile (Phase A:
+ * protected_process_shim_v1). Only this path may mint a process-local witness.
+ */
+export function measureWithRegisteredProfile(input: {
+  targetPath: string;
+  baselineTargetPath: string;
+  candidate_version: string;
+  profile_id: string;
+  nowMs?: number;
+}): CandidateMeasurementResult {
+  const infoProbes: FollowupProbeResult[] = [];
+  try {
+    infoProbes.push(
+      runRegisteredProbe(input.targetPath, "core_health_readonly"),
+    );
+  } catch {
+    /* ignore — live runner has its own path checks */
+  }
+
+  const live = runRegisteredLiveMeasurement({
+    targetPath: input.targetPath,
+    baselineTargetPath: input.baselineTargetPath,
+    candidate_version: input.candidate_version,
+    profile_id: input.profile_id,
+    nowMs: input.nowMs,
+  });
+
+  // Map ordered probe digests into FollowupProbeResult-shaped public evidence
+  // (no absolute roots; digests only).
+  const mappedProbes: FollowupProbeResult[] = live.public_digests.probe_digests.map(
+    (d, i) => ({
+      probe_id: "core_health_readonly" as RegisteredProbeId,
+      measured: true as const,
+      passed:
+        live.verdict === "positive"
+          ? true
+          : live.verdict === "negative"
+            ? i === 0
+            : false,
+      detail: detailOf(
+        `registered_live_probe[${i}];digest=${d.slice(0, 12)}…;scope=artifact_level_disposable_pair`,
+      ),
+      content_digest: d,
+    }),
+  );
+
+  return {
+    verdict: live.verdict,
+    measured_fault_absent: live.measured_fault_absent,
+    measured_core_ok: live.measured_core_ok,
+    baseline_fault_reproduced: live.baseline_fault_reproduced,
+    candidate_version_bound:
+      live.verdict === "inconclusive" ? null : live.candidate_version,
+    profile_id: live.profile_id,
+    witness: live.witness,
+    public_digests: live.public_digests,
+    detail: detailOf(live.detail),
+    error_code: live.error_code,
+    probe_results: mappedProbes.length > 0 ? mappedProbes : infoProbes,
+  };
+}
+
+/**
+ * Measured canary probes for candidate-fix validation.
+ * Without baseline + profile, always inconclusive (no self-attestation path).
  */
 export function measureCandidateFaultAndCore(
   targetPath: string,
   candidate_version?: string,
+  opts?: {
+    baselineTargetPath?: string;
+    profile_id?: string;
+    nowMs?: number;
+  },
 ): {
   measured_fault_absent: boolean | null;
   measured_core_ok: boolean | null;
@@ -562,49 +440,36 @@ export function measureCandidateFaultAndCore(
   probe_results: FollowupProbeResult[];
   detail: string;
   error_code: string | null;
+  witness: LiveMeasurementWitness | null;
 } {
-  // Without a bound version, only empty-target / path checks apply → inconclusive.
   const version =
     typeof candidate_version === "string" && candidate_version.length > 0
       ? candidate_version
       : "";
-  if (!version) {
-    const core = (() => {
-      try {
-        return runRegisteredProbe(targetPath, "core_health_readonly");
-      } catch {
-        return {
-          probe_id: "core_health_readonly" as const,
-          measured: true as const,
-          passed: false,
-          detail: "probe failed",
-          content_digest: digestOf({ error: true }),
-        };
-      }
-    })();
-    const repro = (() => {
-      try {
-        return runRegisteredProbe(targetPath, "reproduction_window_probe");
-      } catch {
-        return {
-          probe_id: "reproduction_window_probe" as const,
-          measured: true as const,
-          passed: false,
-          detail: "probe failed",
-          content_digest: digestOf({ error: true }),
-        };
-      }
-    })();
+  if (
+    !version ||
+    !opts?.baselineTargetPath ||
+    !opts?.profile_id
+  ) {
+    const m = loadCandidateMeasurement(targetPath, version || "missing");
     return {
-      measured_fault_absent: null,
-      measured_core_ok: null,
+      measured_fault_absent: m.measured_fault_absent,
+      measured_core_ok: m.measured_core_ok,
       verdict: "inconclusive",
-      probe_results: [core, repro],
-      detail: "candidate_version required for positive measurement bind",
-      error_code: "MEASUREMENT_VERSION_REQUIRED",
+      probe_results: m.probe_results,
+      detail:
+        "Registered live measurement requires baselineTargetPath + measurement_profile_id + candidate_version.",
+      error_code: "MEASUREMENT_AUTHORITY_REQUIRED",
+      witness: null,
     };
   }
-  const m = loadCandidateMeasurement(targetPath, version);
+  const m = measureWithRegisteredProfile({
+    targetPath,
+    baselineTargetPath: opts.baselineTargetPath,
+    candidate_version: version,
+    profile_id: opts.profile_id,
+    nowMs: opts.nowMs,
+  });
   return {
     measured_fault_absent: m.measured_fault_absent,
     measured_core_ok: m.measured_core_ok,
@@ -612,5 +477,8 @@ export function measureCandidateFaultAndCore(
     probe_results: m.probe_results,
     detail: m.detail,
     error_code: m.error_code,
+    witness: m.witness,
   };
 }
+
+export { PROTECTED_PROCESS_SHIM_PROFILE_V1 };
