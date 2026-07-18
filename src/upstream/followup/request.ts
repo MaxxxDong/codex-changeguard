@@ -1,8 +1,7 @@
 /**
- * Bounded follow-up request JSON parser for CLI/MCP public seams.
- * Closed allowlists per operation; forbidden privacy keys and authority
- * smuggling (snapshot_path, witness, shell, binary paths) fail closed.
- * Target and operation are never overridden by request body.
+ * Canonical follow-up wire parser for MCP objects and CLI request-file / inline inputs.
+ * Single path: bounded size, recursive forbidden keys, exact per-operation allowlists.
+ * Target and operation are supplied by the seam and never overridden by request body.
  */
 import {
   FORBIDDEN_FOLLOWUP_KEYS,
@@ -11,7 +10,13 @@ import {
 } from "./limits.js";
 import type { FollowupDispatchArgs, FollowupOperation } from "./types.js";
 
-/** Keys never accepted from request JSON (authority / privacy / executable). */
+/** Max nesting depth for recursive forbidden-key scans (depth 0 = root). */
+export const MAX_FOLLOWUP_REQUEST_DEPTH = 4;
+
+/**
+ * Keys never accepted from public wire (authority / privacy / executable /
+ * target-op smuggling / removed public surfaces).
+ */
 const GLOBAL_FORBIDDEN_REQUEST_KEYS = Object.freeze([
   ...FORBIDDEN_FOLLOWUP_KEYS,
   "snapshot_path",
@@ -38,20 +43,32 @@ const GLOBAL_FORBIDDEN_REQUEST_KEYS = Object.freeze([
   "target_path",
   "operation",
   "op",
+  // Removed public wire surfaces (tests use env / direct domain APIs).
+  "state_dir",
+  "stateDir",
+  "state-dir",
+  "original_fault_absent",
+  "core_regressions_passed",
+  "verified",
+  "stateOnly",
+  "state_only",
 ]);
 
 const GLOBAL_FORBIDDEN = new Set(
   GLOBAL_FORBIDDEN_REQUEST_KEYS.map((k) => k.toLowerCase()),
 );
 
-/** Per-operation closed allowlists (request body only; target/op come from CLI). */
+/**
+ * Per-operation closed allowlists (request body only; target/op come from seam).
+ * Authority booleans and state_dir are intentionally absent.
+ */
 const OP_ALLOWED_KEYS: Record<FollowupOperation, ReadonlySet<string>> = {
-  subscribe: new Set(["issue"]),
-  unsubscribe: new Set(["issue"]),
-  status: new Set([]),
-  session_hint: new Set([]),
-  refresh: new Set(["event", "disclosure_decision"]),
-  process_event: new Set(["event"]),
+  subscribe: new Set(["issue", "now_ms"]),
+  unsubscribe: new Set(["issue", "now_ms"]),
+  status: new Set(["now_ms"]),
+  session_hint: new Set(["now_ms"]),
+  refresh: new Set(["event", "disclosure_decision", "now_ms"]),
+  process_event: new Set(["event", "now_ms"]),
   validate_candidate: new Set([
     "issue",
     "candidate_version",
@@ -60,9 +77,6 @@ const OP_ALLOWED_KEYS: Record<FollowupOperation, ReadonlySet<string>> = {
     "official_evidence_ref",
     "baseline_target",
     "measurement_profile_id",
-    "original_fault_absent",
-    "core_regressions_passed",
-    "verified",
     "now_ms",
   ]),
 };
@@ -87,15 +101,17 @@ function fail(code: string, message: string): FollowupRequestParseFail {
 }
 
 /**
- * Scan object keys (shallow + one nested level for event objects) for
- * forbidden privacy / authority keys. Path-free generic errors only.
+ * Scan object keys recursively for forbidden privacy / authority keys.
+ * Path-free generic errors only.
  */
 export function refuseForbiddenFollowupKeys(
   obj: unknown,
   depth = 0,
 ): FollowupRequestParseFail | null {
   if (obj === null || typeof obj !== "object") return null;
-  if (depth > 4) return fail("DEPTH_LIMIT", "Request nesting depth refused.");
+  if (depth > MAX_FOLLOWUP_REQUEST_DEPTH) {
+    return fail("DEPTH_LIMIT", "Request nesting depth refused.");
+  }
   if (Array.isArray(obj)) {
     for (const v of obj) {
       const r = refuseForbiddenFollowupKeys(v, depth + 1);
@@ -119,27 +135,10 @@ export function refuseForbiddenFollowupKeys(
   return null;
 }
 
-/**
- * Parse a bounded JSON request body for a known follow-up operation.
- * Does not accept target or operation overrides.
- */
-export function parseFollowupRequestJson(
-  raw: string,
+function parseFollowupRequestObject(
+  obj: Record<string, unknown>,
   operation: FollowupOperation,
 ): FollowupRequestParseResult {
-  if (Buffer.byteLength(raw, "utf8") > MAX_FOLLOWUP_REQUEST_BYTES) {
-    return fail("SIZE_LIMIT", "Follow-up request exceeds size limit.");
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw) as unknown;
-  } catch {
-    return fail("MALFORMED_JSON", "Follow-up request JSON is malformed.");
-  }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return fail("INVALID_INPUT", "Follow-up request must be a JSON object.");
-  }
-  const obj = parsed as Record<string, unknown>;
   const forbidden = refuseForbiddenFollowupKeys(obj);
   if (forbidden) return forbidden;
 
@@ -215,24 +214,6 @@ export function parseFollowupRequestJson(
     }
     fields.measurement_profile_id = obj.measurement_profile_id;
   }
-  if (Object.prototype.hasOwnProperty.call(obj, "original_fault_absent")) {
-    if (typeof obj.original_fault_absent !== "boolean") {
-      return fail("INVALID_INPUT", "Invalid original_fault_absent.");
-    }
-    fields.original_fault_absent = obj.original_fault_absent;
-  }
-  if (Object.prototype.hasOwnProperty.call(obj, "core_regressions_passed")) {
-    if (typeof obj.core_regressions_passed !== "boolean") {
-      return fail("INVALID_INPUT", "Invalid core_regressions_passed.");
-    }
-    fields.core_regressions_passed = obj.core_regressions_passed;
-  }
-  if (Object.prototype.hasOwnProperty.call(obj, "verified")) {
-    if (typeof obj.verified !== "boolean") {
-      return fail("INVALID_INPUT", "Invalid verified.");
-    }
-    fields.verified = obj.verified;
-  }
   if (Object.prototype.hasOwnProperty.call(obj, "now_ms")) {
     if (typeof obj.now_ms !== "number" || !Number.isFinite(obj.now_ms)) {
       return fail("INVALID_INPUT", "Invalid now_ms.");
@@ -249,4 +230,48 @@ export function parseFollowupRequestJson(
   }
 
   return { ok: true, fields };
+}
+
+/**
+ * Parse a bounded JSON request body (string) for a known follow-up operation.
+ * Does not accept target or operation overrides.
+ */
+export function parseFollowupRequestJson(
+  raw: string,
+  operation: FollowupOperation,
+): FollowupRequestParseResult {
+  if (Buffer.byteLength(raw, "utf8") > MAX_FOLLOWUP_REQUEST_BYTES) {
+    return fail("SIZE_LIMIT", "Follow-up request exceeds size limit.");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    return fail("MALFORMED_JSON", "Follow-up request JSON is malformed.");
+  }
+  return parseFollowupWireBody(parsed, operation);
+}
+
+/**
+ * Parse an already-materialized wire body (MCP tool arguments minus target/operation,
+ * or a CLI-built inline object). Enforces the same size, depth, forbidden-key, and
+ * allowlist rules as {@link parseFollowupRequestJson}.
+ */
+export function parseFollowupWireBody(
+  body: unknown,
+  operation: FollowupOperation,
+): FollowupRequestParseResult {
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(body);
+  } catch {
+    return fail("INVALID_INPUT", "Follow-up request is not serializable.");
+  }
+  if (Buffer.byteLength(serialized, "utf8") > MAX_FOLLOWUP_REQUEST_BYTES) {
+    return fail("SIZE_LIMIT", "Follow-up request exceeds size limit.");
+  }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    return fail("INVALID_INPUT", "Follow-up request must be a JSON object.");
+  }
+  return parseFollowupRequestObject(body as Record<string, unknown>, operation);
 }

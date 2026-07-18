@@ -293,10 +293,37 @@ test("Ticket12 P2: request JSON rejects witness / shell / target override keys",
     "target",
     "operation",
     "token",
+    "state_dir",
+    "original_fault_absent",
+    "core_regressions_passed",
+    "verified",
   ]) {
     const body: Record<string, unknown> = { issue: 1 };
     body[key] = key === "issue" ? 1 : "evil";
     const r = parseFollowupRequestJson(JSON.stringify(body), "subscribe");
     assert.equal(r.ok, false, `key ${key}`);
+  }
+});
+
+test("Ticket12 P2: authority booleans are EXTRA_FIELD on validate_candidate request", () => {
+  const body = {
+    issue: 1,
+    candidate_version: "0.50.0",
+    recipe_id: "r1",
+    official_evidence_item_digest: OFFICIAL_BROWSER_DIFF_DIGEST,
+    official_evidence_ref: OFFICIAL_BROWSER_DIFF_URL,
+    baseline_target: "/tmp/x",
+    measurement_profile_id: PROFILE,
+    original_fault_absent: true,
+    core_regressions_passed: true,
+    verified: true,
+  };
+  const r = parseFollowupRequestJson(JSON.stringify(body), "validate_candidate");
+  assert.equal(r.ok, false);
+  if (!r.ok) {
+    assert.ok(
+      r.code === "EXTRA_FIELD" || r.code === "FORBIDDEN_FIELD",
+      r.code,
+    );
   }
 });

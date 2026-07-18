@@ -23,10 +23,8 @@ import type {
   SystemEnumerateCaps,
 } from "../instances/types.js";
 import { runSessionStart } from "./session-start.js";
-import {
-  sessionFollowupHintFromState,
-  REFRESH_DUE_HINT,
-} from "../upstream/followup/index.js";
+import { REFRESH_DUE_HINT } from "../upstream/followup/limits.js";
+import { sessionFollowupHintFromState } from "../upstream/followup/engine.js";
 
 const MAX_STDIN_BYTES = 64 * 1024;
 

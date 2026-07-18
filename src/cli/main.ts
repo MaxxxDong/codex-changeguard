@@ -15,7 +15,7 @@
  *   changeguard scan-system                    (production registered system adapter)
  *   changeguard session-start <inventory-root> [--hook-trust=…]  (manual fixture path)
  *   changeguard lifecycle <operation> <isolated-target> [--key=value …]
- *   changeguard followup <operation> <isolated-target> [--request=<request.json>] [--state-dir=<dir>] …
+ *   changeguard followup <operation> <isolated-target> [--request=<request.json>] …
  *   changeguard platform-status [--probe-host=true|false] [--receipt=<path>] [--plan] [--adapter=<id>]
  *   changeguard platform-receipt-validate <receipt.json>
  *
@@ -82,6 +82,7 @@ import {
   dispatchFollowup,
   isFollowupOperation,
   parseFollowupRequestJson,
+  parseFollowupWireBody,
   MAX_FOLLOWUP_REQUEST_BYTES,
   type FollowupResult,
 } from "../upstream/followup/index.js";
@@ -1220,9 +1221,11 @@ function runLifecycleCli(rest: string[]): void {
 }
 
 /**
- * Parse `followup <operation> <target> [--request=<json>] [--state-dir=…] [--key=value]`.
+ * Parse `followup <operation> <target> [--request=<json>] [--key=value]`.
  * Target and operation are positional and never overridden by request JSON.
- * No witness / snapshot_path / shell / binary path may enter from JSON.
+ * Inline flags and --request both pass through the canonical wire parser.
+ * Mixing --request with inline request fields is refused (REQUEST_CONFLICT).
+ * State is resolved from CHANGEGUARD_FOLLOWUP_STATE_DIR / PLUGIN_DATA / XDG only.
  */
 function followupUsageError(): never {
   const result: FollowupResult = {
@@ -1254,7 +1257,7 @@ function followupUsageError(): never {
     evidence: [],
     error_code: "USAGE",
     error_message:
-      "Usage: changeguard followup <operation> <isolated-target> [--request=<request.json>] [--state-dir=<dir>] [--issue=…] [--candidate-version=…] …",
+      "Usage: changeguard followup <operation> <isolated-target> [--request=<request.json>] [--issue=…] [--candidate-version=…] …",
     network_used: false,
     target_mutated: false,
     repair_applied: false,
@@ -1264,6 +1267,44 @@ function followupUsageError(): never {
   };
   printJson(result, 2);
 }
+
+function followupParseFail(
+  operation: string,
+  code: string,
+  message: string,
+  exitCode = 1,
+): never {
+  printJson(
+    {
+      schema_version: 1,
+      ok: false,
+      operation,
+      status: "INVALID_INPUT",
+      error_code: code,
+      error_message: message,
+      network_used: false,
+      target_mutated: false,
+      repair_applied: false,
+      external_write: false,
+      adapter_status: "not_applicable",
+      contribution_claim: "none",
+    },
+    exitCode,
+  );
+}
+
+/** CLI flag keys that contribute to the request body (not --request itself). */
+const FOLLOWUP_INLINE_BODY_FLAGS = new Set([
+  "issue",
+  "event-json",
+  "candidate-version",
+  "recipe-id",
+  "official-evidence-item-digest",
+  "official-evidence-ref",
+  "baseline-target",
+  "measurement-profile-id",
+  "now-ms",
+]);
 
 function runFollowupCli(rest: string[]): void {
   const positional = rest.filter((a) => !a.startsWith("-"));
@@ -1275,11 +1316,11 @@ function runFollowupCli(rest: string[]): void {
   if (!operation || !target || !isFollowupOperation(operation)) {
     followupUsageError();
   }
-  const args: FollowupDispatchArgs = {
-    target,
-    operation,
-  };
+
   let requestPath: string | null = null;
+  const inlineBody: Record<string, unknown> = {};
+  let hasInlineBody = false;
+
   for (const f of flags) {
     const eq = f.indexOf("=");
     if (!f.startsWith("--") || eq < 0) {
@@ -1292,167 +1333,118 @@ function runFollowupCli(rest: string[]): void {
         if (raw.length === 0) followupUsageError();
         requestPath = raw;
         break;
-      case "state-dir":
-        if (raw.length === 0) followupUsageError();
-        args.state_dir = raw;
-        break;
       case "issue":
         if (raw.length === 0) followupUsageError();
-        args.issue = raw;
+        inlineBody.issue = raw;
+        hasInlineBody = true;
         break;
-      case "event-json":
+      case "event-json": {
+        let eventParsed: unknown;
         try {
-          args.event = JSON.parse(raw) as unknown;
+          eventParsed = JSON.parse(raw) as unknown;
         } catch {
           followupUsageError();
         }
+        inlineBody.event = eventParsed;
+        hasInlineBody = true;
         break;
+      }
       case "candidate-version":
-        args.candidate_version = raw;
+        if (raw.length === 0) followupUsageError();
+        inlineBody.candidate_version = raw;
+        hasInlineBody = true;
         break;
       case "recipe-id":
-        args.recipe_id = raw;
+        if (raw.length === 0) followupUsageError();
+        inlineBody.recipe_id = raw;
+        hasInlineBody = true;
         break;
       case "official-evidence-item-digest":
-        args.official_evidence_item_digest = raw;
+        if (raw.length === 0) followupUsageError();
+        inlineBody.official_evidence_item_digest = raw;
+        hasInlineBody = true;
         break;
       case "official-evidence-ref":
-        args.official_evidence_ref = raw;
+        if (raw.length === 0) followupUsageError();
+        inlineBody.official_evidence_ref = raw;
+        hasInlineBody = true;
         break;
       case "baseline-target":
-        args.baseline_target = raw;
+        if (raw.length === 0) followupUsageError();
+        inlineBody.baseline_target = raw;
+        hasInlineBody = true;
         break;
       case "measurement-profile-id":
-        args.measurement_profile_id = raw;
+        if (raw.length === 0) followupUsageError();
+        inlineBody.measurement_profile_id = raw;
+        hasInlineBody = true;
         break;
-      case "now-ms":
-        args.now_ms = Number(raw);
+      case "now-ms": {
+        const n = Number(raw);
+        if (!Number.isFinite(n)) followupUsageError();
+        inlineBody.now_ms = n;
+        hasInlineBody = true;
         break;
+      }
+      // Removed public flags — refuse closed (no silent ignore).
+      case "state-dir":
       case "original-fault-absent":
-        // Non-authoritative; retained for adversarial compatibility only.
-        args.original_fault_absent = raw === "true" || raw === "1";
-        break;
       case "core-regressions-passed":
-        args.core_regressions_passed = raw === "true" || raw === "1";
-        break;
       case "verified":
-        args.verified = raw === "true" || raw === "1";
+        followupUsageError();
         break;
       default:
+        // Unknown flags, including removed surfaces, fail usage.
+        if (FOLLOWUP_INLINE_BODY_FLAGS.has(key)) {
+          followupUsageError();
+        }
         followupUsageError();
     }
   }
+
+  if (requestPath && hasInlineBody) {
+    followupParseFail(
+      operation,
+      "REQUEST_CONFLICT",
+      "Do not mix --request with inline follow-up fields; use exactly one source.",
+    );
+  }
+
+  let bodyFields: Partial<FollowupDispatchArgs> = {};
   if (requestPath) {
     if (!fs.existsSync(requestPath)) {
-      printJson(
-        {
-          schema_version: 1,
-          ok: false,
-          operation,
-          status: "INVALID_INPUT",
-          error_code: "REQUEST_NOT_FOUND",
-          error_message: "Follow-up request file not found.",
-          network_used: false,
-          target_mutated: false,
-          repair_applied: false,
-          external_write: false,
-          adapter_status: "not_applicable",
-          contribution_claim: "none",
-        },
-        1,
+      followupParseFail(
+        operation,
+        "REQUEST_NOT_FOUND",
+        "Follow-up request file not found.",
       );
     }
     const raw = fs.readFileSync(requestPath, "utf8");
     if (Buffer.byteLength(raw, "utf8") > MAX_FOLLOWUP_REQUEST_BYTES) {
-      printJson(
-        {
-          schema_version: 1,
-          ok: false,
-          operation,
-          status: "INVALID_INPUT",
-          error_code: "SIZE_LIMIT",
-          error_message: "Follow-up request exceeds size limit.",
-          network_used: false,
-          external_write: false,
-        },
-        1,
+      followupParseFail(
+        operation,
+        "SIZE_LIMIT",
+        "Follow-up request exceeds size limit.",
       );
     }
     const parsed = parseFollowupRequestJson(raw, operation);
     if (!parsed.ok) {
-      printJson(
-        {
-          schema_version: 1,
-          ok: false,
-          operation,
-          status: "INVALID_INPUT",
-          error_code: parsed.code,
-          error_message: parsed.message,
-          network_used: false,
-          target_mutated: false,
-          repair_applied: false,
-          external_write: false,
-          adapter_status: "not_applicable",
-          contribution_claim: "none",
-        },
-        1,
-      );
+      followupParseFail(operation, parsed.code, parsed.message);
     }
-    // Merge request fields only when CLI flags did not already set them;
-    // target/operation remain positional authority.
-    const fields = parsed.fields;
-    if (args.issue === undefined && fields.issue !== undefined) {
-      args.issue = fields.issue;
+    bodyFields = parsed.fields;
+  } else if (hasInlineBody) {
+    const parsed = parseFollowupWireBody(inlineBody, operation);
+    if (!parsed.ok) {
+      followupParseFail(operation, parsed.code, parsed.message);
     }
-    if (args.event === undefined && fields.event !== undefined) {
-      args.event = fields.event;
-    }
-    if (args.candidate_version === undefined && fields.candidate_version) {
-      args.candidate_version = fields.candidate_version;
-    }
-    if (args.recipe_id === undefined && fields.recipe_id) {
-      args.recipe_id = fields.recipe_id;
-    }
-    if (
-      args.official_evidence_item_digest === undefined &&
-      fields.official_evidence_item_digest
-    ) {
-      args.official_evidence_item_digest = fields.official_evidence_item_digest;
-    }
-    if (
-      args.official_evidence_ref === undefined &&
-      fields.official_evidence_ref
-    ) {
-      args.official_evidence_ref = fields.official_evidence_ref;
-    }
-    if (args.baseline_target === undefined && fields.baseline_target) {
-      args.baseline_target = fields.baseline_target;
-    }
-    if (
-      args.measurement_profile_id === undefined &&
-      fields.measurement_profile_id
-    ) {
-      args.measurement_profile_id = fields.measurement_profile_id;
-    }
-    if (
-      args.original_fault_absent === undefined &&
-      fields.original_fault_absent !== undefined
-    ) {
-      args.original_fault_absent = fields.original_fault_absent;
-    }
-    if (
-      args.core_regressions_passed === undefined &&
-      fields.core_regressions_passed !== undefined
-    ) {
-      args.core_regressions_passed = fields.core_regressions_passed;
-    }
-    if (args.verified === undefined && fields.verified !== undefined) {
-      args.verified = fields.verified;
-    }
-    if (args.now_ms === undefined && fields.now_ms !== undefined) {
-      args.now_ms = fields.now_ms;
-    }
+    bodyFields = parsed.fields;
   }
+
+  const args: FollowupDispatchArgs = {
+    target,
+    operation,
+    ...bodyFields,
+  };
   const result: FollowupResult = dispatchFollowup(args);
   printJson(result, result.ok ? 0 : 1);
 }

@@ -277,17 +277,13 @@ export interface StatusInput {
 
 export interface SessionHintInput {
   /**
-   * Isolated target for public path checks when present. Packaged SessionStart
-   * may omit this and use the state-only read core (PLUGIN_DATA follow-up state).
+   * Isolated target for public path checks. Packaged SessionStart uses the
+   * internal state-only helper (not this public input) under PLUGIN_DATA.
    */
-  targetPath?: string;
+  targetPath: string;
   nowMs?: number;
+  /** Domain/test injection only; public CLI/MCP resolve state from trusted env. */
   stateDir?: string;
-  /**
-   * When true, skip target path resolution and read only ChangeGuard-owned
-   * follow-up state (for packaged SessionStart). Public CLI/MCP keep path checks.
-   */
-  stateOnly?: boolean;
 }
 
 export interface RefreshInput {
@@ -318,6 +314,7 @@ export interface ProcessEventInput {
   stateDir?: string;
 }
 
+/** Public wire dispatch args (after canonical parser). No state_dir / authority flags. */
 export interface FollowupDispatchArgs {
   target: string;
   operation: string;
@@ -331,9 +328,5 @@ export interface FollowupDispatchArgs {
   baseline_target?: string;
   /** Closed measurement profile id (Phase A: protected_process_shim_v1). */
   measurement_profile_id?: string;
-  original_fault_absent?: boolean;
-  core_regressions_passed?: boolean;
-  verified?: boolean;
   now_ms?: number;
-  state_dir?: string;
 }

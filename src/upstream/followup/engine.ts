@@ -360,9 +360,9 @@ export function followupStatus(input: StatusInput): FollowupResult {
 }
 
 /**
- * State-only follow-up refresh-due read (no target path, no network, no mutation).
- * Used by packaged SessionStart under PLUGIN_DATA. Public CLI/MCP keep path checks
- * via sessionFollowupHint unless stateOnly is set.
+ * Internal state-only follow-up refresh-due read (no target path, no network, no mutation).
+ * Packaged SessionStart imports this from the engine module only — not re-exported
+ * from the public follow-up index. Public CLI/MCP use sessionFollowupHint with a target.
  */
 export function sessionFollowupHintFromState(input: {
   nowMs?: number;
@@ -418,25 +418,19 @@ export function sessionFollowupHintFromState(input: {
 }
 
 /**
- * SessionStart seam: path-free local "refresh due" hint only; never fetch.
- * Silent when no subscription is due.
- * Public path: requires targetPath and validates isolation unless stateOnly.
+ * Public session_hint: path-free local "refresh due" hint only; never fetch.
+ * Requires an isolated targetPath. Packaged SessionStart uses the internal
+ * sessionFollowupHintFromState helper under PLUGIN_DATA (not this public path).
  */
 export function sessionFollowupHint(input: SessionHintInput): FollowupResult {
   const op: FollowupOperation = "session_hint";
   try {
-    if (input.stateOnly === true) {
-      return sessionFollowupHintFromState({
-        nowMs: input.nowMs,
-        stateDir: input.stateDir,
-      });
-    }
     if (typeof input.targetPath !== "string" || input.targetPath.length === 0) {
       return fail(
         op,
         "INVALID_INPUT",
         "USAGE",
-        "targetPath required for session_hint (or use state-only packaged path).",
+        "targetPath required for session_hint.",
       );
     }
     resolveTargetDirectory(input.targetPath);

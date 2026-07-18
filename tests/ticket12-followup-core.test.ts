@@ -2081,24 +2081,29 @@ test("Ticket12: dispatchFollowup closed ops; unknown refused", () => {
 
   const target = makeTarget();
   const stateDir = makeStateDir();
-  const r = dispatchFollowup({
-    target,
-    operation: "subscribe",
-    issue: 77,
-    now_ms: NOW,
-    state_dir: stateDir,
-  });
-  assert.equal(r.ok, true);
-  assert.equal(r.operation, "subscribe");
+  const prev = process.env.CHANGEGUARD_FOLLOWUP_STATE_DIR;
+  process.env.CHANGEGUARD_FOLLOWUP_STATE_DIR = stateDir;
+  try {
+    const r = dispatchFollowup({
+      target,
+      operation: "subscribe",
+      issue: 77,
+      now_ms: NOW,
+    });
+    assert.equal(r.ok, true);
+    assert.equal(r.operation, "subscribe");
 
-  const bad = dispatchFollowup({
-    target,
-    operation: "auto_react",
-    now_ms: NOW,
-    state_dir: stateDir,
-  });
-  assert.equal(bad.ok, false);
-  assert.equal(bad.error_code, "UNKNOWN_OPERATION");
+    const bad = dispatchFollowup({
+      target,
+      operation: "auto_react",
+      now_ms: NOW,
+    });
+    assert.equal(bad.ok, false);
+    assert.equal(bad.error_code, "UNKNOWN_OPERATION");
+  } finally {
+    if (prev === undefined) delete process.env.CHANGEGUARD_FOLLOWUP_STATE_DIR;
+    else process.env.CHANGEGUARD_FOLLOWUP_STATE_DIR = prev;
+  }
 });
 
 // ─── Forbidden automatic actions end-to-end ────────────────────────────────

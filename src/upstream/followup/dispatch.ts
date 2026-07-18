@@ -1,6 +1,7 @@
 /**
  * Single dispatcher for CLI/MCP follow-up tools.
- * Strict allowlists; additionalProperties refused at MCP schema layer.
+ * Public wire never accepts state_dir or caller authority booleans;
+ * state is resolved from trusted environment / defaults.
  */
 import {
   followupStatus,
@@ -28,6 +29,7 @@ export function isFollowupOperation(v: string): v is FollowupOperation {
   return OPS.has(v as FollowupOperation);
 }
 
+/** Public dispatch args after wire parsing (no state_dir / authority booleans). */
 export interface FollowupDispatchArgs {
   target: string;
   operation: string;
@@ -41,11 +43,7 @@ export interface FollowupDispatchArgs {
   baseline_target?: string;
   /** Closed measurement profile id (Phase A: protected_process_shim_v1). */
   measurement_profile_id?: string;
-  original_fault_absent?: boolean;
-  core_regressions_passed?: boolean;
-  verified?: boolean;
   now_ms?: number;
-  state_dir?: string;
 }
 
 function asString(v: unknown): string | null {
@@ -99,7 +97,6 @@ export function dispatchFollowup(args: FollowupDispatchArgs): FollowupResult {
 
   const target = args.target;
   const nowMs = asNumber(args.now_ms);
-  const stateDir = asString(args.state_dir) ?? undefined;
 
   switch (op) {
     case "subscribe": {
@@ -111,7 +108,6 @@ export function dispatchFollowup(args: FollowupDispatchArgs): FollowupResult {
         targetPath: target,
         issue: issue as string | number,
         nowMs,
-        stateDir,
       });
     }
     case "unsubscribe": {
@@ -123,19 +119,17 @@ export function dispatchFollowup(args: FollowupDispatchArgs): FollowupResult {
         targetPath: target,
         issue: issue as string | number,
         nowMs,
-        stateDir,
       });
     }
     case "status":
-      return followupStatus({ targetPath: target, nowMs, stateDir });
+      return followupStatus({ targetPath: target, nowMs });
     case "session_hint":
-      return sessionFollowupHint({ targetPath: target, nowMs, stateDir });
+      return sessionFollowupHint({ targetPath: target, nowMs });
     case "refresh":
       return refreshFollowup({
         targetPath: target,
         event: args.event,
         nowMs,
-        stateDir,
       });
     case "process_event": {
       if (args.event === undefined) {
@@ -145,7 +139,6 @@ export function dispatchFollowup(args: FollowupDispatchArgs): FollowupResult {
         targetPath: target,
         event: args.event,
         nowMs,
-        stateDir,
       });
     }
     case "validate_candidate": {
@@ -189,9 +182,6 @@ export function dispatchFollowup(args: FollowupDispatchArgs): FollowupResult {
         recipe_id,
         official_evidence_item_digest,
         official_evidence_ref,
-        original_fault_absent: args.original_fault_absent,
-        core_regressions_passed: args.core_regressions_passed,
-        verified: args.verified,
         nowMs,
       });
     }

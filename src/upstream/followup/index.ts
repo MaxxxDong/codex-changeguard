@@ -104,7 +104,6 @@ export {
   unsubscribeIssue,
   followupStatus,
   sessionFollowupHint,
-  sessionFollowupHintFromState,
   refreshFollowup,
   processFollowupEvent,
   validateCandidate,
@@ -114,5 +113,7 @@ export { dispatchFollowup, isFollowupOperation } from "./dispatch.js";
 
 export {
   parseFollowupRequestJson,
+  parseFollowupWireBody,
   refuseForbiddenFollowupKeys,
+  MAX_FOLLOWUP_REQUEST_DEPTH,
 } from "./request.js";

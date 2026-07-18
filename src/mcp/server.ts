@@ -71,7 +71,7 @@ import {
 import {
   dispatchFollowup,
   isFollowupOperation,
-  refuseForbiddenFollowupKeys,
+  parseFollowupWireBody,
   type FollowupResult,
 } from "../upstream/followup/index.js";
 import type { FollowupDispatchArgs } from "../upstream/followup/dispatch.js";
@@ -516,27 +516,7 @@ function toolSchemas() {
             description:
               "Closed measurement profile id (Phase A: protected_process_shim_v1).",
           },
-          original_fault_absent: {
-            type: "boolean",
-            description:
-              "Non-authoritative caller flag retained for adversarial compatibility only.",
-          },
-          core_regressions_passed: {
-            type: "boolean",
-            description:
-              "Non-authoritative caller flag retained for adversarial compatibility only.",
-          },
-          verified: {
-            type: "boolean",
-            description:
-              "Non-authoritative caller flag retained for adversarial compatibility only.",
-          },
           now_ms: { type: "number" },
-          state_dir: {
-            type: "string",
-            description:
-              "Optional ChangeGuard-owned follow-up state directory (tests/injection).",
-          },
         },
       },
     },
@@ -1135,40 +1115,8 @@ function handleToolsCall(params: unknown): {
   }
 
   if (p.name === TOOL_FOLLOWUP) {
-    const allowed = new Set([
-      "target",
-      "operation",
-      "issue",
-      "event",
-      "candidate_version",
-      "recipe_id",
-      "official_evidence_item_digest",
-      "official_evidence_ref",
-      "baseline_target",
-      "measurement_profile_id",
-      "original_fault_absent",
-      "core_regressions_passed",
-      "verified",
-      "now_ms",
-      "state_dir",
-    ]);
-    for (const k of Object.keys(a)) {
-      if (!allowed.has(k)) {
-        throw Object.assign(new Error("Unknown or extra arguments."), {
-          code: "EXTRA_ARGS",
-        });
-      }
-    }
-    // Refuse privacy/authority smuggling inside nested event objects only.
-    // Top-level target/operation are required tool args (not request-body overrides).
-    if (a.event !== undefined) {
-      const nested = refuseForbiddenFollowupKeys(a.event);
-      if (nested) {
-        throw Object.assign(new Error(nested.message), {
-          code: nested.code,
-        });
-      }
-    }
+    // Target/operation are seam-owned; remaining args pass through the same
+    // canonical wire parser as CLI request-file / inline flags.
     if (typeof a.target !== "string" || a.target.length === 0) {
       throw Object.assign(new Error("Invalid target."), {
         code: "INVALID_TARGET",
@@ -1179,55 +1127,27 @@ function handleToolsCall(params: unknown): {
         code: "INVALID_ARGS",
       });
     }
-    // Explicitly refuse snapshot_path / witness if smuggled under any casing
-    // that slipped past allowlist (defensive; allowlist already closed).
-    if (
-      Object.prototype.hasOwnProperty.call(a, "snapshot_path") ||
-      Object.prototype.hasOwnProperty.call(a, "live_measurement_witness") ||
-      Object.prototype.hasOwnProperty.call(a, "witness")
-    ) {
-      throw Object.assign(
-        new Error("Forbidden or non-authoritative field refused."),
-        { code: "FORBIDDEN_FIELD" },
-      );
+    const body: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(a)) {
+      if (k === "target" || k === "operation") continue;
+      body[k] = v;
+    }
+    const parsed = parseFollowupWireBody(body, a.operation);
+    if (!parsed.ok) {
+      // Map wire parse codes to MCP tool error codes (EXTRA_ARGS for closed extras).
+      const code =
+        parsed.code === "EXTRA_FIELD"
+          ? "EXTRA_ARGS"
+          : parsed.code === "FORBIDDEN_FIELD"
+            ? "EXTRA_ARGS"
+            : parsed.code;
+      throw Object.assign(new Error(parsed.message), { code });
     }
     const dispatchArgs: FollowupDispatchArgs = {
       target: a.target,
       operation: a.operation,
+      ...parsed.fields,
     };
-    if (typeof a.issue === "string" || typeof a.issue === "number") {
-      dispatchArgs.issue = a.issue as string | number;
-    } else if (a.issue !== undefined) {
-      throw Object.assign(new Error("Invalid issue."), {
-        code: "INVALID_ARGS",
-      });
-    }
-    if (a.event !== undefined) dispatchArgs.event = a.event;
-    if (typeof a.candidate_version === "string") {
-      dispatchArgs.candidate_version = a.candidate_version;
-    }
-    if (typeof a.recipe_id === "string") dispatchArgs.recipe_id = a.recipe_id;
-    if (typeof a.official_evidence_item_digest === "string") {
-      dispatchArgs.official_evidence_item_digest = a.official_evidence_item_digest;
-    }
-    if (typeof a.official_evidence_ref === "string") {
-      dispatchArgs.official_evidence_ref = a.official_evidence_ref;
-    }
-    if (typeof a.baseline_target === "string") {
-      dispatchArgs.baseline_target = a.baseline_target;
-    }
-    if (typeof a.measurement_profile_id === "string") {
-      dispatchArgs.measurement_profile_id = a.measurement_profile_id;
-    }
-    if (typeof a.original_fault_absent === "boolean") {
-      dispatchArgs.original_fault_absent = a.original_fault_absent;
-    }
-    if (typeof a.core_regressions_passed === "boolean") {
-      dispatchArgs.core_regressions_passed = a.core_regressions_passed;
-    }
-    if (typeof a.verified === "boolean") dispatchArgs.verified = a.verified;
-    if (typeof a.now_ms === "number") dispatchArgs.now_ms = a.now_ms;
-    if (typeof a.state_dir === "string") dispatchArgs.state_dir = a.state_dir;
     const payload: FollowupResult = dispatchFollowup(dispatchArgs);
     return { payload, ok: payload.ok };
   }

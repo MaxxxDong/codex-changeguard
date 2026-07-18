@@ -625,9 +625,9 @@ privacy, blocked capsule, CLI/MCP equivalence, and default no-network path.
 Shared core: `src/upstream/followup/` (`dispatchFollowup`, ledger, disposition, probes, candidate validation).
 Public seams:
 
-- Rescue CLI: `changeguard followup <operation> <isolated-target> [--request=<request.json>] [--state-dir=<dir>] …`
-- MCP: `changeguard_followup` (same seven closed operations; `additionalProperties: false`)
-- Packaged SessionStart: low-frequency refresh-due hint from PLUGIN_DATA follow-up state only (no network)
+- Rescue CLI: `changeguard followup <operation> <isolated-target> [--request=<request.json>] …` (state from `CHANGEGUARD_FOLLOWUP_STATE_DIR` / `PLUGIN_DATA` / XDG; no public `--state-dir` or authority booleans)
+- MCP: `changeguard_followup` (same seven closed operations; `additionalProperties: false`; no `state_dir` / authority booleans / witness / snapshot fields)
+- Packaged SessionStart: low-frequency refresh-due hint from PLUGIN_DATA follow-up state only (no network; internal state-only helper, not public wire)
 
 ### Authority
 

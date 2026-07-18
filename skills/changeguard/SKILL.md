@@ -261,8 +261,8 @@ Both call `previewUpstreamAction` / `confirmUpstreamAction`. Production injects 
 
 ### Public seams (same core)
 
-1. Rescue CLI: `changeguard followup <operation> <isolated-target> [--request=<request.json>] [--state-dir=<dir>] …`
-2. MCP tool: `changeguard_followup` with `{ "target", "operation", … }` (`additionalProperties: false`)
+1. Rescue CLI: `changeguard followup <operation> <isolated-target> [--request=<request.json>] …` (state via env defaults; no public `--state-dir` or authority booleans)
+2. MCP tool: `changeguard_followup` with `{ "target", "operation", … }` (`additionalProperties: false`; no `state_dir` / authority booleans)
 3. Packaged SessionStart: path-free refresh-due hint from ChangeGuard-owned follow-up state under `PLUGIN_DATA` (no fetch)
 
 Closed operations: `subscribe` | `unsubscribe` | `status` | `session_hint` | `refresh` | `process_event` | `validate_candidate`.

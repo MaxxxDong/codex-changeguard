@@ -1034,12 +1034,15 @@ const followupCli = spawnSync(
     "followup",
     "status",
     fixtureDest,
-    `--state-dir=${followupStateSmoke}`,
   ],
   {
     cwd: outside,
     encoding: "utf8",
-    env: { ...process.env, NO_COLOR: "1" },
+    env: {
+      ...process.env,
+      NO_COLOR: "1",
+      CHANGEGUARD_FOLLOWUP_STATE_DIR: followupStateSmoke,
+    },
   },
 );
 if (followupCli.status !== 0) {
