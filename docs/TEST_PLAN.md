@@ -70,6 +70,10 @@ Synthetic fixtures and capability injection only — **no Full claim** without r
 | T15-S10 | capability upgrade without real-machine receipt | remains Limited; cannot claim Full |
 | T15-S11 | CLI/MCP `platform-status` equivalence | stable fields; path/secret redaction |
 | write-disabled | LIMITED/READ_ONLY capability on repair-preview/apply | `WRITE_DISABLED`; tree hash unchanged |
+| fixture-seam-env-only | `CHANGEGUARD_INTERNAL_FIXTURE_SEAM=1` on in-repo fixture (CLI+MCP) | env alone is not authorization; `WRITE_DISABLED`; no capsule/authorization; tree hash unchanged |
+| fixture-seam-mkdtemp | env=1 + `mkdtemp(os.tmpdir())` isolated copy | preview → apply → verify → rollback allowed; only the copy mutates |
+| fixture-seam-refuse | leaf/mid symlink, active `~/.codex` alias, HOME ordinary dir, `/mnt/<drive>` | isolation proof fails; stays `production_unknown` / `WRITE_DISABLED` |
+| fixture-seam-auth-bind | disposable preview auth applied to unproven repo path | apply refused; repo tree unchanged |
 - induced verification failure auto-rollbacks exact config bytes
 - invalid TOML diagnosed but not auto-repaired
 - no project-source read (sentinel file)

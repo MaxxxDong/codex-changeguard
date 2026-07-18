@@ -23,6 +23,7 @@ import {
   linuxCapabilityReport,
   platformStatus,
   productionRepairCapabilityOptions,
+  proveIsolatedFixtureTarget,
   resolvePublicRepairCapability,
   syntheticLimitedReceipt,
   validateSupportReceipt,
@@ -37,14 +38,17 @@ import {
   cliEntry,
   copyFixtureToTemp,
   hashTargetTree,
+  harnessProcessEnv,
   mcpServerEntry,
   runCliJson,
+  runCliRepairApply,
   runCliRepairPreview,
 } from "../src/harness/scenario.js";
 import { McpTestClient } from "../src/mcp/client.js";
 import { findRepoRoot } from "../src/paths.js";
 import { makeTempDir, writeJson } from "./helpers.js";
 import { spawnSync } from "node:child_process";
+import os from "node:os";
 
 const repoRoot = findRepoRoot(import.meta.url);
 
@@ -519,10 +523,20 @@ test("T15-P1: public repair capability resolves fail-closed for unknown/linux/ws
   });
   assert.equal(wslGate.may_mutate, false);
 
-  // Internal seam → PREVIEW + isolated_fixture.
-  const seam = resolvePublicRepairCapability({
+  // Env seam alone (no target) → still production_unknown (not authorization).
+  const seamEnvOnly = resolvePublicRepairCapability({
     [INTERNAL_FIXTURE_SEAM_ENV]: INTERNAL_FIXTURE_SEAM_VALUE,
   });
+  assert.equal(seamEnvOnly.isolation, "production_unknown");
+  assert.notEqual(seamEnvOnly.isolation, "isolated_fixture");
+
+  // Env + disposable mkdtemp target → PREVIEW + isolated_fixture.
+  const tmpOk = makeTempDir("cg-t15-seam-ok-");
+  const seam = resolvePublicRepairCapability(
+    { [INTERNAL_FIXTURE_SEAM_ENV]: INTERNAL_FIXTURE_SEAM_VALUE },
+    process.platform,
+    tmpOk,
+  );
   assert.equal(seam.capability_status, "PREVIEW");
   assert.equal(seam.isolation, "isolated_fixture");
 });
@@ -548,6 +562,7 @@ test("T15-P1: public CLI/MCP repair without fixture seam is WRITE_DISABLED", asy
   assert.notEqual(cli.status, 0);
   assert.equal(cliJson.error_code, "WRITE_DISABLED");
   assert.equal(cliJson.capsule, null);
+  assert.equal(cliJson.authorization, null);
   assert.equal(hashTargetTree(target), before);
 
   // Production-like MCP: env without seam; tool JSON cannot inject PREVIEW.
@@ -563,15 +578,202 @@ test("T15-P1: public CLI/MCP repair without fixture seam is WRITE_DISABLED", asy
     assert.equal(mcp.ok, false);
     assert.equal(mcp.error_code, "WRITE_DISABLED");
     assert.equal(mcp.capsule, null);
+    assert.equal(mcp.authorization, null);
   } finally {
     await client.close();
   }
 
-  // Harness CLI (internal seam) still previews isolated fixtures.
+  // Harness CLI (env seam + disposable mkdtemp target) still previews.
   const harness = runCliRepairPreview(target);
   assert.equal(harness.exitCode, 0, harness.stderr);
   assert.equal(harness.result!.ok, true);
   assert.ok(harness.result!.authorization);
+});
+
+// --- T15-P1 fixture seam: env alone is never authorization ---
+test("T15-P1: env seam on in-repo fixture is WRITE_DISABLED (CLI+MCP); tree unchanged", async () => {
+  const repoFixture = path.join(repoRoot, "fixtures", "config-wrong-type");
+  assert.equal(fs.existsSync(repoFixture), true);
+  const before = hashTargetTree(repoFixture);
+
+  const seamEnv = harnessProcessEnv();
+  // CLI with env=1 against non-disposable repo fixture.
+  const cli = spawnSync(
+    process.execPath,
+    [cliEntry(), "repair-preview", repoFixture],
+    {
+      encoding: "utf8",
+      env: seamEnv,
+      maxBuffer: 4 * 1024 * 1024,
+    },
+  );
+  const cliJson = JSON.parse(cli.stdout || "{}") as Record<string, unknown>;
+  assert.notEqual(cli.status, 0);
+  assert.equal(cliJson.ok, false);
+  assert.equal(cliJson.error_code, "WRITE_DISABLED");
+  assert.equal(cliJson.capsule, null);
+  assert.equal(cliJson.authorization, null);
+  assert.equal(hashTargetTree(repoFixture), before, "repo fixture tree must not change");
+
+  // MCP equivalence: same env + in-repo target → WRITE_DISABLED.
+  const client = new McpTestClient({
+    serverEntry: mcpServerEntry(),
+    env: seamEnv,
+  });
+  try {
+    client.start();
+    const mcp = (await client.callTool("changeguard_repair_preview", {
+      target: repoFixture,
+    })) as Record<string, unknown>;
+    assert.equal(mcp.ok, false);
+    assert.equal(mcp.error_code, "WRITE_DISABLED");
+    assert.equal(mcp.capsule, null);
+    assert.equal(mcp.authorization, null);
+  } finally {
+    await client.close();
+  }
+
+  // Resolver: env + repo path never yields isolated_fixture.
+  const cap = resolvePublicRepairCapability(seamEnv, process.platform, repoFixture);
+  assert.equal(cap.isolation, "production_unknown");
+  assert.equal(proveIsolatedFixtureTarget(repoFixture), false);
+  assert.equal(hashTargetTree(repoFixture), before);
+});
+
+test("T15-P1: env seam + mkdtemp isolated copy still preview/apply/verify/rollback", () => {
+  const tmp = makeTempDir("cg-t15-seam-iso-");
+  const target = copyFixtureToTemp("fixtures/config-wrong-type", tmp);
+  const configPath = path.join(target, "config", "config.toml");
+  const originalConfig = fs.readFileSync(configPath);
+  const before = hashTargetTree(target);
+
+  assert.equal(proveIsolatedFixtureTarget(target), true);
+
+  const preview = runCliRepairPreview(target);
+  assert.equal(preview.exitCode, 0, preview.stderr);
+  assert.equal(preview.result!.ok, true);
+  assert.ok(preview.result!.authorization);
+  // preview is read-only over the target tree
+  assert.equal(hashTargetTree(target), before);
+  assert.ok(originalConfig.equals(fs.readFileSync(configPath)));
+
+  const auth = preview.result!.authorization as string;
+  const applied = runCliRepairApply(target, auth);
+  assert.equal(applied.exitCode, 0, applied.stderr);
+  assert.equal(applied.result!.ok, true);
+  assert.equal(applied.result!.target_mutated, true);
+  assert.notEqual(
+    originalConfig.equals(fs.readFileSync(configPath)),
+    true,
+    "apply mutates only the isolated copy config",
+  );
+
+  const verified = runCliJson(["verify", target]);
+  assert.equal(verified.exitCode, 0, verified.stderr);
+  assert.equal(verified.result!.ok, true);
+
+  const rolled = runCliJson(["rollback", target]);
+  assert.equal(rolled.exitCode, 0, rolled.stderr);
+  assert.equal(rolled.result!.ok, true);
+  // Session ledger under .changeguard may remain; config bytes must restore.
+  assert.ok(
+    originalConfig.equals(fs.readFileSync(configPath)),
+    "rollback restores original config bytes on the isolated copy",
+  );
+});
+
+test("T15-P1: leaf/mid symlink, active ~/.codex alias, HOME dir, WSL host mount refused", () => {
+  const tmp = makeTempDir("cg-t15-seam-refuse-");
+  const home = path.join(tmp, "home");
+  fs.mkdirSync(home, { recursive: true });
+  const realCodex = path.join(tmp, "real-codex");
+  fs.mkdirSync(realCodex, { recursive: true });
+  fs.symlinkSync(realCodex, path.join(home, ".codex"));
+
+  // Leaf symlink → temp: not a disposable ordinary directory.
+  const realLeaf = path.join(tmp, "real-leaf");
+  fs.mkdirSync(realLeaf, { recursive: true });
+  const leafLink = path.join(tmp, "leaf-link");
+  fs.symlinkSync(realLeaf, leafLink);
+  assert.equal(proveIsolatedFixtureTarget(leafLink, home), false);
+  const capLeaf = resolvePublicRepairCapability(
+    { [INTERNAL_FIXTURE_SEAM_ENV]: INTERNAL_FIXTURE_SEAM_VALUE },
+    process.platform,
+    leafLink,
+  );
+  assert.equal(capLeaf.isolation, "production_unknown");
+
+  // Intermediate symlink: temp/mid → in-repo fixture (outside trusted temp).
+  // realpath of child lands in the repository, not an OS temp isolation root.
+  const mid = path.join(tmp, "mid-link");
+  const repoOutside = path.join(repoRoot, "fixtures", "config-wrong-type");
+  fs.symlinkSync(repoOutside, mid);
+  const viaMid = path.join(mid, "config");
+  assert.equal(fs.existsSync(viaMid), true);
+  assert.equal(proveIsolatedFixtureTarget(viaMid, home), false);
+
+  // Active ~/.codex alias (logical) and real target refused.
+  assert.equal(proveIsolatedFixtureTarget(path.join(home, ".codex"), home), false);
+  assert.equal(proveIsolatedFixtureTarget(realCodex, home), false);
+
+  // HOME ordinary / in-repo ordinary directory refused (not OS temp isolation).
+  const homeOrdinary = path.join(repoRoot, "fixtures", "negative-control");
+  assert.equal(proveIsolatedFixtureTarget(homeOrdinary, home), false);
+  assert.equal(proveIsolatedFixtureTarget(repoRoot, home), false);
+
+  // WSL host mount shape refused without requiring the mount to exist.
+  assert.equal(proveIsolatedFixtureTarget("/mnt/c/Users/x/.codex"), false);
+  assert.equal(proveIsolatedFixtureTarget("/mnt/z/Tools/fixture"), false);
+  const capMnt = resolvePublicRepairCapability(
+    { [INTERNAL_FIXTURE_SEAM_ENV]: INTERNAL_FIXTURE_SEAM_VALUE },
+    process.platform,
+    "/mnt/c/Users/x/.codex",
+  );
+  assert.equal(capMnt.isolation, "production_unknown");
+
+  // Temp leaf symlink pointing at repo fixture (outside) refused.
+  const tempToOutside = path.join(tmp, "to-outside");
+  fs.symlinkSync(repoOutside, tempToOutside);
+  assert.equal(proveIsolatedFixtureTarget(tempToOutside, home), false);
+
+  // Positive control: plain mkdtemp under os.tmpdir() still proves.
+  const ok = fs.mkdtempSync(path.join(os.tmpdir(), "cg-t15-prove-ok-"));
+  assert.equal(proveIsolatedFixtureTarget(ok, home), true);
+});
+
+test("T15-P1: preview auth on disposable target cannot apply to unproven repo fixture", () => {
+  const tmp = makeTempDir("cg-t15-auth-bind-");
+  const disposable = copyFixtureToTemp("fixtures/config-wrong-type", tmp);
+  const repoFixture = path.join(repoRoot, "fixtures", "config-wrong-type");
+  const repoBefore = hashTargetTree(repoFixture);
+
+  const preview = runCliRepairPreview(disposable);
+  assert.equal(preview.exitCode, 0, preview.stderr);
+  assert.ok(preview.result!.authorization);
+  const auth = preview.result!.authorization as string;
+
+  // Apply with harness env but unproven repo path → WRITE_DISABLED (capability)
+  // or AUTH failure; either way no mutation and no success.
+  const apply = spawnSync(
+    process.execPath,
+    [cliEntry(), "repair-apply", repoFixture, auth],
+    {
+      encoding: "utf8",
+      env: harnessProcessEnv(),
+      maxBuffer: 4 * 1024 * 1024,
+    },
+  );
+  const applyJson = JSON.parse(apply.stdout || "{}") as Record<string, unknown>;
+  assert.notEqual(apply.status, 0);
+  assert.equal(applyJson.ok, false);
+  assert.ok(
+    applyJson.error_code === "WRITE_DISABLED" ||
+      applyJson.error_code === "AUTH_INVALID" ||
+      applyJson.error_code === "AUTH_MALFORMED" ||
+      applyJson.error_code === "TARGET_MISMATCH",
+    `unexpected error_code: ${String(applyJson.error_code)}`,
+  );
+  assert.equal(hashTargetTree(repoFixture), repoBefore);
 });
 
 // --- T15-S11 CLI/MCP equivalence ---

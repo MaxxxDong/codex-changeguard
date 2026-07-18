@@ -278,7 +278,7 @@ Truthful residual claims after integration:
 
 - Linux and WSL remain **Limited / Read-only** without a real host Scenario Harness receipt.
 - Synthetic or caller-injected capability validates the framework only; it cannot upgrade production Full.
-- Public CLI/MCP recovery paths fail closed on unknown/Linux/WSL/managed policy; only the internal fixture seam enables isolated PREVIEW writes for tests.
+- Public CLI/MCP recovery paths fail closed on unknown/Linux/WSL/managed policy; the internal fixture env seam alone is not authorization — isolated PREVIEW also requires exact-target disposable proof (OS temp).
 - WSL host mounts (`/mnt/<drive>`), symlink laundering, and admin elevation recipes are refused.
 - Network compare is local-input only (`network_used: false`).
 - `platform-status` unifies T13 macOS fields, T14 Windows PREVIEW/`status`/plan/live-witness limits, and T15 capability `reports` without a second receipt truth source.

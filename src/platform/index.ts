@@ -125,6 +125,7 @@ export {
   INTERNAL_FIXTURE_SEAM_VALUE,
   isolatedFixtureRepairCapabilityOptions,
   productionRepairCapabilityOptions,
+  proveIsolatedFixtureTarget,
   resolveEffectiveStatus,
   resolvePublicRepairCapability,
   runtimeDomainFor,

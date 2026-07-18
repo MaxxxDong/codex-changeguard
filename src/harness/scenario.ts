@@ -18,8 +18,10 @@ import type { DiagnosisResult } from "../core/types.js";
 const repoRoot = findRepoRoot(import.meta.url);
 
 /**
- * Scenario Harness process env: enables the internal isolated-fixture PREVIEW
- * seam for repair-preview/apply. Not forgeable via ordinary MCP tool JSON.
+ * Scenario Harness process env: enables the internal fixture seam env flag.
+ * The flag alone is not authorization — public repair still requires the exact
+ * target to prove disposable isolation (mkdtemp under OS temp). Not forgeable
+ * via ordinary MCP tool JSON.
  */
 export function harnessProcessEnv(
   base: NodeJS.ProcessEnv = process.env,
@@ -104,9 +106,9 @@ export function runCliJson(
   stderr: string;
   result: Record<string, unknown> | null;
 } {
-  // Default harness env enables the internal isolated-fixture PREVIEW seam for
-  // repair paths. Callers may override via opts.env (e.g. Windows host injection
-  // or production fail-closed env without the seam).
+  // Default harness env sets the fixture seam env flag; repair still requires
+  // exact-target disposable proof. Callers may override via opts.env (e.g.
+  // Windows host injection or production fail-closed env without the seam).
   const res = spawnSync(process.execPath, [cliEntry(), ...args], {
     encoding: "utf8",
     env: harnessProcessEnv({ ...process.env, ...(opts?.env ?? {}) }),

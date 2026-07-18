@@ -1283,10 +1283,12 @@ export function runCli(argv: string[]): void {
         printJson(usageDiagnosis(), 2);
       }
       // Production: host-derived capability + production_unknown (fail-closed).
-      // Scenario Harness sets CHANGEGUARD_INTERNAL_FIXTURE_SEAM=1 for PREVIEW.
+      // Env CHANGEGUARD_INTERNAL_FIXTURE_SEAM=1 alone is not authorization;
+      // exact target must also prove disposable isolation (mkdtemp under OS temp).
+      const target = rest[0]!;
       const result: RepairResult = previewRepair(
-        rest[0]!,
-        resolvePublicRepairCapability(),
+        target,
+        resolvePublicRepairCapability(process.env, process.platform, target),
       );
       printJson(result, result.ok ? 0 : 1);
     }
@@ -1295,9 +1297,12 @@ export function runCli(argv: string[]): void {
       if (rest.length !== 2 || isFlag(rest[0]!) || isFlag(rest[1]!)) {
         printJson(usageDiagnosis(), 2);
       }
-      const result: RepairResult = applyRepair(rest[0]!, {
+      // Same exact-target capability binding as preview — authorization from
+      // a disposable preview cannot upgrade an unproven apply target.
+      const target = rest[0]!;
+      const result: RepairResult = applyRepair(target, {
         authorization: rest[1]!,
-        ...resolvePublicRepairCapability(),
+        ...resolvePublicRepairCapability(process.env, process.platform, target),
       });
       printJson(result, result.ok ? 0 : 1);
     }

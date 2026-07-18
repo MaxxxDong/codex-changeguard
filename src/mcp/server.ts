@@ -816,10 +816,12 @@ function handleToolsCall(params: unknown): {
         code: "EXTRA_ARGS",
       });
     }
-    // Same host-derived capability binding as CLI (user JSON cannot inject PREVIEW).
+    // Same host-derived + exact-target capability binding as CLI.
+    // User JSON cannot inject PREVIEW; env seam alone is not authorization.
+    const target = requireTarget(a);
     const payload = previewRepair(
-      requireTarget(a),
-      resolvePublicRepairCapability(),
+      target,
+      resolvePublicRepairCapability(process.env, process.platform, target),
     );
     return { payload, ok: payload.ok };
   }
@@ -836,9 +838,11 @@ function handleToolsCall(params: unknown): {
         code: "INVALID_ARGS",
       });
     }
-    const payload = applyRepair(requireTarget(a), {
+    // Exact target re-bound at apply — preview auth cannot switch to unproven path.
+    const target = requireTarget(a);
+    const payload = applyRepair(target, {
       authorization: a.authorization,
-      ...resolvePublicRepairCapability(),
+      ...resolvePublicRepairCapability(process.env, process.platform, target),
     });
     return { payload, ok: payload.ok };
   }

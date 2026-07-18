@@ -2,6 +2,9 @@
  * Platform capability matrix and deterministic write-disable gate.
  * Status upgrades require support receipts — never developer prose.
  */
+import { resolveTargetDirectory, PathSafetyError } from "../core/path-safety.js";
+import { isHostMountPath } from "./discovery.js";
+import { assertDisposableTarget } from "./macos/adapter.js";
 import type {
   AdapterId,
   PlatformCapabilityReport,
@@ -18,6 +21,9 @@ import { validateSupportReceipt } from "./support-receipt.js";
  * Internal Scenario Harness / test seam env name.
  * Ordinary MCP tool JSON cannot set process env; only the harness or an
  * operator-controlled process environment can enable isolated-fixture PREVIEW.
+ *
+ * The env flag alone is never authorization. Public CLI/MCP also require
+ * exact-target disposable isolation proof (see proveIsolatedFixtureTarget).
  */
 export const INTERNAL_FIXTURE_SEAM_ENV = "CHANGEGUARD_INTERNAL_FIXTURE_SEAM";
 
@@ -143,7 +149,8 @@ export function productionRepairCapabilityOptions(
 
 /**
  * Internal isolated-fixture PREVIEW options (Scenario Harness / unit tests only).
- * Not reachable from ordinary user tool JSON.
+ * Not reachable from ordinary user tool JSON alone — public CLI/MCP must also
+ * prove the exact target is a controlled disposable fixture directory.
  */
 export function isolatedFixtureRepairCapabilityOptions(): PublicRepairCapabilityOptions {
   return {
@@ -154,16 +161,84 @@ export function isolatedFixtureRepairCapabilityOptions(): PublicRepairCapability
 }
 
 /**
+ * Prove an exact repair target is a controlled disposable fixture directory.
+ *
+ * Reuses Ticket 01 path-safety + Ticket 13 disposable-target invariants:
+ * - absolute + realpath-canonical ordinary directory (leaf not a symlink)
+ * - under trusted OS temp isolation roots (requireTrustedRoot)
+ * - not active ~/.codex logical/real path or child
+ * - not protected/system roots
+ * - not WSL host-mount paths (/mnt/<drive>)
+ *
+ * Env seam alone never authorizes; this proof binds the exact target.
+ * Fail closed on any unprovable path, symlink leaf, or isolation refusal.
+ */
+export function proveIsolatedFixtureTarget(
+  target: string,
+  homeDir?: string | null,
+): boolean {
+  if (typeof target !== "string" || target.length === 0 || target.length > 4096) {
+    return false;
+  }
+  if (target.includes("\0")) return false;
+
+  // Shape-level host-mount refuse before any filesystem walk (WSL /mnt/<drive>).
+  try {
+    const absProbe = target;
+    if (isHostMountPath(absProbe)) return false;
+  } catch {
+    return false;
+  }
+
+  let targetAbs: string;
+  let targetReal: string;
+  try {
+    const resolved = resolveTargetDirectory(target);
+    targetAbs = resolved.targetAbs;
+    targetReal = resolved.targetReal;
+  } catch (e) {
+    if (e instanceof PathSafetyError) return false;
+    return false;
+  }
+
+  if (isHostMountPath(targetAbs) || isHostMountPath(targetReal)) {
+    return false;
+  }
+
+  const disposable = assertDisposableTarget(targetAbs, homeDir, {
+    requireTrustedRoot: true,
+  });
+  if (!disposable.ok) return false;
+
+  // Realpath from disposable proof must match path-safety canonical real.
+  if (disposable.real !== targetReal) return false;
+
+  if (isHostMountPath(disposable.real)) return false;
+
+  return true;
+}
+
+/**
  * Resolve capability options for public CLI/MCP repair seams.
- * - Production: trusted host adapter + production_unknown (fail-closed writes).
- * - Internal seam: env CHANGEGUARD_INTERNAL_FIXTURE_SEAM=1 → explicit PREVIEW.
- * User JSON cannot set this env via MCP tool arguments.
+ * - Production (default): host-derived capability + production_unknown
+ *   (fail-closed writes). Used when env is unset, target is omitted, or
+ *   exact-target isolation proof fails.
+ * - Internal seam: env CHANGEGUARD_INTERNAL_FIXTURE_SEAM=1 **and** proof that
+ *   the exact target is a controlled disposable fixture → PREVIEW +
+ *   isolated_fixture. Env alone is never authorization.
+ * User JSON cannot set the env via MCP tool arguments.
  */
 export function resolvePublicRepairCapability(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
+  target?: string | null,
 ): PublicRepairCapabilityOptions {
-  if (env[INTERNAL_FIXTURE_SEAM_ENV] === INTERNAL_FIXTURE_SEAM_VALUE) {
+  if (
+    env[INTERNAL_FIXTURE_SEAM_ENV] === INTERNAL_FIXTURE_SEAM_VALUE &&
+    typeof target === "string" &&
+    target.length > 0 &&
+    proveIsolatedFixtureTarget(target)
+  ) {
     return isolatedFixtureRepairCapabilityOptions();
   }
   return productionRepairCapabilityOptions(env, platform);

@@ -14,9 +14,10 @@ export interface McpClientOptions {
   serverEntry?: string;
   timeoutMs?: number;
   /**
-   * Child process env. Defaults enable the internal fixture PREVIEW seam
-   * (this client is test-only). Pass production-like env to assert fail-closed,
-   * or dual-key Windows host injection env for Ticket 14 tests.
+   * Child process env. Defaults enable the internal fixture seam env flag
+   * (this client is test-only). Env alone is not authorization — repair still
+   * requires exact-target disposable isolation. Pass production-like env to
+   * assert fail-closed, or dual-key Windows host injection env for Ticket 14.
    */
   env?: NodeJS.ProcessEnv;
 }
@@ -45,8 +46,8 @@ export class McpTestClient {
     this.serverEntry =
       opts.serverEntry ?? path.join(here, "server.js");
     // When caller supplies env, merge onto process.env but do not re-inject the
-    // fixture seam (production fail-closed tests delete the seam key).
-    // When omitted, enable the internal isolated-fixture PREVIEW seam.
+    // fixture seam env flag (production fail-closed tests delete the seam key).
+    // When omitted, set the env flag; exact-target isolation still required.
     this.env =
       opts.env !== undefined
         ? { ...process.env, NO_COLOR: "1", ...opts.env }
