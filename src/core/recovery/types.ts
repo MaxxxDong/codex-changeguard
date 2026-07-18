@@ -206,7 +206,34 @@ export interface RepairResult {
   admin_handoff: AdminHandoff | null;
 }
 
-export interface ApplyOptions {
+/**
+ * Trusted host / Windows write-scope context for recovery.
+ * Production CLI/MCP omit this (defaults to process.platform).
+ * Never accepted from user-supplied MCP tool JSON or CLI flags.
+ */
+export interface RepairHostContext {
+  /**
+   * Trusted host platform override (tests / in-process only).
+   * Real win32 hosts cannot be downgraded.
+   */
+  hostPlatform?: string;
+  /** Explicit user-owned roots for Windows write classification (tests). */
+  userOwnedRoots?: string[];
+  /** Managed ownership flags when known from a prior probe. */
+  managed?: {
+    policy_class: string;
+    admin_owned: boolean;
+    signed: boolean;
+    permission_bound: boolean;
+  };
+  /** Extra absolute write paths (artifacts) to classify on Windows. */
+  writePaths?: Array<{ absPath: string; alias: string }>;
+}
+
+/** Options for repair-preview (optional trusted host context for tests). */
+export type PreviewOptions = RepairHostContext;
+
+export interface ApplyOptions extends RepairHostContext {
   /**
    * Self-contained authorization token from repair-preview (cg1.…).
    * Encodes capsule material + nonce/expiry; apply revalidates live preconditions.

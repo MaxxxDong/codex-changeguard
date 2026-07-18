@@ -18,6 +18,7 @@ export {
   classifyWriteTarget,
   parseCrashMetadataWindow,
   isForbiddenSystemPath,
+  isSignedAppBinaryPath,
 } from "./windows/index.js";
 export type {
   InstanceIdentity,

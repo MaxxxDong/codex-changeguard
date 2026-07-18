@@ -92,8 +92,9 @@ export function resolveWindowsRepairScope(
       error_code: scopeCode,
       error_message:
         classification.scope === "forbidden_system" ||
-        classification.scope === "admin_required"
-          ? "Target requires administrator/IT action; local mutation refused."
+        classification.scope === "admin_required" ||
+        classification.scope === "unknown"
+          ? "Target requires administrator/IT action; local mutation refused. No elevation or bypass is offered."
           : "Repair refused for unclear ownership.",
       repair_authorized_eligible: false,
     };

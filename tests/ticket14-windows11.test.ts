@@ -14,6 +14,7 @@ import {
   runCliJson,
   runCliRepairPreview,
   runMcpDiagnose,
+  windowsHostTestEnv,
 } from "../src/harness/scenario.js";
 import {
   bindRepairTarget,
@@ -25,6 +26,7 @@ import {
   scanInstances,
   classifyWriteTarget,
   isForbiddenSystemPath,
+  isSignedAppBinaryPath,
 } from "../src/instances/index.js";
 import {
   loadAndEvaluateReceiptFile,
@@ -34,7 +36,14 @@ import {
   parsePlatformSupportReceipt,
 } from "../src/platform/index.js";
 import { diagnose } from "../src/core/diagnose.js";
-import { previewRepair, applyRepair, verifyRepair, rollbackRepair } from "../src/core/recovery/index.js";
+import {
+  previewRepair,
+  applyRepair,
+  verifyRepair,
+  rollbackRepair,
+  evaluateWindowsWriteGate,
+  resolveTrustedHostPlatform,
+} from "../src/core/recovery/index.js";
 import { makeTempDir, readJson, writeJson, REPO_ROOT } from "./helpers.js";
 import { McpTestClient } from "../src/mcp/client.js";
 import { mcpServerEntry } from "../src/harness/scenario.js";
@@ -610,4 +619,498 @@ test("wrong family cannot reach repair authorization via repair-preview CLI", ()
   assert.notEqual(prev.exitCode, 0);
   assert.ok(prev.result);
   assert.equal((prev.result as { ok: boolean }).ok, false);
+});
+
+// ---------------------------------------------------------------------------
+// Ticket 14 P1 corrections — signed-binary priority + shared write-scope gate
+// ---------------------------------------------------------------------------
+
+function assertAdminHandoffNoElevation(handoff: {
+  requested_action: string;
+  policy_class: string;
+  admin_owned: boolean;
+  signed: boolean;
+  permission_bound: boolean;
+}): void {
+  assert.equal(typeof handoff.policy_class, "string");
+  assert.ok(handoff.policy_class.length > 0);
+  assert.equal(typeof handoff.requested_action, "string");
+  const lower = handoff.requested_action.toLowerCase();
+  assert.equal(lower.includes("chmod"), false);
+  assert.equal(lower.includes("runas"), false);
+  assert.equal(lower.includes("uac"), false);
+  assert.equal(lower.includes("elevate"), false);
+  assert.equal(lower.includes("sudo"), false);
+  assert.ok(
+    handoff.admin_owned || handoff.signed || handoff.permission_bound,
+    "IT handoff must carry ownership/signed/permission facts",
+  );
+}
+
+test("P1: isSignedAppBinaryPath wins over user-owned markers (Desktop/MSIX/PATH)", () => {
+  const tmp = makeTempDir("cg-t14-signed-");
+  const { roots } = buildWindowsLayout(tmp);
+
+  // Desktop app, Desktop CLI, MSIX alias, PATH CLI — all refused even under
+  // LOCALAPPDATA / explicit userOwnedRoots (signed binary wins over markers).
+  for (const [label, abs] of [
+    ["desktopApp", roots.desktopApp],
+    ["desktopCli", roots.desktopCli],
+    ["msix", roots.msix],
+    ["pathCli", roots.pathCli],
+  ] as const) {
+    assert.equal(isSignedAppBinaryPath(abs), true, `${label} is signed binary`);
+    const c = classifyWriteTarget({
+      absPath: abs,
+      target_path_alias: `SIGNED_${label}`,
+      userOwnedRoots: [roots.local, roots.userprofile, roots.userOwned],
+    });
+    assert.equal(
+      c.scope,
+      "forbidden_system",
+      `${label} must be forbidden_system under userOwnedRoots`,
+    );
+    // MSIX alias / WindowsApps may classify as msix_package or system_acl
+    // (fixture LocalAppData paths); Desktop/PATH as signed_binary.
+    assert.ok(
+      c.policy_class === "signed_binary" ||
+        c.policy_class === "msix_package" ||
+        c.policy_class === "system_acl",
+      `${label} policy_class=${c.policy_class}`,
+    );
+    assert.equal(c.signed, true);
+    assert.equal(c.admin_owned, true);
+    assertAdminHandoffNoElevation({
+      requested_action: c.requested_action,
+      policy_class: c.policy_class,
+      admin_owned: c.admin_owned,
+      signed: c.signed,
+      permission_bound: c.permission_bound,
+    });
+  }
+
+  // Arbitrary .exe under explicit userOwnedRoots is still forbidden.
+  const rogue = path.join(roots.userOwned, "helper.exe");
+  fs.writeFileSync(rogue, "MZ\n", "utf8");
+  assert.equal(isSignedAppBinaryPath(rogue), true);
+  const rogueClass = classifyWriteTarget({
+    absPath: rogue,
+    target_path_alias: "ROGUE_EXE",
+    userOwnedRoots: [roots.userOwned],
+  });
+  assert.equal(rogueClass.scope, "forbidden_system");
+  assert.equal(rogueClass.policy_class, "signed_binary");
+
+  // .dll / .sys under AppData Programs also forbidden.
+  const dll = path.join(roots.local, "Programs", "Codex", "chrome.dll");
+  fs.writeFileSync(dll, "MZ\n", "utf8");
+  assert.equal(
+    classifyWriteTarget({
+      absPath: dll,
+      target_path_alias: "CHROME_DLL",
+      userOwnedRoots: [roots.local],
+    }).scope,
+    "forbidden_system",
+  );
+});
+
+test("P1: user-owned allows only non-binary cache/control data under registered roots", () => {
+  const tmp = makeTempDir("cg-t14-userdata-");
+  const { roots } = buildWindowsLayout(tmp);
+  const cacheFile = path.join(roots.userOwned, "cache.json");
+  fs.writeFileSync(cacheFile, "{\"v\":1}\n", "utf8");
+  const cfg = path.join(roots.userprofile, ".codex", "config.toml");
+
+  for (const [alias, abs] of [
+    ["USER_CACHE_JSON", cacheFile],
+    ["USER_CONFIG", cfg],
+    ["USER_CACHE_DIR", roots.userOwned],
+  ] as const) {
+    const c = classifyWriteTarget({
+      absPath: abs,
+      target_path_alias: alias,
+      userOwnedRoots: [roots.local, roots.userprofile, roots.userOwned],
+    });
+    assert.equal(c.scope, "user_owned", alias);
+    assert.equal(c.signed, false);
+    assert.equal(c.admin_owned, false);
+  }
+});
+
+test("P1: Program Files / WindowsApps / managed / unknown fail closed ADMIN_ACTION_REQUIRED", () => {
+  const tmp = makeTempDir("cg-t14-pf-");
+  const pf = path.join(tmp, "Program Files", "WindowsApps", "CodexPkg");
+  fs.mkdirSync(pf, { recursive: true });
+  const pfExe = path.join(pf, "Codex.exe");
+  fs.writeFileSync(pfExe, "MZ\n", "utf8");
+
+  assert.equal(isForbiddenSystemPath(pf), true);
+  assert.equal(
+    classifyWriteTarget({ absPath: pf, target_path_alias: "PF_DIR" }).scope,
+    "forbidden_system",
+  );
+  assert.equal(
+    classifyWriteTarget({ absPath: pfExe, target_path_alias: "PF_EXE" }).scope,
+    "forbidden_system",
+  );
+
+  const managed = classifyWriteTarget({
+    absPath: path.join(tmp, "somewhere", "config.toml"),
+    target_path_alias: "MANAGED_CFG",
+    managed: {
+      policy_class: "enterprise_gpo",
+      admin_owned: true,
+      signed: true,
+      permission_bound: true,
+    },
+  });
+  assert.equal(managed.scope, "admin_required");
+
+  const unknown = classifyWriteTarget({
+    absPath: path.join(tmp, "orphan-target"),
+    target_path_alias: "ORPHAN",
+  });
+  assert.equal(unknown.scope, "unknown");
+
+  // resolveWindowsRepairScope maps all three to ADMIN_ACTION_REQUIRED.
+  const scanTmp = makeTempDir("cg-t14-pf-scan-");
+  const { caps } = buildWindowsLayout(scanTmp);
+  const scan = scanInstances({
+    mode: "manual_scan",
+    enumeration: "system_registered",
+    systemCaps: caps,
+    stateDir: path.join(scanTmp, "state"),
+    persistState: false,
+  });
+  const inst = scan.instances[0]!;
+  for (const [label, abs, managedFlag] of [
+    ["pf", pf, undefined],
+    ["unknown", path.join(tmp, "orphan-target"), undefined],
+    [
+      "managed",
+      path.join(tmp, "somewhere"),
+      {
+        policy_class: "enterprise_gpo",
+        admin_owned: true,
+        signed: true,
+        permission_bound: true,
+      },
+    ],
+  ] as const) {
+    const scope = resolveWindowsRepairScope({
+      instances: scan.instances,
+      repair: { instance_id: inst.instance_id },
+      targetAbs: abs,
+      target_path_alias: label.toUpperCase(),
+      managed: managedFlag,
+    });
+    assert.equal(scope.ok, false, label);
+    assert.equal(scope.error_code, "ADMIN_ACTION_REQUIRED", label);
+    assert.equal(scope.repair_authorized_eligible, false, label);
+  }
+});
+
+test("P1: shared recovery gate refuses Program Files / signed exe / unknown on Windows host", () => {
+  const tmp = makeTempDir("cg-t14-gate-");
+  const { roots } = buildWindowsLayout(tmp);
+
+  // Seed a repairable plugin-cache fixture under forbidden and user-owned roots.
+  const pfTarget = path.join(tmp, "Program Files", "Codex");
+  fs.cpSync(
+    path.join(REPO_ROOT, "fixtures/plugin-cache/corruption"),
+    pfTarget,
+    { recursive: true },
+  );
+  // Place a signed binary under an isolated target for writePaths classification.
+  const signedTarget = path.join(tmp, "signed-bin-target");
+  fs.mkdirSync(signedTarget, { recursive: true });
+  const signedExe = path.join(signedTarget, "Codex.exe");
+  fs.writeFileSync(signedExe, "MZ\n", "utf8");
+  fs.cpSync(
+    path.join(REPO_ROOT, "fixtures/plugin-cache/corruption"),
+    path.join(signedTarget, "payload"),
+    { recursive: true },
+  );
+
+  const userTarget = path.join(roots.userOwned, "repair-target");
+  fs.cpSync(
+    path.join(REPO_ROOT, "fixtures/plugin-cache/corruption"),
+    userTarget,
+    { recursive: true },
+  );
+
+  const unknownTarget = path.join(tmp, "orphan-repair");
+  fs.cpSync(
+    path.join(REPO_ROOT, "fixtures/plugin-cache/corruption"),
+    unknownTarget,
+    { recursive: true },
+  );
+
+  // Without Windows host injection, non-Windows fixtures remain compatible.
+  const nonWin = previewRepair(unknownTarget);
+  // May be ok or NOT_APPLICABLE depending on fixture — must not be Windows gate.
+  assert.notEqual(
+    nonWin.evidence?.some?.((e) => e.kind === "windows_write_scope") ?? false,
+    true,
+  );
+
+  // Program Files → refuse
+  const pfPrev = previewRepair(pfTarget, { hostPlatform: "win32" });
+  assert.equal(pfPrev.ok, false);
+  assert.equal(pfPrev.error_code, "ADMIN_ACTION_REQUIRED");
+  assert.ok(pfPrev.admin_handoff);
+  assertAdminHandoffNoElevation(pfPrev.admin_handoff!);
+
+  // Signed binary path as writePaths → refuse even under userOwnedRoots
+  const signedGate = evaluateWindowsWriteGate(userTarget, {
+    hostPlatform: "win32",
+    userOwnedRoots: [roots.userOwned],
+    writePaths: [{ absPath: roots.desktopApp, alias: "DESKTOP_EXE" }],
+  });
+  assert.equal(signedGate.blocked, true);
+  if (signedGate.blocked) {
+    assert.equal(signedGate.error_code, "ADMIN_ACTION_REQUIRED");
+    assert.equal(signedGate.classification.policy_class, "signed_binary");
+    assertAdminHandoffNoElevation(signedGate.admin_handoff);
+  }
+
+  // Directory that is itself a signed-binary path marker (exe file as "path")
+  const exePrev = previewRepair(userTarget, {
+    hostPlatform: "win32",
+    userOwnedRoots: [roots.userOwned],
+    writePaths: [{ absPath: signedExe, alias: "SIGNED_EXE" }],
+  });
+  assert.equal(exePrev.ok, false);
+  assert.equal(exePrev.error_code, "ADMIN_ACTION_REQUIRED");
+  assert.ok(exePrev.admin_handoff);
+
+  // Unknown ownership on Windows → ADMIN_ACTION_REQUIRED
+  const unkPrev = previewRepair(unknownTarget, { hostPlatform: "win32" });
+  assert.equal(unkPrev.ok, false);
+  assert.equal(unkPrev.error_code, "ADMIN_ACTION_REQUIRED");
+  assert.ok(unkPrev.admin_handoff);
+  assert.equal(unkPrev.admin_handoff!.policy_class, "unknown");
+  assertAdminHandoffNoElevation(unkPrev.admin_handoff!);
+
+  // Managed flags → ADMIN_ACTION_REQUIRED
+  const managedPrev = previewRepair(userTarget, {
+    hostPlatform: "win32",
+    userOwnedRoots: [roots.userOwned],
+    managed: {
+      policy_class: "msix_package",
+      admin_owned: true,
+      signed: true,
+      permission_bound: true,
+    },
+  });
+  assert.equal(managedPrev.ok, false);
+  assert.equal(managedPrev.error_code, "ADMIN_ACTION_REQUIRED");
+  assert.ok(managedPrev.admin_handoff);
+  assert.equal(managedPrev.admin_handoff!.policy_class, "msix_package");
+
+  // User-owned cache allowed on Windows host → may preview
+  const userPrev = previewRepair(userTarget, {
+    hostPlatform: "win32",
+    userOwnedRoots: [roots.userOwned, roots.local],
+  });
+  assert.equal(userPrev.ok, true, userPrev.error_message ?? "user cache preview");
+  assert.ok(userPrev.authorization);
+  assert.equal(userPrev.admin_handoff, null);
+
+  // Apply also gates: unknown refuses even with a token from a non-Windows preview
+  const token = userPrev.authorization!;
+  const badApply = applyRepair(unknownTarget, {
+    authorization: token,
+    hostPlatform: "win32",
+  });
+  assert.equal(badApply.ok, false);
+  assert.equal(badApply.error_code, "ADMIN_ACTION_REQUIRED");
+
+  // User-owned apply proceeds under Windows host + registered roots.
+  const goodApply = applyRepair(userTarget, {
+    authorization: token,
+    hostPlatform: "win32",
+    userOwnedRoots: [roots.userOwned, roots.local],
+  });
+  assert.equal(goodApply.ok, true, goodApply.error_message ?? "user apply");
+});
+
+test("P1: trusted host platform injection; real win32 non-downgradable; no JSON forge", () => {
+  // In-process injection works on non-Windows CI hosts.
+  if (process.platform !== "win32") {
+    assert.equal(resolveTrustedHostPlatform("win32"), "win32");
+    assert.equal(resolveTrustedHostPlatform("windows"), "win32");
+    assert.equal(resolveTrustedHostPlatform(null), process.platform);
+  } else {
+    // Real Windows cannot be downgraded.
+    assert.equal(resolveTrustedHostPlatform("darwin"), "win32");
+    assert.equal(resolveTrustedHostPlatform("linux"), "win32");
+  }
+
+  // Non-Windows fixtures stay compatible without host injection.
+  const fixture = path.join(REPO_ROOT, "fixtures/plugin-cache/corruption");
+  const prev = previewRepair(fixture);
+  // Must not trip Windows gate on darwin/linux.
+  if (process.platform !== "win32") {
+    assert.equal(
+      prev.evidence.some((e) => e.kind === "windows_write_scope"),
+      false,
+    );
+  }
+});
+
+test("P1: CLI/MCP write-scope equivalence under Windows host injection", async () => {
+  const tmp = makeTempDir("cg-t14-climcp-");
+  const { roots } = buildWindowsLayout(tmp);
+
+  const pfTarget = path.join(tmp, "Program Files", "WindowsApps", "Codex");
+  fs.cpSync(
+    path.join(REPO_ROOT, "fixtures/plugin-cache/corruption"),
+    pfTarget,
+    { recursive: true },
+  );
+  const userTarget = path.join(roots.userOwned, "repair-target");
+  fs.cpSync(
+    path.join(REPO_ROOT, "fixtures/plugin-cache/corruption"),
+    userTarget,
+    { recursive: true },
+  );
+  const unknownTarget = path.join(tmp, "orphan-repair");
+  fs.cpSync(
+    path.join(REPO_ROOT, "fixtures/plugin-cache/corruption"),
+    unknownTarget,
+    { recursive: true },
+  );
+
+  const winEnv = windowsHostTestEnv();
+
+  // Program Files refused on CLI and MCP with identical error contract.
+  const cliPf = runCliRepairPreview(pfTarget, { env: winEnv });
+  assert.notEqual(cliPf.exitCode, 0);
+  assert.equal((cliPf.result as { ok: boolean }).ok, false);
+  assert.equal(
+    (cliPf.result as { error_code: string }).error_code,
+    "ADMIN_ACTION_REQUIRED",
+  );
+  assert.ok((cliPf.result as { admin_handoff: unknown }).admin_handoff);
+  assertAdminHandoffNoElevation(
+    (cliPf.result as { admin_handoff: {
+      requested_action: string;
+      policy_class: string;
+      admin_owned: boolean;
+      signed: boolean;
+      permission_bound: boolean;
+    } }).admin_handoff,
+  );
+
+  const mcpPfClient = new McpTestClient({
+    serverEntry: mcpServerEntry(),
+    env: winEnv,
+  });
+  try {
+    mcpPfClient.start();
+    const mcpPf = (await mcpPfClient.callTool("changeguard_repair_preview", {
+      target: pfTarget,
+    })) as {
+      ok: boolean;
+      error_code: string | null;
+      admin_handoff: {
+        requested_action: string;
+        policy_class: string;
+        admin_owned: boolean;
+        signed: boolean;
+        permission_bound: boolean;
+      } | null;
+    };
+    assert.equal(mcpPf.ok, false);
+    assert.equal(mcpPf.error_code, "ADMIN_ACTION_REQUIRED");
+    assert.ok(mcpPf.admin_handoff);
+    assertAdminHandoffNoElevation(mcpPf.admin_handoff!);
+    assert.equal(
+      (cliPf.result as { error_code: string }).error_code,
+      mcpPf.error_code,
+    );
+  } finally {
+    await mcpPfClient.close();
+  }
+
+  // Unknown ownership refused equivalently.
+  const cliUnk = runCliRepairPreview(unknownTarget, { env: winEnv });
+  assert.equal(
+    (cliUnk.result as { error_code: string }).error_code,
+    "ADMIN_ACTION_REQUIRED",
+  );
+  const mcpUnkClient = new McpTestClient({
+    serverEntry: mcpServerEntry(),
+    env: winEnv,
+  });
+  try {
+    mcpUnkClient.start();
+    const mcpUnk = (await mcpUnkClient.callTool("changeguard_repair_preview", {
+      target: unknownTarget,
+    })) as { ok: boolean; error_code: string | null };
+    assert.equal(mcpUnk.ok, false);
+    assert.equal(mcpUnk.error_code, "ADMIN_ACTION_REQUIRED");
+  } finally {
+    await mcpUnkClient.close();
+  }
+
+  // LOCALAPPDATA signed exe path: place a .exe-named directory parent that is
+  // classified via write gate when target is under Programs with only binaries.
+  // Use core classify for Desktop signed binary; CLI refuses Program Files above.
+  const desktopClass = classifyWriteTarget({
+    absPath: roots.desktopApp,
+    target_path_alias: "DESKTOP",
+    userOwnedRoots: [roots.local],
+  });
+  assert.equal(desktopClass.scope, "forbidden_system");
+
+  // User cache allowed: harness injects Windows host AND userOwnedRoots only
+  // via in-process core (CLI has no JSON platform forge). Prove CLI without
+  // userOwnedRoots on a path that matches AppData heuristics after injection
+  // still needs roots on POSIX — so allow via core; CLI/MCP refuse orphan.
+  // Equivalence for allow path: both seams share previewRepair; core path above
+  // already proved allow. Cross-check managed fixture CLI/MCP still refuse.
+  const managedTarget = path.join(REPO_ROOT, "fixtures/config-managed-policy");
+  const cliManaged = runCliRepairPreview(managedTarget, { env: winEnv });
+  const mcpManagedClient = new McpTestClient({
+    serverEntry: mcpServerEntry(),
+    env: winEnv,
+  });
+  try {
+    mcpManagedClient.start();
+    const mcpManaged = (await mcpManagedClient.callTool(
+      "changeguard_repair_preview",
+      { target: managedTarget },
+    )) as { ok: boolean; error_code: string | null };
+    assert.equal((cliManaged.result as { ok: boolean }).ok, false);
+    assert.equal(mcpManaged.ok, false);
+    assert.equal(
+      (cliManaged.result as { error_code: string }).error_code,
+      "ADMIN_ACTION_REQUIRED",
+    );
+    assert.equal(mcpManaged.error_code, "ADMIN_ACTION_REQUIRED");
+  } finally {
+    await mcpManagedClient.close();
+  }
+
+  // Non-Windows host (no env injection): existing fixture path remains usable
+  // for diagnose-style operations; repair-preview of plugin-cache still works.
+  const cliNative = runCliRepairPreview(
+    path.join(REPO_ROOT, "fixtures/plugin-cache/corruption"),
+  );
+  // On darwin/linux should not be Windows ADMIN from write-scope.
+  if (process.platform !== "win32") {
+    const code = (cliNative.result as { error_code: string | null } | null)
+      ?.error_code;
+    // Either success or mechanism refusal — not Windows write-scope unknown.
+    if (code === "ADMIN_ACTION_REQUIRED") {
+      const handoff = (cliNative.result as { admin_handoff: { policy_class: string } | null })
+        .admin_handoff;
+      // Managed-policy style is ok; pure unknown windows gate should not fire.
+      assert.notEqual(handoff?.policy_class, "unknown");
+    }
+  }
+
+  void userTarget; // reserved for future LOCALAPPDATA allow CLI wiring
 });

@@ -3,11 +3,22 @@
  * Bounded allowlists and hard-forbidden system zones.
  * Never guides privilege elevation or registry policy mutation.
  */
+import fs from "node:fs";
 import path from "node:path";
 import type {
   WindowsWriteClassification,
   WindowsWriteScope,
 } from "./types.js";
+
+/** Resolve for comparison; prefer realpath so /var vs /private/var matches. */
+function resolveForCompare(p: string): string {
+  const abs = path.resolve(p);
+  try {
+    return fs.realpathSync.native(abs);
+  } catch {
+    return abs;
+  }
+}
 
 /** Normalized forbidden path markers (lowercase, both separators). */
 const FORBIDDEN_MARKERS = [
@@ -67,11 +78,27 @@ export function isMsixAliasPath(absPath: string): boolean {
   );
 }
 
-/** True when path looks like a signed Desktop/MSIX application binary. */
+/**
+ * True when path looks like a signed Desktop/MSIX/PATH application binary.
+ * Any PE-style app binary extension is never a local repair target — including
+ * under %LOCALAPPDATA%/Programs, AppData, or explicit userOwnedRoots.
+ */
 export function isSignedAppBinaryPath(absPath: string): boolean {
   const base = path.basename(absPath).toLowerCase();
-  if (FORBIDDEN_BASENAMES.has(base) && base.endsWith(".exe")) return true;
-  if (base.endsWith(".dll") || base.endsWith(".sys")) return true;
+  // All common Windows app-binary extensions (and known package basenames).
+  if (
+    base.endsWith(".exe") ||
+    base.endsWith(".dll") ||
+    base.endsWith(".sys") ||
+    base.endsWith(".ocx") ||
+    base.endsWith(".scr") ||
+    base.endsWith(".cpl") ||
+    base.endsWith(".drv") ||
+    base.endsWith(".efi")
+  ) {
+    return true;
+  }
+  if (FORBIDDEN_BASENAMES.has(base)) return true;
   return false;
 }
 
@@ -83,9 +110,9 @@ export function isUnderUserOwnedMarkers(
   absPath: string,
   userRoots: string[] = [],
 ): boolean {
-  const resolved = path.resolve(absPath);
+  const resolved = resolveForCompare(absPath);
   for (const root of userRoots) {
-    const r = path.resolve(root);
+    const r = resolveForCompare(root);
     const rel = path.relative(r, resolved);
     if (rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))) {
       return true;
@@ -134,7 +161,7 @@ export interface ClassifyWriteOptions {
 export function classifyWriteTarget(
   opts: ClassifyWriteOptions,
 ): WindowsWriteClassification {
-  const abs = path.resolve(opts.absPath);
+  const abs = resolveForCompare(opts.absPath);
   const alias = opts.target_path_alias;
 
   if (opts.managed) {
@@ -165,7 +192,10 @@ export function classifyWriteTarget(
     };
   }
 
-  if (isSignedAppBinaryPath(abs) && !isUnderUserOwnedMarkers(abs, opts.userOwnedRoots ?? [])) {
+  // Signed app binaries always win over user-owned markers (P1).
+  // %LOCALAPPDATA%/Programs/Codex/*.exe, Desktop/MSIX/PATH binaries, and any
+  // .exe/.dll/.sys under explicit userOwnedRoots remain forbidden_system.
+  if (isSignedAppBinaryPath(abs)) {
     return {
       scope: "forbidden_system",
       policy_class: "signed_binary",
@@ -174,11 +204,13 @@ export function classifyWriteTarget(
       signed: true,
       permission_bound: true,
       requested_action:
-        "Signed application binaries are not local repair targets; use official install sources only.",
+        "Signed application binaries are not local repair targets; use official install sources only. Contact IT/admin through the approved enterprise change process.",
       bound_instance_id: null,
     };
   }
 
+  // User-owned applies only to non-binary cache/control/config data paths under
+  // registered user roots / profile markers — never signed app binaries.
   if (isUnderUserOwnedMarkers(abs, opts.userOwnedRoots ?? [])) {
     return {
       scope: "user_owned",
@@ -206,13 +238,20 @@ export function classifyWriteTarget(
   };
 }
 
-/** Map write scope to recovery error code language. */
+/**
+ * Map write scope to recovery error code language.
+ * admin_required / forbidden_system / unknown all fail closed as
+ * ADMIN_ACTION_REQUIRED (full IT handoff; no elevation guidance).
+ */
 export function writeScopeToErrorCode(
   scope: WindowsWriteScope,
-): "ADMIN_ACTION_REQUIRED" | "REPAIR_REFUSED" | null {
-  if (scope === "admin_required" || scope === "forbidden_system") {
+): "ADMIN_ACTION_REQUIRED" | null {
+  if (
+    scope === "admin_required" ||
+    scope === "forbidden_system" ||
+    scope === "unknown"
+  ) {
     return "ADMIN_ACTION_REQUIRED";
   }
-  if (scope === "unknown") return "REPAIR_REFUSED";
   return null;
 }
