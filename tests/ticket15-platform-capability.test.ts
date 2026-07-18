@@ -13,6 +13,7 @@ import {
 import {
   assertNoIdentityCollapse,
   buildITHandoff,
+  canonicalDisposablePathsEqual,
   compareNetworkPaths,
   discoverBoundedSurfaces,
   evaluateWriteGate,
@@ -21,6 +22,7 @@ import {
   isHostMountPath,
   isolatedFixtureRepairCapabilityOptions,
   linuxCapabilityReport,
+  listTrustedDisposableRoots,
   platformStatus,
   productionRepairCapabilityOptions,
   proveIsolatedFixtureTarget,
@@ -774,6 +776,219 @@ test("T15-P1: preview auth on disposable target cannot apply to unproven repo fi
     `unexpected error_code: ${String(applyJson.error_code)}`,
   );
   assert.equal(hashTargetTree(repoFixture), repoBefore);
+});
+
+/**
+ * Register a user-owned directory as the process temp root via TMPDIR/TMP/TEMP
+ * so equality tests do not depend on root-owned /tmp (or system TEMP).
+ * Restores previous env in finally.
+ */
+function withUserOwnedTempRoot<T>(fn: (ownedRoot: string) => T | Promise<T>): T | Promise<T> {
+  const ownedRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "cg-t15-owned-temp-root-"),
+  );
+  const prev = {
+    TMPDIR: process.env.TMPDIR,
+    TMP: process.env.TMP,
+    TEMP: process.env.TEMP,
+  };
+  process.env.TMPDIR = ownedRoot;
+  process.env.TMP = ownedRoot;
+  process.env.TEMP = ownedRoot;
+  const restore = () => {
+    if (prev.TMPDIR === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = prev.TMPDIR;
+    if (prev.TMP === undefined) delete process.env.TMP;
+    else process.env.TMP = prev.TMP;
+    if (prev.TEMP === undefined) delete process.env.TEMP;
+    else process.env.TEMP = prev.TEMP;
+  };
+  try {
+    const result = fn(ownedRoot);
+    if (result && typeof (result as Promise<T>).then === "function") {
+      return (result as Promise<T>).finally(restore);
+    }
+    restore();
+    return result;
+  } catch (e) {
+    restore();
+    throw e;
+  }
+}
+
+test("T15-P1: exact trusted temp root equality refused; strict child still allowed", async () => {
+  await withUserOwnedTempRoot(async (ownedRoot) => {
+    const ownedReal = fs.realpathSync.native(ownedRoot);
+    // Marker so tree-hash proves no mutation of the shared temp root itself.
+    const marker = path.join(ownedReal, ".cg-t15-root-marker");
+    fs.writeFileSync(marker, "root-must-not-mutate\n", "utf8");
+    const rootBefore = hashTargetTree(ownedReal);
+
+    const seamEnv = harnessProcessEnv();
+    assert.equal(
+      seamEnv[INTERNAL_FIXTURE_SEAM_ENV],
+      INTERNAL_FIXTURE_SEAM_VALUE,
+    );
+
+    // Owned root must appear among trusted disposable roots after env overlay.
+    const trusted = listTrustedDisposableRoots();
+    assert.ok(
+      trusted.some((t) => canonicalDisposablePathsEqual(t, ownedReal)),
+      "user-owned TMPDIR must register as a trusted disposable root",
+    );
+
+    // Exact root equality → prove false; production_unknown (not isolated_fixture).
+    assert.equal(proveIsolatedFixtureTarget(ownedReal), false);
+    assert.equal(proveIsolatedFixtureTarget(ownedRoot), false);
+    const capRoot = resolvePublicRepairCapability(
+      seamEnv,
+      process.platform,
+      ownedReal,
+    );
+    // Host may still advertise PREVIEW capability status; isolation must stay
+    // production_unknown so the write gate refuses mutation.
+    assert.equal(capRoot.isolation, "production_unknown");
+
+    // CLI: env=1 + exact trusted root → WRITE_DISABLED, no auth, no mutation.
+    const cli = spawnSync(
+      process.execPath,
+      [cliEntry(), "repair-preview", ownedReal],
+      {
+        encoding: "utf8",
+        env: seamEnv,
+        maxBuffer: 4 * 1024 * 1024,
+      },
+    );
+    const cliJson = JSON.parse(cli.stdout || "{}") as Record<string, unknown>;
+    assert.notEqual(cli.status, 0);
+    assert.equal(cliJson.ok, false);
+    assert.equal(cliJson.error_code, "WRITE_DISABLED");
+    assert.equal(cliJson.capsule, null);
+    assert.equal(cliJson.authorization, null);
+    assert.equal(hashTargetTree(ownedReal), rootBefore);
+
+    // MCP equivalence on the same exact root.
+    const client = new McpTestClient({
+      serverEntry: mcpServerEntry(),
+      env: seamEnv,
+    });
+    try {
+      client.start();
+      const mcp = (await client.callTool("changeguard_repair_preview", {
+        target: ownedReal,
+      })) as Record<string, unknown>;
+      assert.equal(mcp.ok, false);
+      assert.equal(mcp.error_code, "WRITE_DISABLED");
+      assert.equal(mcp.capsule, null);
+      assert.equal(mcp.authorization, null);
+    } finally {
+      await client.close();
+    }
+    assert.equal(hashTargetTree(ownedReal), rootBefore);
+
+    // Strict child under the user-owned trusted root still proves + repair cycle.
+    const child = copyFixtureToTemp("fixtures/config-wrong-type", ownedReal);
+    const configPath = path.join(child, "config", "config.toml");
+    const originalConfig = fs.readFileSync(configPath);
+    const childBefore = hashTargetTree(child);
+
+    assert.equal(proveIsolatedFixtureTarget(child), true);
+    const capChild = resolvePublicRepairCapability(
+      seamEnv,
+      process.platform,
+      child,
+    );
+    assert.equal(capChild.isolation, "isolated_fixture");
+    assert.equal(capChild.capability_status, "PREVIEW");
+
+    const preview = runCliRepairPreview(child);
+    assert.equal(preview.exitCode, 0, preview.stderr);
+    assert.equal(preview.result!.ok, true);
+    assert.ok(preview.result!.authorization);
+    assert.equal(hashTargetTree(child), childBefore);
+
+    const auth = preview.result!.authorization as string;
+    const applied = runCliRepairApply(child, auth);
+    assert.equal(applied.exitCode, 0, applied.stderr);
+    assert.equal(applied.result!.ok, true);
+    assert.equal(applied.result!.target_mutated, true);
+    assert.notEqual(
+      originalConfig.equals(fs.readFileSync(configPath)),
+      true,
+      "apply mutates only the strict-child isolated copy",
+    );
+
+    const verified = runCliJson(["verify", child]);
+    assert.equal(verified.exitCode, 0, verified.stderr);
+    assert.equal(verified.result!.ok, true);
+
+    const rolled = runCliJson(["rollback", child]);
+    assert.equal(rolled.exitCode, 0, rolled.stderr);
+    assert.equal(rolled.result!.ok, true);
+    assert.ok(
+      originalConfig.equals(fs.readFileSync(configPath)),
+      "rollback restores original config bytes on the strict child",
+    );
+
+    // Shared trusted root tree must not have been authorized as a repair target
+    // (child mutations live under a descendant path; marker at root remains).
+    assert.ok(fs.existsSync(marker));
+    assert.equal(
+      fs.readFileSync(marker, "utf8"),
+      "root-must-not-mutate\n",
+    );
+  });
+});
+
+test("T15-P1: canonicalDisposablePathsEqual covers case/alias without spoofing platform", () => {
+  // Exact match always equal.
+  assert.equal(
+    canonicalDisposablePathsEqual("/private/tmp", "/private/tmp"),
+    true,
+  );
+  // Distinct unrelated paths never equal.
+  assert.equal(
+    canonicalDisposablePathsEqual("/tmp/a", "/tmp/b"),
+    false,
+  );
+
+  if (process.platform === "win32") {
+    // Windows: case-insensitive equality for already-canonical forms.
+    assert.equal(
+      canonicalDisposablePathsEqual("C:\\Temp", "c:\\temp"),
+      true,
+    );
+    assert.equal(
+      canonicalDisposablePathsEqual("C:\\Temp\\child", "c:\\temp"),
+      false,
+    );
+  } else {
+    // Non-Windows: case differs → not equal (no silent case-folding).
+    assert.equal(
+      canonicalDisposablePathsEqual("/Tmp", "/tmp"),
+      false,
+    );
+    // macOS /tmp → /private/tmp alias is handled by realpath before compare;
+    // the comparator itself does not invent firmlink identity.
+    try {
+      const tmpReal = fs.realpathSync.native("/tmp");
+      const privateTmp = "/private/tmp";
+      if (tmpReal === privateTmp || fs.existsSync(privateTmp)) {
+        const privateReal = fs.realpathSync.native(privateTmp);
+        assert.equal(
+          canonicalDisposablePathsEqual(tmpReal, privateReal),
+          true,
+          "realpath-canonical /tmp and /private/tmp compare equal",
+        );
+      }
+    } catch {
+      // Platform without /tmp — skip alias witness; equality still unit-tested.
+    }
+  }
+
+  // Empty / invalid never equal.
+  assert.equal(canonicalDisposablePathsEqual("", "/tmp"), false);
+  assert.equal(canonicalDisposablePathsEqual("/tmp", ""), false);
 });
 
 // --- T15-S11 CLI/MCP equivalence ---

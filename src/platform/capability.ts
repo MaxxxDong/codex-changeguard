@@ -4,7 +4,10 @@
  */
 import { resolveTargetDirectory, PathSafetyError } from "../core/path-safety.js";
 import { isHostMountPath } from "./discovery.js";
-import { assertDisposableTarget } from "./macos/adapter.js";
+import {
+  assertDisposableTarget,
+  listTrustedDisposableRoots,
+} from "./macos/adapter.js";
 import type {
   AdapterId,
   PlatformCapabilityReport,
@@ -161,17 +164,43 @@ export function isolatedFixtureRepairCapabilityOptions(): PublicRepairCapability
 }
 
 /**
+ * Canonical path equality for repair-seam root refusal.
+ *
+ * Inputs are expected to already be realpath-resolved where possible so that
+ * macOS firmlink aliases (e.g. /tmp → /private/tmp) compare equal after
+ * resolution. On win32, equality is case-insensitive; elsewhere it is exact.
+ * This is a deterministic comparator unit seam only — it does not spoof
+ * platform path authority or weaken assertDisposableTarget / pathIsUnder.
+ */
+export function canonicalDisposablePathsEqual(a: string, b: string): boolean {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  if (a.length === 0 || b.length === 0) return false;
+  if (a === b) return true;
+  if (process.platform === "win32") {
+    return a.toLowerCase() === b.toLowerCase();
+  }
+  return false;
+}
+
+/**
  * Prove an exact repair target is a controlled disposable fixture directory.
  *
  * Reuses Ticket 01 path-safety + Ticket 13 disposable-target invariants:
  * - absolute + realpath-canonical ordinary directory (leaf not a symlink)
  * - under trusted OS temp isolation roots (requireTrustedRoot)
+ * - strict descendant of trusted roots (never equal to a trusted root itself)
  * - not active ~/.codex logical/real path or child
  * - not protected/system roots
  * - not WSL host-mount paths (/mnt/<drive>)
  *
  * Env seam alone never authorizes; this proof binds the exact target.
  * Fail closed on any unprovable path, symlink leaf, or isolation refusal.
+ *
+ * Exact trusted-root equality is refused here (repair-seam-specific) so that
+ * CHANGEGUARD_INTERNAL_FIXTURE_SEAM=1 cannot authorize PREVIEW on the shared
+ * temp root (os.tmpdir / TMPDIR / TMP / TEMP). assertDisposableTarget still
+ * treats root equality as under-root for harness temp creation; only this
+ * proof requires a genuine child (e.g. mkdtemp under the trusted root).
  */
 export function proveIsolatedFixtureTarget(
   target: string,
@@ -214,6 +243,16 @@ export function proveIsolatedFixtureTarget(
   if (disposable.real !== targetReal) return false;
 
   if (isHostMountPath(disposable.real)) return false;
+
+  // Refuse exact equality with any trusted disposable root. A repair target
+  // must be a strict descendant (mkdtemp child), never the shared temp root.
+  // Comparison uses realpath-canonical forms + platform path equality.
+  const trustedRoots = listTrustedDisposableRoots();
+  for (const root of trustedRoots) {
+    if (canonicalDisposablePathsEqual(disposable.real, root)) {
+      return false;
+    }
+  }
 
   return true;
 }

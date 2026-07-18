@@ -72,6 +72,7 @@ Synthetic fixtures and capability injection only — **no Full claim** without r
 | write-disabled | LIMITED/READ_ONLY capability on repair-preview/apply | `WRITE_DISABLED`; tree hash unchanged |
 | fixture-seam-env-only | `CHANGEGUARD_INTERNAL_FIXTURE_SEAM=1` on in-repo fixture (CLI+MCP) | env alone is not authorization; `WRITE_DISABLED`; no capsule/authorization; tree hash unchanged |
 | fixture-seam-mkdtemp | env=1 + `mkdtemp(os.tmpdir())` isolated copy | preview → apply → verify → rollback allowed; only the copy mutates |
+| fixture-seam-temp-root-eq | env=1 + exact user-owned trusted temp root (`TMPDIR`/`TMP`/`TEMP` overlay) | `proveIsolatedFixtureTarget=false`; CLI+MCP `WRITE_DISABLED`; no auth; root tree unchanged; strict `mkdtemp` child still preview/apply/verify/rollback |
 | fixture-seam-refuse | leaf/mid symlink, active `~/.codex` alias, HOME ordinary dir, `/mnt/<drive>` | isolation proof fails; stays `production_unknown` / `WRITE_DISABLED` |
 | fixture-seam-auth-bind | disposable preview auth applied to unproven repo path | apply refused; repo tree unchanged |
 - induced verification failure auto-rollbacks exact config bytes
