@@ -212,7 +212,9 @@ async function loadRequiredDist(repoRoot, relDist, detailLabel) {
  * ordered after typecheck; verify-release runs pure steps after tests/build).
  *
  * @param {string} repoRoot
- * @param {{ poisonPayload?: unknown, skipProduct?: boolean }} [opts]
+ * @param {{ poisonPayload?: unknown }} [opts]
+ * Product modules are always required on the non-poison path (fail-closed).
+ * There is no skipProduct / optional-product mode that can green-wash proofs.
  */
 export async function checkPrivacyCorpus(repoRoot, opts = {}) {
   /** @type {{ label_digest: string, seam: string }[]} */
@@ -316,7 +318,8 @@ export async function checkPrivacyCorpus(repoRoot, opts = {}) {
   if (
     typeof buildDisclosureManifest !== "function" ||
     typeof buildTransportRequest !== "function" ||
-    typeof sanitizeSendableLocalFields !== "function"
+    typeof sanitizeSendableLocalFields !== "function" ||
+    typeof isSendableDisclosureToken !== "function"
   ) {
     return {
       ok: false,
@@ -382,22 +385,21 @@ export async function checkPrivacyCorpus(repoRoot, opts = {}) {
   const corpusEntries = Object.entries(SECRETS);
 
   // --- Product token invariant: every secret class rejected as sendable token ---
-  if (typeof isSendableDisclosureToken === "function") {
-    for (const [label, value] of corpusEntries) {
-      if (isSendableDisclosureToken(value)) {
-        allLeaks.push({
-          label_digest: digestLabel(label),
-          seam: "sendable_token_accepted",
-        });
-      }
+  // isSendableDisclosureToken is required above (fail-closed); no optional skip.
+  for (const [label, value] of corpusEntries) {
+    if (isSendableDisclosureToken(value)) {
+      allLeaks.push({
+        label_digest: digestLabel(label),
+        seam: "sendable_token_accepted",
+      });
     }
-    for (const smuggle of ROOT_SMUGGLE) {
-      if (isSendableDisclosureToken(smuggle)) {
-        allLeaks.push({
-          label_digest: digestLabel("root_smuggle"),
-          seam: "sendable_token_root",
-        });
-      }
+  }
+  for (const smuggle of ROOT_SMUGGLE) {
+    if (isSendableDisclosureToken(smuggle)) {
+      allLeaks.push({
+        label_digest: digestLabel("root_smuggle"),
+        seam: "sendable_token_root",
+      });
     }
   }
 
