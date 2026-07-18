@@ -31,6 +31,11 @@ import {
   verifyRepair,
 } from "../core/recovery/index.js";
 import {
+  platformStatus,
+  resolvePublicRepairCapability,
+} from "../platform/index.js";
+import type { AdapterId } from "../platform/types.js";
+import {
   dispatchLifecycle,
   type LifecycleDispatchArgs,
 } from "../core/lifecycle/index.js";
@@ -1245,7 +1250,12 @@ export function runCli(argv: string[]): void {
       if (rest.length !== 1 || isFlag(rest[0]!)) {
         printJson(usageDiagnosis(), 2);
       }
-      const result: RepairResult = previewRepair(rest[0]!);
+      // Production: host-derived capability + production_unknown (fail-closed).
+      // Scenario Harness sets CHANGEGUARD_INTERNAL_FIXTURE_SEAM=1 for PREVIEW.
+      const result: RepairResult = previewRepair(
+        rest[0]!,
+        resolvePublicRepairCapability(),
+      );
       printJson(result, result.ok ? 0 : 1);
     }
 
@@ -1255,6 +1265,7 @@ export function runCli(argv: string[]): void {
       }
       const result: RepairResult = applyRepair(rest[0]!, {
         authorization: rest[1]!,
+        ...resolvePublicRepairCapability(),
       });
       printJson(result, result.ok ? 0 : 1);
     }

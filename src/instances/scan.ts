@@ -14,15 +14,44 @@ import {
 } from "./identity.js";
 import { resolveAffectedInstance } from "./resolve.js";
 import { loadState, saveState, StateError } from "./state.js";
+import { buildCapabilityReport } from "../platform/capability.js";
+import type { AdapterId } from "../platform/types.js";
 import { enumerateSystemCandidates } from "./system-adapter.js";
 import type {
   HookTrustState,
   InstanceIdentity,
+  PlatformId,
   ScanOptions,
   ScanResult,
   VersionFingerprintState,
 } from "./types.js";
 import { readVersionEvidence } from "./version-evidence.js";
+
+function capabilityBlockForScan(
+  opts: ScanOptions,
+  instances: InstanceIdentity[],
+): ScanResult["platform_capability"] {
+  if (opts.enumeration !== "system_registered") return null;
+  const platform: PlatformId =
+    opts.systemCaps?.platform ??
+    instances[0]?.platform ??
+    opts.platform ??
+    "unknown";
+  const adapter = (platform === "unknown" ? "unknown" : platform) as AdapterId;
+  const report = buildCapabilityReport({ adapter });
+  return {
+    schema_version: 1,
+    adapter: report.adapter,
+    status: report.status,
+    writes_enabled: report.writes_enabled,
+    full_support_claimed: false,
+    gaps: report.gaps.map((g) => ({
+      id: g.id,
+      summary: g.summary,
+      status: g.status,
+    })),
+  };
+}
 
 function fail(
   partial: Partial<ScanResult> &
@@ -145,6 +174,8 @@ export function scanInstances(opts: ScanOptions): ScanResult {
 
     const affected = resolveAffectedInstance(instances, observed);
 
+    const platform_capability = capabilityBlockForScan(opts, instances);
+
     // SessionStart: silent when unchanged.
     if (mode === "session_start" && !fingerprint_changed) {
       return {
@@ -168,6 +199,7 @@ export function scanInstances(opts: ScanOptions): ScanResult {
         repair_applied: false,
         error_code: null,
         error_message: null,
+        platform_capability,
       };
     }
 
@@ -218,6 +250,7 @@ export function scanInstances(opts: ScanOptions): ScanResult {
       repair_applied: false,
       error_code: null,
       error_message: null,
+      platform_capability,
     };
   } catch (e) {
     if (e instanceof InventoryError || e instanceof StateError) {

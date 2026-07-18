@@ -791,7 +791,11 @@ function handleToolsCall(params: unknown): {
         code: "EXTRA_ARGS",
       });
     }
-    const payload = previewRepair(requireTarget(a));
+    // Same host-derived capability binding as CLI (user JSON cannot inject PREVIEW).
+    const payload = previewRepair(
+      requireTarget(a),
+      resolvePublicRepairCapability(),
+    );
     return { payload, ok: payload.ok };
   }
 
@@ -809,6 +813,7 @@ function handleToolsCall(params: unknown): {
     }
     const payload = applyRepair(requireTarget(a), {
       authorization: a.authorization,
+      ...resolvePublicRepairCapability(),
     });
     return { payload, ok: payload.ok };
   }

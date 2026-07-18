@@ -59,6 +59,7 @@ Evidence-locked verdict + Recovery Capsule preview
 - `src/page/*`: untrusted page-evidence envelope, extraction, comparison, and candidate-only Repair DSL (Ticket 05)
 - `src/instances/`: multi-instance enumeration, version-fingerprint state, affected-instance resolution, repair-target binding contract
 - `src/instances/system-adapter.ts`: production registered system enumeration (capability-injectable)
+- `src/platform/`: Ticket 15 Linux/WSL/enterprise capability matrix, bounded discovery, IT Handoff, network compare (read-only)
 - `src/hooks/`: trusted SessionStart core, packaged SessionStart entrypoint, bounded read-only health check
 - `hooks/hooks.json`: optional `SessionStart` registration with `$PLUGIN_ROOT` / `%PLUGIN_ROOT%` (host must explicitly trust)
 - `schemas/`: portable contracts for fingerprints, claims, probes, recovery, and version-fingerprint state
@@ -296,14 +297,14 @@ There is no assumed native software-update event.
 
 ### 9.1 Instance enumeration
 
-ChangeGuard enumerates Desktop-bundled, PATH, supported package-manager, Windows MSIX, and WSL candidates as **separate identities**. Multiple instances never collapse into one row.
+ChangeGuard enumerates Desktop-bundled, PATH, supported package-manager, Windows MSIX, native Linux, and WSL candidates as **separate identities**. Multiple instances never collapse into one row. WSL distro CLI and Windows host MSIX/Desktop rows may coexist with distinct `platform`, `install_source`, `runtime_domain`, and `instance_id` values.
 
 Two public enumeration modes share the same scan core:
 
 | Mode | Public seams | Discovery |
 | --- | --- | --- |
 | Fixture inventory | `changeguard scan <inventory-root>`, MCP `changeguard_scan` | Isolated `inventory.json` under an explicit inventory root (tests/demo) |
-| Registered system adapter | `changeguard scan-system`, MCP `changeguard_scan_system`, packaged SessionStart | Bounded known candidates only: Desktop paths, PATH `codex` entries (hard-capped), registered package-manager roots, Windows MSIX / App Execution Alias paths, WSL paths |
+| Registered system adapter | `changeguard scan-system`, MCP `changeguard_scan_system`, packaged SessionStart | Bounded known candidates only: Desktop paths, PATH `codex` entries (hard-capped), registered package-manager roots, Windows MSIX / App Execution Alias paths, native Linux paths (`install_source` path/package — never `wsl`), WSL paths (`install_source` wsl) |
 
 Production system defaults inspect only known Codex locations and PATH entries under hard caps. They never perform broad home traversal and never execute discovered binaries. Missing permissions or version metadata yield explicit `version_provenance: "unavailable"`.
 

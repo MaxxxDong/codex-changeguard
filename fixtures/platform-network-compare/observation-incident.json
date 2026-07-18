@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "status_page_class": "incident",
+  "path_a_success": null,
+  "path_b_success": null,
+  "network_path_id_hash": null,
+  "sso_method_class": null,
+  "surface_a": null,
+  "surface_b": null,
+  "proxy_or_filter_active": null,
+  "ssl_inspection_suspected": null
+}

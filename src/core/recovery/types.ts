@@ -100,6 +100,28 @@ export interface AdminHandoff {
   admin_owned: boolean;
   signed: boolean;
   permission_bound: boolean;
+  /**
+   * Ticket 15 additive IT Handoff fields (optional for older fixtures).
+   * When present, full IT packet without secrets/paths/bypass commands.
+   */
+  schema_version?: 1;
+  status?: "ADMIN_ACTION_REQUIRED";
+  minimal_evidence?: {
+    digests: string[];
+    observed_flags: string[];
+    adapter_status: "READ_ONLY" | "LIMITED" | "PREVIEW" | "FULL";
+    instance_id: string | null;
+  };
+  proposed_action?: string;
+  risk?: "low" | "moderate" | "high";
+  rollback?: string;
+  official_reference?: {
+    title: string;
+    url_allowlisted: string;
+  } | null;
+  network_compare?: unknown | null;
+  secrets_present?: false;
+  absolute_paths_present?: false;
 }
 
 /**
@@ -239,6 +261,30 @@ export interface ApplyOptions extends RepairHostContext {
    * Encodes capsule material + nonce/expiry; apply revalidates live preconditions.
    */
   authorization: string;
+  /**
+   * Ticket 15 platform capability gate.
+   * When omitted, fail-closed to READ_ONLY / production_unknown (no mutation).
+   * Public CLI/MCP must pass host-derived options explicitly. Isolated-fixture
+   * PREVIEW is only for the internal Scenario Harness / test seam.
+   */
+  capability_status?: "READ_ONLY" | "LIMITED" | "PREVIEW" | "FULL";
+  allow_limited_user_owned_recovery?: boolean;
+  isolation?: "isolated_fixture" | "user_owned_registered" | "production_unknown";
+}
+
+/** Optional preview gates (Ticket 15 write-disable / capability). */
+export interface PreviewOptions {
+  /**
+   * When omitted, fail-closed to READ_ONLY / production_unknown.
+   * Explicit PREVIEW + isolated_fixture is the internal fixture seam only.
+   */
+  capability_status?: "READ_ONLY" | "LIMITED" | "PREVIEW" | "FULL";
+  /**
+   * LIMITED user-owned recovery only when true AND isolation is
+   * isolated_fixture or user_owned_registered. Never set from user JSON alone.
+   */
+  allow_limited_user_owned_recovery?: boolean;
+  isolation?: "isolated_fixture" | "user_owned_registered" | "production_unknown";
 }
 
 /** Sentinel relative path the harness may plant to induce verify failure. */

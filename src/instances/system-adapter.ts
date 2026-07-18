@@ -13,6 +13,13 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import {
+  enumerateLinuxCliCandidates,
+} from "../platform/linux-adapter.js";
+import {
+  enumerateWslCliCandidates,
+} from "../platform/wsl-adapter.js";
+import { isHostMountPath } from "../platform/discovery.js";
 import { MAX_INSTANCES } from "./limits.js";
 import { assertRealDirectory, isInsideRoot } from "./path-bounded.js";
 import type {
@@ -111,12 +118,13 @@ function defaultMsixPaths(
   ];
 }
 
+/** @deprecated Prefer platform adapters; retained for caps.wslPaths injection. */
 function defaultWslPaths(
   platform: PlatformId,
   caps: SystemEnumerateCaps,
 ): string[] {
   if (caps.wslPaths) return caps.wslPaths;
-  if (platform !== "wsl" && platform !== "linux") return [];
+  if (platform !== "wsl") return [];
   return ["/usr/local/bin/codex", "/usr/bin/codex"];
 }
 
@@ -280,6 +288,12 @@ export function enumerateSystemCandidates(
         version_metadata_abs: metaAbs.filter((m) =>
           trusted.some((t) => isInsideRoot(t, m)),
         ),
+        runtime_domain:
+          platform === "windows"
+            ? "windows_host"
+            : platform === "macos"
+              ? "macos_host"
+              : null,
       },
       max,
       seen,
@@ -291,6 +305,16 @@ export function enumerateSystemCandidates(
   const entries = pathEntriesOf(caps).slice(0, maxPath);
   for (const dir of entries) {
     if (out.length >= max) break;
+    // WSL/Linux: refuse Windows host drive mounts as PATH evidence or trusted roots.
+    // Unified isHostMountPath covers /mnt/<drive> (any letter), case/normalization,
+    // and symlink→host realpath laundering.
+    if (
+      (platform === "wsl" || platform === "linux") &&
+      isHostMountPath(dir)
+    ) {
+      pathIndex += 1;
+      continue;
+    }
     // Refuse PATH dir that is a symlink (no follow into redirected trees).
     const dirKind = pathKind(dir);
     if (dirKind !== "dir") {
@@ -299,27 +323,63 @@ export function enumerateSystemCandidates(
     }
     for (const name of ["codex", "codex.exe"]) {
       const full = path.join(dir, name);
+      if (
+        (platform === "wsl" || platform === "linux") &&
+        isHostMountPath(full)
+      ) {
+        continue;
+      }
       const kind = pathKind(full);
       if (kind === "missing" || kind === "dir" || kind === "other") continue;
       if (!isCodexBasename(path.basename(full))) continue;
       // Trusted root is the PATH directory itself — adjacent metadata only.
-      // No parent traversal for package.json.
+      // No parent traversal for package.json. Host mounts never become trusted roots.
       let trusted: string[] = [];
-      try {
-        trusted = [assertRealDirectory(dir)];
-      } catch {
-        trusted = [];
+      if (
+        !(
+          (platform === "wsl" || platform === "linux") &&
+          isHostMountPath(dir)
+        )
+      ) {
+        try {
+          trusted = [assertRealDirectory(dir)];
+        } catch {
+          trusted = [];
+        }
       }
+      // Native Linux PATH CLI must never be labeled install_source=wsl.
+      const pathInstallSource =
+        platform === "wsl" ? "wsl" : ("path" as const);
+      const pathDomain =
+        platform === "linux"
+          ? "native_linux"
+          : platform === "wsl"
+            ? "wsl_distro"
+            : platform === "windows"
+              ? "windows_host"
+              : platform === "macos"
+                ? "macos_host"
+                : null;
       pushCandidate(
         out,
         {
-          install_source: "path",
+          install_source: pathInstallSource,
           surface: "cli",
           path: path.resolve(full),
           platform,
           arch,
-          profile_root_alias: null,
-          config_root_alias: null,
+          profile_root_alias:
+            platform === "linux"
+              ? "LINUX_PROFILE"
+              : platform === "wsl"
+                ? "WSL_PROFILE"
+                : null,
+          config_root_alias:
+            platform === "linux"
+              ? "LINUX_CONFIG_PRIMARY"
+              : platform === "wsl"
+                ? "WSL_CONFIG_PRIMARY"
+                : null,
           path_precedence: pathIndex,
           trusted_metadata_roots: trusted,
           version_metadata_abs: trusted.length
@@ -328,6 +388,7 @@ export function enumerateSystemCandidates(
                 path.join(dir, "package.json"),
               ]
             : [],
+          runtime_domain: pathDomain,
         },
         max,
         seen,
@@ -339,6 +400,13 @@ export function enumerateSystemCandidates(
   // --- Package manager roots (explicit registration only) ---
   for (const root of defaultPackageRoots(caps)) {
     if (out.length >= max) break;
+    // Host mounts must not become package trusted roots or version metadata sources.
+    if (
+      (platform === "wsl" || platform === "linux") &&
+      isHostMountPath(root)
+    ) {
+      continue;
+    }
     let trustedRoot: string;
     try {
       trustedRoot = assertRealDirectory(root);
@@ -380,6 +448,16 @@ export function enumerateSystemCandidates(
         path_precedence: null,
         trusted_metadata_roots: roots,
         version_metadata_abs: metaAbs,
+        runtime_domain:
+          platform === "linux"
+            ? "native_linux"
+            : platform === "wsl"
+              ? "wsl_distro"
+              : platform === "windows"
+                ? "windows_host"
+                : platform === "macos"
+                  ? "macos_host"
+                  : null,
       },
       max,
       seen,
@@ -413,43 +491,87 @@ export function enumerateSystemCandidates(
         version_metadata_abs: trusted.length
           ? [path.join(dir, "AppxManifest.xml")]
           : [],
+        runtime_domain: "windows_host",
       },
       max,
       seen,
     );
   }
 
-  // --- WSL / Linux registered paths ---
-  for (const p of defaultWslPaths(platform, caps)) {
-    if (out.length >= max) break;
-    const kind = pathKind(p);
-    if (kind === "missing" || kind === "dir" || kind === "other") continue;
-    const dir = path.dirname(p);
-    let trusted: string[] = [];
-    try {
-      trusted = [assertRealDirectory(dir)];
-    } catch {
-      trusted = [];
+  // --- Native Linux registered paths (install_source path — never wsl) ---
+  if (platform === "linux") {
+    for (const c of enumerateLinuxCliCandidates(caps, arch, pathKind)) {
+      if (out.length >= max) break;
+      // Reuse unified host-mount refuse (adapters also skip; belt-and-suspenders).
+      if (isHostMountPath(c.path)) continue;
+      const dir = path.dirname(c.path);
+      let trusted: string[] = [];
+      if (!isHostMountPath(dir)) {
+        try {
+          trusted = [assertRealDirectory(dir)];
+        } catch {
+          trusted = [];
+        }
+      }
+      pushCandidate(
+        out,
+        {
+          ...c,
+          path: path.resolve(c.path),
+          install_source: "path",
+          platform: "linux",
+          trusted_metadata_roots: trusted,
+          version_metadata_abs: trusted.length
+            ? [path.join(dir, "version.json"), path.join(dir, "package.json")]
+            : [],
+          runtime_domain: "native_linux",
+        },
+        max,
+        seen,
+      );
     }
-    pushCandidate(
-      out,
-      {
-        install_source: "wsl",
-        surface: "cli",
-        path: path.resolve(p),
-        platform: platform === "linux" ? "linux" : "wsl",
-        arch,
-        profile_root_alias: null,
-        config_root_alias: null,
-        path_precedence: null,
-        trusted_metadata_roots: trusted,
-        version_metadata_abs: trusted.length
-          ? [path.join(dir, "version.json"), path.join(dir, "package.json")]
-          : [],
-      },
-      max,
-      seen,
-    );
+  }
+
+  // --- WSL registered paths (explicit wsl only; may coexist with Windows) ---
+  if (platform === "wsl" || (caps.wslPaths && caps.wslPaths.length > 0 && platform !== "linux")) {
+    // When caps inject wslPaths on non-linux hosts (coexistence harness), emit WSL identities.
+    const wslCaps =
+      platform === "wsl"
+        ? caps
+        : { ...caps, wslPaths: caps.wslPaths ?? defaultWslPaths("wsl", caps) };
+    for (const c of enumerateWslCliCandidates(
+      wslCaps,
+      arch,
+      pathKind,
+    )) {
+      if (out.length >= max) break;
+      if (isHostMountPath(c.path)) continue;
+      const dir = path.dirname(c.path);
+      let trusted: string[] = [];
+      if (!isHostMountPath(dir)) {
+        try {
+          trusted = [assertRealDirectory(dir)];
+        } catch {
+          trusted = [];
+        }
+      }
+      pushCandidate(
+        out,
+        {
+          ...c,
+          path: path.resolve(c.path),
+          install_source: "wsl",
+          platform: "wsl",
+          trusted_metadata_roots: trusted,
+          version_metadata_abs: trusted.length
+            ? [path.join(dir, "version.json"), path.join(dir, "package.json")]
+            : [],
+          runtime_domain: "wsl_distro",
+        },
+        max,
+        seen,
+      );
+    }
   }
 
   return out;

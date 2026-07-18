@@ -5,6 +5,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  INTERNAL_FIXTURE_SEAM_ENV,
+  INTERNAL_FIXTURE_SEAM_VALUE,
+} from "../platform/capability.js";
 
 export interface McpClientOptions {
   serverEntry?: string;

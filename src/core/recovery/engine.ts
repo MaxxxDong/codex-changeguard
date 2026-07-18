@@ -70,6 +70,8 @@ import {
   recomputePluginCacheLiveBinding,
   runPluginCacheVerification,
 } from "./plugin-cache.js";
+import { evaluateWriteGate } from "../../platform/capability.js";
+import { buildITHandoff } from "../../platform/it-handoff.js";
 import type {
   AdminHandoff,
   ApplyOptions,
@@ -362,7 +364,7 @@ export function previewRepair(
 
   // Ticket 08 plugin-cache pack takes precedence when inventory is present.
   if (isPluginCacheTarget(targetReal)) {
-    return previewPluginCacheRepair(targetReal);
+    return previewPluginCacheRepair(targetReal, capOpts);
   }
 
   const evidence: MeasuredEvidence[] = [];
@@ -388,6 +390,10 @@ export function previewRepair(
       if (preHandshakeFailureStillPresent(source)) {
         const plan = removeProtectedProcessBlock(source);
         if (plan && plan.result_pattern_count === 0) {
+          const blocked = capabilityBlocksMutation(capOpts, false);
+          if (blocked) {
+            return refuseWriteDisabled("preview", blocked.reason_code, evidence);
+          }
           const op_digest = operationDigest();
           const capsule = buildCapsule({
             scope_digest,
@@ -444,7 +450,7 @@ export function previewRepair(
 
   // --- Ticket 07 config path ---
   try {
-    return previewConfigRepair(targetReal, scope_digest, evidence);
+    return previewConfigRepair(targetReal, scope_digest, evidence, capOpts);
   } catch (e) {
     if (e instanceof PathSafetyError) {
       return fail("preview", e.code, e.message, { evidence });
@@ -454,7 +460,10 @@ export function previewRepair(
 }
 
 /** Ticket 08: preview plugin-cache verified resource copy capsule. */
-function previewPluginCacheRepair(targetReal: string): RepairResult {
+function previewPluginCacheRepair(
+  targetReal: string,
+  previewOptions?: PreviewOptions,
+): RepairResult {
   const evidence: MeasuredEvidence[] = [];
   try {
     const planned = planPluginCacheRepair(targetReal);
@@ -499,6 +508,11 @@ function previewPluginCacheRepair(targetReal: string): RepairResult {
       detail: `verified rebuild source sha256=${plan.trusted_file.sha256.slice(0, 16)}…`,
       measured: true,
     });
+
+    const blocked = capabilityBlocksMutation(previewOptions, false);
+    if (blocked) {
+      return refuseWriteDisabled("preview", blocked.reason_code, evidence);
+    }
 
     const capsule = buildPluginCacheCapsule({
       scope_digest,
@@ -549,26 +563,90 @@ function previewPluginCacheRepair(targetReal: string): RepairResult {
   }
 }
 
+function refuseWriteDisabled(
+  operation: RepairResult["operation"],
+  reason_code: string,
+  evidence: MeasuredEvidence[],
+): RepairResult {
+  return fail(
+    operation,
+    "WRITE_DISABLED",
+    `Mutation refused by platform capability gate (${reason_code}). Unverified or Limited adapters disable writes by default.`,
+    {
+      evidence: [
+        ...evidence,
+        {
+          kind: "platform_capability",
+          detail: `write_gate=${reason_code}`,
+          measured: true,
+        },
+      ],
+      user_resolution: userReceipt(
+        "REPAIR_REFUSED",
+        "Platform capability is read-only or limited; mutation disabled by default.",
+      ),
+    },
+  );
+}
+
+/**
+ * Fail-closed defaults for repair capability.
+ * Omitted options never invent PREVIEW / isolated_fixture.
+ */
+function normalizeRepairCapability(
+  options: PreviewOptions | ApplyOptions | undefined,
+): PreviewOptions {
+  return {
+    capability_status: options?.capability_status ?? "READ_ONLY",
+    isolation: options?.isolation ?? "production_unknown",
+    allow_limited_user_owned_recovery:
+      options?.allow_limited_user_owned_recovery === true,
+  };
+}
+
+function capabilityBlocksMutation(
+  options: PreviewOptions | ApplyOptions | undefined,
+  managed: boolean,
+): WriteDisabled | null {
+  const normalized = normalizeRepairCapability(options);
+  const gate = evaluateWriteGate({
+    capability_status: normalized.capability_status!,
+    isolation: normalized.isolation!,
+    managed_policy: managed,
+    admin_permission_bound: managed,
+    allow_limited_user_owned_recovery:
+      normalized.allow_limited_user_owned_recovery === true,
+  });
+  if (!gate.may_mutate) {
+    return { reason_code: gate.reason_code };
+  }
+  return null;
+}
+
+interface WriteDisabled {
+  reason_code: string;
+}
+
 function previewConfigRepair(
   targetReal: string,
   scope_digest: string,
   evidence: MeasuredEvidence[],
+  previewOptions?: PreviewOptions,
 ): RepairResult {
   const { probe, managed_block } = planConfigRepair(targetReal);
 
   if (managed_block && probe.managed) {
     const m = probe.managed;
-    const handoff: AdminHandoff = {
+    const handoff: AdminHandoff = buildITHandoff({
       policy_class: m.policy_class,
       target_path_alias: m.path_alias,
       config_key: probe.fault?.config_key || null,
-      requested_action:
-        "Contact IT/admin to update managed Codex control configuration through approved enterprise change process.",
       evidence_digests: [m.sha256].filter(Boolean),
       admin_owned: m.admin_owned,
       signed: m.signed,
       permission_bound: m.permission_bound,
-    };
+      adapter_status: "LIMITED",
+    });
     evidence.push({
       kind: "managed_policy",
       detail: `policy_class=${m.policy_class} admin_owned=${m.admin_owned}`,
@@ -591,6 +669,11 @@ function previewConfigRepair(
         "Target is under managed policy; local mutation is refused and no privilege-elevation guidance is offered.",
       admin_handoff: handoff,
     });
+  }
+
+  const blocked = capabilityBlocksMutation(previewOptions, false);
+  if (blocked) {
+    return refuseWriteDisabled("preview", blocked.reason_code, evidence);
   }
 
   if (!probe.fault) {
@@ -1265,6 +1348,12 @@ export function applyRepair(targetPath: string, options: ApplyOptions): RepairRe
     typeof options.authorization === "string" ? options.authorization.trim() : "";
   if (!auth || auth.length < 16 || auth.length > MAX_AUTH_TOKEN_LEN) {
     return fail("apply", "AUTH_INVALID", "Authorization token refused.");
+  }
+
+  // Always bind apply to the shared write gate (fail-closed when capability omitted).
+  const block = capabilityBlocksMutation(options, false);
+  if (block) {
+    return refuseWriteDisabled("apply", block.reason_code, []);
   }
 
   let targetReal: string;
