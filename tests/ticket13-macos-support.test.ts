@@ -38,6 +38,11 @@ import {
   type PlatformSupportReceipt,
   type ScenarioOutcome,
 } from "../src/platform/index.js";
+import {
+  createDisposableTempRoot,
+  ensureDisposableDirectory,
+} from "../src/harness/macos-scenario.js";
+import os from "node:os";
 import { makeTempDir, writeJson } from "./helpers.js";
 import { findRepoRoot } from "../src/paths.js";
 
@@ -309,6 +314,170 @@ test("Ticket13: assertDisposableTarget refuses realpath of ~/.codex→temp and c
   fs.mkdirSync(other, { recursive: true });
   const rOther = assertDisposableTarget(other, home, opts);
   assert.equal(rOther.ok, true);
+});
+
+test("Ticket13: non-existing leaf under alias→active real is refuse-closed", () => {
+  // active ~/.codex → temp real; a second alias symlink also points at that
+  // real root. Non-existing leaves under the alias must fail denyPath via
+  // nearest-ancestor realpath + canonical target — not only trusted-root.
+  const tmp = makeTempDir("cg-t13-alias-leaf-");
+  const home = path.join(tmp, "home");
+  fs.mkdirSync(home, { recursive: true });
+  const realTarget = path.join(tmp, "real-codex-home");
+  fs.mkdirSync(realTarget, { recursive: true });
+  fs.symlinkSync(realTarget, path.join(home, ".codex"));
+
+  const alias = path.join(tmp, "alias-to-active");
+  fs.symlinkSync(realTarget, alias);
+
+  const opts = { requireTrustedRoot: false as const };
+  const missing = path.join(alias, "new-not-existing");
+  assert.equal(fs.existsSync(missing), false);
+
+  const r = assertDisposableTarget(missing, home, opts);
+  assert.equal(r.ok, false, "alias/new-not-existing must be refused");
+  if (!r.ok) assert.equal(r.code, "ACTIVE_CODEX_PROFILE_REFUSED");
+
+  // Nested missing leaf under multi-level alias chain.
+  const mid = path.join(tmp, "mid-link");
+  const outer = path.join(tmp, "outer-link");
+  fs.symlinkSync(realTarget, mid);
+  fs.symlinkSync(mid, outer);
+  const deepMissing = path.join(outer, "a", "b", "c-new");
+  assert.equal(fs.existsSync(deepMissing), false);
+  const rDeep = assertDisposableTarget(deepMissing, home, opts);
+  assert.equal(rDeep.ok, false, "multi-level alias missing leaf must be refused");
+  if (!rDeep.ok) assert.equal(rDeep.code, "ACTIVE_CODEX_PROFILE_REFUSED");
+
+  // Direct real-target missing child still refused.
+  const rRealMissing = assertDisposableTarget(
+    path.join(realTarget, "brand-new"),
+    home,
+    opts,
+  );
+  assert.equal(rRealMissing.ok, false);
+  if (!rRealMissing.ok) {
+    assert.equal(rRealMissing.code, "ACTIVE_CODEX_PROFILE_REFUSED");
+  }
+});
+
+test("Ticket13: ensureDisposableDirectory does not create under alias→active", () => {
+  const tmp = makeTempDir("cg-t13-outdir-alias-");
+  const home = path.join(tmp, "home");
+  fs.mkdirSync(home, { recursive: true });
+  const realTarget = path.join(tmp, "real-codex-home");
+  fs.mkdirSync(realTarget, { recursive: true });
+  fs.symlinkSync(realTarget, path.join(home, ".codex"));
+
+  const alias = path.join(tmp, "out-alias");
+  fs.symlinkSync(realTarget, alias);
+  const outLeaf = path.join(alias, "new-out-dir");
+  const before = new Set(fs.readdirSync(realTarget));
+
+  const r = ensureDisposableDirectory(outLeaf, home, {
+    requireTrustedRoot: false,
+  });
+  assert.equal(r.ok, false, "outDir under alias→active must refuse");
+  if (!r.ok) assert.equal(r.code, "ACTIVE_CODEX_PROFILE_REFUSED");
+
+  // Must not create the leaf or any new inode under the active real root.
+  assert.equal(fs.existsSync(outLeaf), false, "alias/new must not be created");
+  const after = new Set(fs.readdirSync(realTarget));
+  assert.deepEqual([...after].sort(), [...before].sort());
+});
+
+test("Ticket13: createDisposableTempRoot refuses TMPDIR=active real/alias", () => {
+  const tmp = makeTempDir("cg-t13-tmpdir-gate-");
+  const home = path.join(tmp, "home");
+  fs.mkdirSync(home, { recursive: true });
+  const realTarget = path.join(tmp, "real-codex-home");
+  fs.mkdirSync(realTarget, { recursive: true });
+  fs.symlinkSync(realTarget, path.join(home, ".codex"));
+  const alias = path.join(tmp, "tmpdir-alias");
+  fs.symlinkSync(realTarget, alias);
+
+  const prevTmpdir = process.env.TMPDIR;
+  const prevTmp = process.env.TMP;
+  const prevTemp = process.env.TEMP;
+  const beforeReal = new Set(fs.readdirSync(realTarget));
+
+  try {
+    process.env.TMPDIR = realTarget;
+    delete process.env.TMP;
+    delete process.env.TEMP;
+    const r1 = createDisposableTempRoot("cg-t13-bad-", home);
+    assert.equal(r1.ok, false, "TMPDIR=active real must refuse mkdtemp");
+    if (!r1.ok) assert.equal(r1.code, "ACTIVE_CODEX_PROFILE_REFUSED");
+
+    process.env.TMPDIR = alias;
+    const r2 = createDisposableTempRoot("cg-t13-badalias-", home);
+    assert.equal(r2.ok, false, "TMPDIR=alias→active must refuse mkdtemp");
+    if (!r2.ok) {
+      assert.ok(
+        r2.code === "ACTIVE_CODEX_PROFILE_REFUSED" ||
+          r2.code === "SYMLINK_REFUSED" ||
+          r2.code === "REALPATH_UNPROVABLE",
+        `unexpected code: ${r2.code}`,
+      );
+    }
+  } finally {
+    if (prevTmpdir === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = prevTmpdir;
+    if (prevTmp === undefined) delete process.env.TMP;
+    else process.env.TMP = prevTmp;
+    if (prevTemp === undefined) delete process.env.TEMP;
+    else process.env.TEMP = prevTemp;
+  }
+
+  const afterReal = new Set(fs.readdirSync(realTarget));
+  assert.deepEqual(
+    [...afterReal].sort(),
+    [...beforeReal].sort(),
+    "no inode under active real after refused mkdtemp",
+  );
+});
+
+test("Ticket13: createDisposableTempRoot allows safe temp base", () => {
+  const home = path.join(makeTempDir("cg-t13-safe-home-"), "home");
+  fs.mkdirSync(path.join(home, ".codex"), { recursive: true });
+  const r = createDisposableTempRoot("cg-t13-ok-", home);
+  assert.equal(r.ok, true);
+  if (r.ok) {
+    assert.ok(fs.existsSync(r.path));
+    assert.ok(fs.statSync(r.path).isDirectory());
+    // Cleanup disposable root created by the test.
+    fs.rmSync(r.path, { recursive: true, force: true });
+  }
+});
+
+test("Ticket13: ensureDisposableDirectory allows trusted temp + repo verification", () => {
+  const home = path.join(makeTempDir("cg-t13-ens-home-"), "home");
+  fs.mkdirSync(path.join(home, ".codex"), { recursive: true });
+
+  const safeLeaf = path.join(makeTempDir("cg-t13-ens-safe-"), "nested", "out");
+  const r1 = ensureDisposableDirectory(safeLeaf, home);
+  assert.equal(r1.ok, true);
+  assert.equal(fs.existsSync(safeLeaf), true);
+
+  // Default audited repo verification path (when present) remains allowed.
+  const verificationDir = path.join(REPO, ".grok-output", "verification");
+  if (fs.existsSync(path.join(REPO, ".grok-output"))) {
+    const r2 = ensureDisposableDirectory(verificationDir, home, {
+      allowedRoots: [
+        verificationDir,
+        path.join(REPO, ".grok-output"),
+      ],
+    });
+    assert.equal(r2.ok, true, "repo .grok-output/verification must remain allowed");
+  }
+
+  // os.tmpdir() real base still trusted for disposable leaves.
+  const tmpLeaf = path.join(os.tmpdir(), `cg-t13-ens-${process.pid}`, "x");
+  const r3 = ensureDisposableDirectory(tmpLeaf, home);
+  assert.equal(r3.ok, true);
+  if (r3.ok) {
+    fs.rmSync(path.dirname(tmpLeaf), { recursive: true, force: true });
+  }
 });
 
 test("Ticket13: active ~/.codex symlink witness is isolation_unprovable", () => {

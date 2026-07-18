@@ -16,7 +16,7 @@ import path from "node:path";
 import { findRepoRoot } from "../paths.js";
 import {
   assertDisposableTarget,
-  assertHarnessOutputDir,
+  type DisposableTargetOptions,
   buildMacosCapabilities,
   buildPlatformSupportReceipt,
   captureActiveCodexHomeWitness,
@@ -49,13 +49,203 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function makeDisposableRoot(prefix: string): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  const check = assertDisposableTarget(root);
-  if (!check.ok) {
-    throw new Error(`Harness isolation refused temp root: ${check.code}`);
+function tryRealpath(abs: string): string | null {
+  try {
+    return fs.realpathSync.native(abs);
+  } catch {
+    return null;
   }
-  return root;
+}
+
+/**
+ * Cleanup a just-created harness path only when it is proven not to sit under
+ * active Codex / protected roots (assertDisposableTarget deny classes).
+ */
+function safeRemoveJustCreated(
+  createdAbs: string,
+  home: string | null,
+): void {
+  const resolved = path.resolve(createdAbs);
+  // Refuse cleanup when the path classifies as active/protected (or is a symlink).
+  const gate = assertDisposableTarget(resolved, home, {
+    requireTrustedRoot: false,
+  });
+  if (!gate.ok) {
+    if (
+      gate.code === "ACTIVE_CODEX_PROFILE_REFUSED" ||
+      gate.code === "PROTECTED_ROOT_REFUSED" ||
+      gate.code === "HOME_ROOT_REFUSED" ||
+      gate.code === "SYMLINK_REFUSED"
+    ) {
+      return;
+    }
+  }
+  try {
+    const lst = fs.lstatSync(resolved);
+    if (lst.isSymbolicLink()) return;
+    // Re-check realpath before rm.
+    const real = tryRealpath(resolved);
+    if (real) {
+      const realGate = assertDisposableTarget(real, home, {
+        requireTrustedRoot: false,
+      });
+      if (
+        !realGate.ok &&
+        (realGate.code === "ACTIVE_CODEX_PROFILE_REFUSED" ||
+          realGate.code === "PROTECTED_ROOT_REFUSED" ||
+          realGate.code === "HOME_ROOT_REFUSED")
+      ) {
+        return;
+      }
+    }
+    fs.rmSync(resolved, { recursive: true, force: true });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Gate-before-write for a harness output / disposable directory:
+ * assert parent/canonical leaf → mkdir → re-assert; cleanup only just-created
+ * paths proven outside active/protected.
+ */
+export function ensureDisposableDirectory(
+  targetAbs: string,
+  homeDir?: string | null,
+  options: DisposableTargetOptions = {},
+): { ok: true; real: string } | { ok: false; code: string } {
+  const home =
+    homeDir ??
+    process.env.HOME ??
+    process.env.USERPROFILE ??
+    null;
+  const resolved = path.resolve(targetAbs);
+
+  const pre = assertDisposableTarget(resolved, home, {
+    requireTrustedRoot: true,
+    ...options,
+  });
+  if (!pre.ok) return pre;
+
+  let alreadyPresent = false;
+  try {
+    fs.lstatSync(resolved);
+    alreadyPresent = true;
+  } catch {
+    alreadyPresent = false;
+  }
+
+  let highestMissing: string | null = null;
+  if (!alreadyPresent) {
+    let cursor = resolved;
+    while (cursor !== path.dirname(cursor)) {
+      try {
+        fs.lstatSync(cursor);
+        break;
+      } catch {
+        highestMissing = cursor;
+        cursor = path.dirname(cursor);
+      }
+    }
+    try {
+      fs.mkdirSync(resolved, { recursive: true });
+    } catch {
+      return { ok: false, code: "MKDIR_FAILED" };
+    }
+  }
+
+  const post = assertDisposableTarget(resolved, home, {
+    requireTrustedRoot: true,
+    ...options,
+  });
+  if (!post.ok) {
+    if (!alreadyPresent && highestMissing) {
+      safeRemoveJustCreated(highestMissing, home);
+    }
+    return post;
+  }
+  return post;
+}
+
+/**
+ * Gate-before-write mkdtemp under os.tmpdir():
+ * verify os.tmpdir()/TMPDIR real paths vs active/protected/untrusted first,
+ * then mkdtemp, then re-assert. Never creates under active real or alias.
+ */
+export function createDisposableTempRoot(
+  prefix: string,
+  homeDir?: string | null,
+  options: DisposableTargetOptions = {},
+): { ok: true; path: string; real: string } | { ok: false; code: string } {
+  const home =
+    homeDir ??
+    process.env.HOME ??
+    process.env.USERPROFILE ??
+    null;
+
+  if (
+    typeof prefix !== "string" ||
+    prefix.length === 0 ||
+    prefix.length > 64 ||
+    prefix.includes("\0") ||
+    prefix.includes("..") ||
+    prefix.includes(path.sep) ||
+    prefix.includes("/") ||
+    prefix.includes("\\")
+  ) {
+    return { ok: false, code: "INVALID_TARGET" };
+  }
+
+  const tmpBase = os.tmpdir();
+  const bases = new Set<string>();
+  bases.add(path.resolve(tmpBase));
+  if (process.env.TMPDIR) bases.add(path.resolve(process.env.TMPDIR));
+  if (process.env.TMP) bases.add(path.resolve(process.env.TMP));
+  if (process.env.TEMP) bases.add(path.resolve(process.env.TEMP));
+
+  for (const base of bases) {
+    // Temp bases may be symlinks (macOS /tmp → /private/tmp). Check realpath.
+    const baseReal = tryRealpath(base);
+    if (!baseReal) {
+      return { ok: false, code: "REALPATH_UNPROVABLE" };
+    }
+    const baseGate = assertDisposableTarget(baseReal, home, {
+      requireTrustedRoot: true,
+      ...options,
+    });
+    if (!baseGate.ok) {
+      return baseGate;
+    }
+  }
+
+  let root: string;
+  try {
+    root = fs.mkdtempSync(path.join(tmpBase, prefix));
+  } catch {
+    return { ok: false, code: "MKDTEMP_FAILED" };
+  }
+
+  const post = assertDisposableTarget(root, home, {
+    requireTrustedRoot: true,
+    ...options,
+  });
+  if (!post.ok) {
+    safeRemoveJustCreated(root, home);
+    return post;
+  }
+  return { ok: true, path: root, real: post.real };
+}
+
+/**
+ * Create a unique disposable temp root with gate-before-write.
+ * Never creates an inode under active Codex real targets or aliases.
+ */
+function makeDisposableRoot(prefix: string): string {
+  const created = createDisposableTempRoot(prefix);
+  if (!created.ok) {
+    throw new Error(`Harness isolation refused temp root: ${created.code}`);
+  }
+  return created.path;
 }
 
 function packageVersion(): string {
@@ -766,9 +956,10 @@ export function runMacosScenarioHarness(
     outDir = makeDisposableRoot("cg-m13-out-");
   }
 
-  // Create then re-validate realpath (refuse symlink/protected/active escapes).
-  fs.mkdirSync(outDir, { recursive: true });
-  const finalGate = assertHarnessOutputDir(outDir, home, {
+  // Gate-before-write: assert parent/canonical leaf, then mkdir, then re-assert.
+  // Re-assert failure stops immediately and must not leave a just-created dir
+  // under active/protected (cleanup only for proven non-active/non-protected).
+  const finalGate = ensureDisposableDirectory(outDir, home, {
     allowedRoots: allowedOutRoots,
   });
   if (!finalGate.ok) {

@@ -449,9 +449,123 @@ export function captureActiveCodexHomeWitness(
 }
 
 /**
+ * Collect every deny root for the active Codex profile:
+ * - logical HOME/.codex
+ * - realpath(HOME)/.codex
+ * - realpath(HOME/.codex) itself (symlink/firmlink target)
+ * Fail-closed: refuse the logical path, its real target, and any child.
+ */
+function collectActiveCodexDenyRoots(home: string | null): string[] {
+  if (!home || home.length === 0) return [];
+  const roots = new Set<string>();
+  const homeResolved = path.resolve(home);
+  const activeLogical = path.resolve(path.join(home, ".codex"));
+  roots.add(activeLogical);
+
+  const activeReal = tryRealpath(activeLogical);
+  if (activeReal) roots.add(activeReal);
+
+  const homeReal = tryRealpath(homeResolved);
+  if (homeReal) {
+    const viaHome = path.resolve(path.join(homeReal, ".codex"));
+    roots.add(viaHome);
+    const viaHomeReal = tryRealpath(viaHome);
+    if (viaHomeReal) roots.add(viaHomeReal);
+  }
+  return [...roots];
+}
+
+/**
+ * Shared deny classification for absolute paths (logical or realpath'd).
+ * Used for both existing leaves and non-existing leaves' ancestor/canonical forms.
+ */
+function classifyDeniedPath(
+  abs: string,
+  home: string | null,
+  activeDenyRoots: string[],
+): string | null {
+  for (const root of activeDenyRoots) {
+    if (pathIsUnder(root, abs)) {
+      return "ACTIVE_CODEX_PROFILE_REFUSED";
+    }
+  }
+  if (home && home.length > 0) {
+    const homeResolved = path.resolve(home);
+    if (abs === homeResolved) {
+      return "HOME_ROOT_REFUSED";
+    }
+    const homeReal = tryRealpath(homeResolved);
+    if (homeReal && abs === homeReal) {
+      return "HOME_ROOT_REFUSED";
+    }
+  }
+  if (isProtectedPath(abs)) {
+    return "PROTECTED_ROOT_REFUSED";
+  }
+  return null;
+}
+
+/**
+ * Walk upward with lstat until the nearest existing ancestor is found.
+ * Returns the ancestor path, its realpath, and the remaining relative segments
+ * from that ancestor to the original resolved target.
+ */
+function nearestExistingAncestor(resolved: string):
+  | {
+      ancestor: string;
+      ancestorReal: string;
+      remainingRel: string;
+      ancestorLst: fs.Stats;
+    }
+  | { error: string } {
+  let cursor = resolved;
+  for (;;) {
+    let lst: fs.Stats;
+    try {
+      lst = fs.lstatSync(cursor);
+    } catch {
+      const parent = path.dirname(cursor);
+      if (parent === cursor) {
+        return { error: "REALPATH_UNPROVABLE" };
+      }
+      cursor = parent;
+      continue;
+    }
+
+    // Existing segment found — realpath through symlink/firmlink ancestors.
+    // (macOS /tmp → /private/tmp is a legitimate disposable base.)
+    const ancestorReal = tryRealpath(cursor);
+    if (!ancestorReal) {
+      return {
+        error: lst.isSymbolicLink() ? "SYMLINK_REFUSED" : "REALPATH_UNPROVABLE",
+      };
+    }
+    const remainingRel = path.relative(cursor, resolved);
+    if (
+      remainingRel.startsWith("..") ||
+      path.isAbsolute(remainingRel)
+    ) {
+      return { error: "INVALID_TARGET" };
+    }
+    return {
+      ancestor: cursor,
+      ancestorReal,
+      remainingRel,
+      ancestorLst: lst,
+    };
+  }
+}
+
+/**
  * Prove a candidate absolute path is not the active user Codex home,
  * not a protected system location, and not a symlink/firmlink alias escape.
  * Used by harness isolation only; public outputs never include the raw path.
+ *
+ * For a non-existing leaf: lstat walks up to the nearest existing ancestor,
+ * realpaths that ancestor, and runs the same denyPath on both the ancestor
+ * real path and the canonical target (ancestor real + remaining relative
+ * segments). Intermediate alias escapes into active/protected/untrusted fail
+ * closed — not only for the trusted-root check.
  */
 export function assertDisposableTarget(
   targetAbs: string,
@@ -474,57 +588,9 @@ export function assertDisposableTarget(
     process.env.USERPROFILE ??
     null;
 
-  /**
-   * Collect every deny root for the active Codex profile:
-   * - logical HOME/.codex
-   * - realpath(HOME)/.codex
-   * - realpath(HOME/.codex) itself (symlink/firmlink target)
-   * Fail-closed: refuse the logical path, its real target, and any child.
-   */
-  const collectActiveCodexDenyRoots = (): string[] => {
-    if (!home || home.length === 0) return [];
-    const roots = new Set<string>();
-    const homeResolved = path.resolve(home);
-    const activeLogical = path.resolve(path.join(home, ".codex"));
-    roots.add(activeLogical);
-
-    // realpath of active ~/.codex itself (not only HOME).
-    const activeReal = tryRealpath(activeLogical);
-    if (activeReal) roots.add(activeReal);
-
-    const homeReal = tryRealpath(homeResolved);
-    if (homeReal) {
-      const viaHome = path.resolve(path.join(homeReal, ".codex"));
-      roots.add(viaHome);
-      const viaHomeReal = tryRealpath(viaHome);
-      if (viaHomeReal) roots.add(viaHomeReal);
-    }
-    return [...roots];
-  };
-
-  const activeDenyRoots = collectActiveCodexDenyRoots();
-
-  const denyPath = (abs: string): string | null => {
-    for (const root of activeDenyRoots) {
-      if (pathIsUnder(root, abs)) {
-        return "ACTIVE_CODEX_PROFILE_REFUSED";
-      }
-    }
-    if (home && home.length > 0) {
-      const homeResolved = path.resolve(home);
-      if (abs === homeResolved) {
-        return "HOME_ROOT_REFUSED";
-      }
-      const homeReal = tryRealpath(homeResolved);
-      if (homeReal && abs === homeReal) {
-        return "HOME_ROOT_REFUSED";
-      }
-    }
-    if (isProtectedPath(abs)) {
-      return "PROTECTED_ROOT_REFUSED";
-    }
-    return null;
-  };
+  const activeDenyRoots = collectActiveCodexDenyRoots(home);
+  const denyPath = (abs: string): string | null =>
+    classifyDeniedPath(abs, home, activeDenyRoots);
 
   const deniedResolved = denyPath(resolved);
   if (deniedResolved) {
@@ -543,18 +609,43 @@ export function assertDisposableTarget(
     return { ok: false, code: "SYMLINK_REFUSED" };
   }
 
-  // Walk parent segments: refuse if any existing segment is a symlink that
-  // redirects outside trusted roots (firmlink/symlink alias escape).
-  // Fail-closed: existing paths must realpath; unresolvable aliases are refused.
-  const real = tryRealpath(resolved);
-  if (lst && !real) {
-    return { ok: false, code: "REALPATH_UNPROVABLE" };
-  }
-  if (real) {
+  let real: string | null = null;
+
+  if (lst) {
+    // Existing leaf: realpath required; deny the resolved real location.
+    real = tryRealpath(resolved);
+    if (!real) {
+      return { ok: false, code: "REALPATH_UNPROVABLE" };
+    }
     const deniedReal = denyPath(real);
     if (deniedReal) {
       return { ok: false, code: deniedReal };
     }
+  } else {
+    // Non-existing leaf: nearest existing ancestor + canonical target both deny.
+    const anc = nearestExistingAncestor(resolved);
+    if ("error" in anc) {
+      return { ok: false, code: anc.error };
+    }
+
+    // denyPath on ancestor real (catches alias → active/protected).
+    const deniedAncestor = denyPath(anc.ancestorReal);
+    if (deniedAncestor) {
+      return { ok: false, code: deniedAncestor };
+    }
+
+    // Canonical target = realpath(ancestor) + remaining relative segments.
+    const canonical =
+      anc.remainingRel.length === 0
+        ? anc.ancestorReal
+        : path.resolve(path.join(anc.ancestorReal, anc.remainingRel));
+    const deniedCanonical = denyPath(canonical);
+    if (deniedCanonical) {
+      return { ok: false, code: deniedCanonical };
+    }
+
+    // Expected real location once created (for trusted-root and callers).
+    real = canonical;
   }
 
   // When the path exists, require ownership by current uid when getuid is available.
@@ -565,26 +656,13 @@ export function assertDisposableTarget(
     }
   }
 
-  // Existing paths (or their realpath) must sit under a trusted disposable root.
+  // Candidate (existing realpath or non-existing canonical) under trusted root.
+  // Intermediate symlink/firmlink alias into untrusted fails closed here too.
   const requireTrusted = options.requireTrustedRoot !== false;
   if (requireTrusted) {
     const trusted = listTrustedDisposableRoots(options.allowedRoots ?? []);
     const candidate = real ?? resolved;
-    // For not-yet-created paths, check the nearest existing ancestor.
-    let check = candidate;
-    if (!lst) {
-      let cursor = path.resolve(resolved);
-      while (cursor !== path.dirname(cursor)) {
-        try {
-          fs.lstatSync(cursor);
-          check = tryRealpath(cursor) ?? cursor;
-          break;
-        } catch {
-          cursor = path.dirname(cursor);
-        }
-      }
-    }
-    const underTrusted = trusted.some((t) => pathIsUnder(t, check));
+    const underTrusted = trusted.some((t) => pathIsUnder(t, candidate));
     if (!underTrusted) {
       return { ok: false, code: "UNTRUSTED_ROOT_REFUSED" };
     }
