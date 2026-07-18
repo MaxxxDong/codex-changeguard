@@ -19,6 +19,7 @@ import {
 import {
   enumerateWslCliCandidates,
 } from "../platform/wsl-adapter.js";
+import { isHostMountPath } from "../platform/discovery.js";
 import { MAX_INSTANCES } from "./limits.js";
 import { assertRealDirectory, isInsideRoot } from "./path-bounded.js";
 import type {
@@ -287,6 +288,16 @@ export function enumerateSystemCandidates(
   const entries = pathEntriesOf(caps).slice(0, maxPath);
   for (const dir of entries) {
     if (out.length >= max) break;
+    // WSL/Linux: refuse Windows host drive mounts as PATH evidence or trusted roots.
+    // Unified isHostMountPath covers /mnt/<drive> (any letter), case/normalization,
+    // and symlink→host realpath laundering.
+    if (
+      (platform === "wsl" || platform === "linux") &&
+      isHostMountPath(dir)
+    ) {
+      pathIndex += 1;
+      continue;
+    }
     // Refuse PATH dir that is a symlink (no follow into redirected trees).
     const dirKind = pathKind(dir);
     if (dirKind !== "dir") {
@@ -295,16 +306,29 @@ export function enumerateSystemCandidates(
     }
     for (const name of ["codex", "codex.exe"]) {
       const full = path.join(dir, name);
+      if (
+        (platform === "wsl" || platform === "linux") &&
+        isHostMountPath(full)
+      ) {
+        continue;
+      }
       const kind = pathKind(full);
       if (kind === "missing" || kind === "dir" || kind === "other") continue;
       if (!isCodexBasename(path.basename(full))) continue;
       // Trusted root is the PATH directory itself — adjacent metadata only.
-      // No parent traversal for package.json.
+      // No parent traversal for package.json. Host mounts never become trusted roots.
       let trusted: string[] = [];
-      try {
-        trusted = [assertRealDirectory(dir)];
-      } catch {
-        trusted = [];
+      if (
+        !(
+          (platform === "wsl" || platform === "linux") &&
+          isHostMountPath(dir)
+        )
+      ) {
+        try {
+          trusted = [assertRealDirectory(dir)];
+        } catch {
+          trusted = [];
+        }
       }
       // Native Linux PATH CLI must never be labeled install_source=wsl.
       const pathInstallSource =
@@ -359,6 +383,13 @@ export function enumerateSystemCandidates(
   // --- Package manager roots (explicit registration only) ---
   for (const root of defaultPackageRoots(caps)) {
     if (out.length >= max) break;
+    // Host mounts must not become package trusted roots or version metadata sources.
+    if (
+      (platform === "wsl" || platform === "linux") &&
+      isHostMountPath(root)
+    ) {
+      continue;
+    }
     let trustedRoot: string;
     try {
       trustedRoot = assertRealDirectory(root);
@@ -454,12 +485,16 @@ export function enumerateSystemCandidates(
   if (platform === "linux") {
     for (const c of enumerateLinuxCliCandidates(caps, arch, pathKind)) {
       if (out.length >= max) break;
+      // Reuse unified host-mount refuse (adapters also skip; belt-and-suspenders).
+      if (isHostMountPath(c.path)) continue;
       const dir = path.dirname(c.path);
       let trusted: string[] = [];
-      try {
-        trusted = [assertRealDirectory(dir)];
-      } catch {
-        trusted = [];
+      if (!isHostMountPath(dir)) {
+        try {
+          trusted = [assertRealDirectory(dir)];
+        } catch {
+          trusted = [];
+        }
       }
       pushCandidate(
         out,
@@ -493,12 +528,15 @@ export function enumerateSystemCandidates(
       pathKind,
     )) {
       if (out.length >= max) break;
+      if (isHostMountPath(c.path)) continue;
       const dir = path.dirname(c.path);
       let trusted: string[] = [];
-      try {
-        trusted = [assertRealDirectory(dir)];
-      } catch {
-        trusted = [];
+      if (!isHostMountPath(dir)) {
+        try {
+          trusted = [assertRealDirectory(dir)];
+        } catch {
+          trusted = [];
+        }
       }
       pushCandidate(
         out,

@@ -44,7 +44,10 @@ import type {
   UpstreamPreviewResult,
 } from "../upstream/types.js";
 import { MAX_UPSTREAM_REQUEST_BYTES } from "../upstream/limits.js";
-import { platformStatus } from "../platform/index.js";
+import {
+  platformStatus,
+  resolvePublicRepairCapability,
+} from "../platform/index.js";
 import type { AdapterId } from "../platform/types.js";
 
 const TOOL_DIAGNOSE = "changeguard_diagnose";
@@ -591,7 +594,11 @@ function handleToolsCall(params: unknown): {
         code: "EXTRA_ARGS",
       });
     }
-    const payload = previewRepair(requireTarget(a));
+    // Same host-derived capability binding as CLI (user JSON cannot inject PREVIEW).
+    const payload = previewRepair(
+      requireTarget(a),
+      resolvePublicRepairCapability(),
+    );
     return { payload, ok: payload.ok };
   }
 
@@ -609,6 +616,7 @@ function handleToolsCall(params: unknown): {
     }
     const payload = applyRepair(requireTarget(a), {
       authorization: a.authorization,
+      ...resolvePublicRepairCapability(),
     });
     return { payload, ok: payload.ok };
   }

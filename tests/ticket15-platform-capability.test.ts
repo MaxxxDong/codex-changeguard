@@ -16,9 +16,14 @@ import {
   compareNetworkPaths,
   discoverBoundedSurfaces,
   evaluateWriteGate,
+  INTERNAL_FIXTURE_SEAM_ENV,
+  INTERNAL_FIXTURE_SEAM_VALUE,
   isHostMountPath,
+  isolatedFixtureRepairCapabilityOptions,
   linuxCapabilityReport,
   platformStatus,
+  productionRepairCapabilityOptions,
+  resolvePublicRepairCapability,
   syntheticLimitedReceipt,
   validateSupportReceipt,
   wslCapabilityReport,
@@ -29,6 +34,7 @@ import {
   applyRepair,
 } from "../src/core/recovery/index.js";
 import {
+  cliEntry,
   copyFixtureToTemp,
   hashTargetTree,
   mcpServerEntry,
@@ -38,6 +44,7 @@ import {
 import { McpTestClient } from "../src/mcp/client.js";
 import { findRepoRoot } from "../src/paths.js";
 import { makeTempDir, writeJson } from "./helpers.js";
+import { spawnSync } from "node:child_process";
 
 const repoRoot = findRepoRoot(import.meta.url);
 
@@ -276,13 +283,119 @@ test("T15-S06: symlink config root is refused (no follow)", () => {
 // --- T15-S07 / T15-S08 host mount refuse ---
 test("T15-S08: /mnt/c host paths refused as linux trusted roots", () => {
   assert.equal(isHostMountPath("/mnt/c/Users/someone/.codex"), true);
+  assert.equal(isHostMountPath("/mnt/C/Users/someone/.codex"), true);
+  assert.equal(isHostMountPath("/mnt//z/Tools/codex"), true);
+  assert.equal(isHostMountPath("/mnt/z"), true);
   assert.equal(isHostMountPath("/usr/local/bin/codex"), false);
+  assert.equal(isHostMountPath("/mnt/wsl/foo"), false);
   const obs = discoverBoundedSurfaces({
     configRoots: ["/mnt/c/Users/someone/.codex"],
   });
   assert.ok(
     obs.some((o) => o.refused_reason === "HOST_MOUNT_OR_REFUSED_PREFIX"),
   );
+});
+
+test("T15-P1: PATH /mnt/c and /mnt/z never become WSL trusted roots or instance evidence", () => {
+  const mntC = "/mnt/c/Program Files/Codex/bin";
+  const mntZ = "/mnt/z/Tools/codex-bin";
+  const native = "/usr/local/bin";
+  const pathKind = (p: string) => {
+    const n = p.replace(/\\/g, "/");
+    if (
+      n === mntC ||
+      n === mntZ ||
+      n === native ||
+      n.endsWith("/bin") ||
+      n.endsWith("/codex-bin")
+    ) {
+      return "dir" as const;
+    }
+    if (n.endsWith("/codex") || n.endsWith("/codex.exe")) return "file" as const;
+    return "missing" as const;
+  };
+  const cands = enumerateSystemCandidates({
+    platform: "wsl",
+    arch: "x64",
+    env: {
+      WSL_DISTRO_NAME: "Ubuntu",
+      PATH: `${mntC}:${mntZ}:${native}`,
+      HOME: "/home/test",
+    },
+    pathEntries: [mntC, mntZ, native],
+    pathKind,
+    desktopPaths: [],
+    packageRoots: [],
+    msixPaths: [],
+    wslPaths: [],
+    linuxPaths: [],
+  });
+  // Host-mount PATH entries must not produce candidates or trusted roots.
+  for (const c of cands) {
+    assert.equal(isHostMountPath(c.path), false);
+    for (const root of c.trusted_metadata_roots ?? []) {
+      assert.equal(isHostMountPath(root), false);
+    }
+    assert.equal(c.path.includes("/mnt/c"), false);
+    assert.equal(c.path.includes("/mnt/z"), false);
+  }
+  // Native path may still appear.
+  assert.ok(cands.some((c) => c.path.replace(/\\/g, "/").includes("/usr/local/bin")));
+});
+
+test("T15-P1: package root under host mount is refused", () => {
+  const pkg = "/mnt/c/npm/codex-pkg";
+  const pathKind = (p: string) => {
+    const n = p.replace(/\\/g, "/");
+    if (n === pkg) return "dir" as const;
+    if (n.endsWith("package.json")) return "file" as const;
+    if (n.includes("/bin/codex")) return "file" as const;
+    return "missing" as const;
+  };
+  const cands = enumerateSystemCandidates({
+    platform: "linux",
+    arch: "x64",
+    pathKind,
+    packageRoots: [pkg],
+    pathEntries: [],
+    desktopPaths: [],
+    msixPaths: [],
+    wslPaths: [],
+    // Non-empty override so default registered linux paths are not injected.
+    linuxPaths: ["/__no_such_linux_cli__/codex"],
+  });
+  assert.equal(
+    cands.filter((c) => c.install_source === "package_manager").length,
+    0,
+  );
+  assert.ok(!cands.some((c) => isHostMountPath(c.path)));
+  assert.ok(!cands.some((c) => c.path.includes("/mnt/c")));
+});
+
+test("T15-P1: symlink into host mount is refused by isHostMountPath", () => {
+  const tmp = makeTempDir("cg-t15-mnt-sym-");
+  const link = path.join(tmp, "launder-to-host");
+  // Create symlink whose target text is a host mount (need not exist).
+  fs.symlinkSync("/mnt/c/Users/x/.codex/bin", link);
+  assert.equal(isHostMountPath(link), true);
+  // PATH dir that is itself a symlink is already non-dir; also refuse host shape.
+  const pathKind = (p: string) => {
+    if (p === link) return "symlink" as const;
+    return "missing" as const;
+  };
+  const cands = enumerateSystemCandidates({
+    platform: "wsl",
+    arch: "x64",
+    env: { WSL_DISTRO_NAME: "Ubuntu", PATH: link },
+    pathEntries: [link],
+    pathKind,
+    desktopPaths: [],
+    packageRoots: [],
+    msixPaths: [],
+    wslPaths: [],
+    linuxPaths: [],
+  });
+  assert.equal(cands.length, 0);
 });
 
 // --- T15-S09 network compare ---
@@ -349,10 +462,116 @@ test("T15: LIMITED/READ_ONLY write-disabled refuses repair-preview mutation path
   assert.equal(ro.ok, false);
   assert.equal(ro.error_code, "WRITE_DISABLED");
 
-  // Default (no capability) still allows isolated fixture config repair.
-  const allowed = previewRepair(target);
+  // Default (no capability) is fail-closed — never invent PREVIEW/isolated_fixture.
+  const defaulted = previewRepair(target);
+  assert.equal(defaulted.ok, false);
+  assert.equal(defaulted.error_code, "WRITE_DISABLED");
+  assert.equal(defaulted.capsule, null);
+  assert.equal(hashTargetTree(target), before);
+
+  // Explicit internal fixture seam allows isolated config repair.
+  const allowed = previewRepair(target, isolatedFixtureRepairCapabilityOptions());
   assert.equal(allowed.ok, true);
   assert.ok(allowed.authorization);
+
+  // LIMITED only with allow_limited_user_owned_recovery + user-owned isolation.
+  const limitedAllowed = previewRepair(target, {
+    capability_status: "LIMITED",
+    isolation: "user_owned_registered",
+    allow_limited_user_owned_recovery: true,
+  });
+  assert.equal(limitedAllowed.ok, true);
+  assert.ok(limitedAllowed.authorization);
+});
+
+test("T15-P1: public repair capability resolves fail-closed for unknown/linux/wsl", () => {
+  for (const platform of ["linux", "unknown"] as const) {
+    const opts = productionRepairCapabilityOptions(
+      platform === "linux" ? {} : {},
+      platform === "linux" ? "linux" : "aix",
+    );
+    assert.ok(
+      opts.capability_status === "LIMITED" ||
+        opts.capability_status === "READ_ONLY",
+    );
+    assert.equal(opts.isolation, "production_unknown");
+    assert.equal(opts.allow_limited_user_owned_recovery, false);
+    const gate = evaluateWriteGate({
+      capability_status: opts.capability_status,
+      isolation: opts.isolation,
+      managed_policy: false,
+      admin_permission_bound: false,
+      allow_limited_user_owned_recovery: false,
+    });
+    assert.equal(gate.may_mutate, false);
+  }
+  const wsl = productionRepairCapabilityOptions(
+    { WSL_DISTRO_NAME: "Ubuntu" },
+    "linux",
+  );
+  assert.equal(wsl.capability_status, "LIMITED");
+  assert.equal(wsl.isolation, "production_unknown");
+  const wslGate = evaluateWriteGate({
+    capability_status: wsl.capability_status,
+    isolation: wsl.isolation,
+    managed_policy: false,
+    admin_permission_bound: false,
+  });
+  assert.equal(wslGate.may_mutate, false);
+
+  // Internal seam → PREVIEW + isolated_fixture.
+  const seam = resolvePublicRepairCapability({
+    [INTERNAL_FIXTURE_SEAM_ENV]: INTERNAL_FIXTURE_SEAM_VALUE,
+  });
+  assert.equal(seam.capability_status, "PREVIEW");
+  assert.equal(seam.isolation, "isolated_fixture");
+});
+
+test("T15-P1: public CLI/MCP repair without fixture seam is WRITE_DISABLED", async () => {
+  const tmp = makeTempDir("cg-t15-prod-cap-");
+  const target = copyFixtureToTemp("fixtures/config-wrong-type", tmp);
+  const before = hashTargetTree(target);
+
+  // Production-like CLI: no internal seam env.
+  const prodEnv: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: "1" };
+  delete prodEnv[INTERNAL_FIXTURE_SEAM_ENV];
+  const cli = spawnSync(
+    process.execPath,
+    [cliEntry(), "repair-preview", target],
+    {
+      encoding: "utf8",
+      env: prodEnv,
+      maxBuffer: 4 * 1024 * 1024,
+    },
+  );
+  const cliJson = JSON.parse(cli.stdout || "{}") as Record<string, unknown>;
+  assert.notEqual(cli.status, 0);
+  assert.equal(cliJson.error_code, "WRITE_DISABLED");
+  assert.equal(cliJson.capsule, null);
+  assert.equal(hashTargetTree(target), before);
+
+  // Production-like MCP: env without seam; tool JSON cannot inject PREVIEW.
+  const client = new McpTestClient({
+    serverEntry: mcpServerEntry(),
+    env: prodEnv,
+  });
+  try {
+    client.start();
+    const mcp = (await client.callTool("changeguard_repair_preview", {
+      target,
+    })) as Record<string, unknown>;
+    assert.equal(mcp.ok, false);
+    assert.equal(mcp.error_code, "WRITE_DISABLED");
+    assert.equal(mcp.capsule, null);
+  } finally {
+    await client.close();
+  }
+
+  // Harness CLI (internal seam) still previews isolated fixtures.
+  const harness = runCliRepairPreview(target);
+  assert.equal(harness.exitCode, 0, harness.stderr);
+  assert.equal(harness.result!.ok, true);
+  assert.ok(harness.result!.authorization);
 });
 
 // --- T15-S11 CLI/MCP equivalence ---
@@ -403,15 +622,23 @@ test("T15: IT handoff builder rejects bypass/elevation guidance", () => {
 test("T15: applyRepair refuses LIMITED capability without allow flag", () => {
   const tmp = makeTempDir("cg-t15-apply-");
   const target = copyFixtureToTemp("fixtures/config-wrong-type", tmp);
-  const preview = previewRepair(target);
+  const preview = previewRepair(target, isolatedFixtureRepairCapabilityOptions());
   assert.equal(preview.ok, true);
   const apply = applyRepair(target, {
     authorization: preview.authorization!,
     capability_status: "LIMITED",
+    isolation: "isolated_fixture",
   });
   assert.equal(apply.ok, false);
   assert.equal(apply.error_code, "WRITE_DISABLED");
   assert.equal(apply.target_mutated, false);
+
+  // Apply without capability options is also fail-closed.
+  const applyDefault = applyRepair(target, {
+    authorization: preview.authorization!,
+  });
+  assert.equal(applyDefault.ok, false);
+  assert.equal(applyDefault.error_code, "WRITE_DISABLED");
 });
 
 // --- WSL capability report ---

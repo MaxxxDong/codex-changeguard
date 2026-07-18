@@ -8,10 +8,28 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { McpTestClient } from "../mcp/client.js";
+import {
+  INTERNAL_FIXTURE_SEAM_ENV,
+  INTERNAL_FIXTURE_SEAM_VALUE,
+} from "../platform/capability.js";
 import { findRepoRoot } from "../paths.js";
 import type { DiagnosisResult } from "../core/types.js";
 
 const repoRoot = findRepoRoot(import.meta.url);
+
+/**
+ * Scenario Harness process env: enables the internal isolated-fixture PREVIEW
+ * seam for repair-preview/apply. Not forgeable via ordinary MCP tool JSON.
+ */
+export function harnessProcessEnv(
+  base: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return {
+    ...base,
+    NO_COLOR: "1",
+    [INTERNAL_FIXTURE_SEAM_ENV]: INTERNAL_FIXTURE_SEAM_VALUE,
+  };
+}
 
 export function cliEntry(): string {
   return path.join(repoRoot, "bin", "changeguard.js");
@@ -76,7 +94,7 @@ export function runCliJson(args: string[]): {
 } {
   const res = spawnSync(process.execPath, [cliEntry(), ...args], {
     encoding: "utf8",
-    env: { ...process.env, NO_COLOR: "1" },
+    env: harnessProcessEnv(),
     maxBuffer: 4 * 1024 * 1024,
   });
   let result: Record<string, unknown> | null = null;

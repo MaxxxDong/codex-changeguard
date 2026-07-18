@@ -70,7 +70,7 @@ export function wslCapabilityReport(input: {
     logRoots: input.logRoots,
     cacheRoots: input.cacheRoots,
     pathKind: input.pathKind,
-    refusePrefixes: ["/mnt/c", "/mnt/d"],
+    // Default host-drive refuse is centralized in isHostMountPath (/mnt/<letter>).
   });
   return buildCapabilityReport({
     adapter: "wsl",

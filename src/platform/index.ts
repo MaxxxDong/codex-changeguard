@@ -23,10 +23,17 @@ export type {
 export {
   buildCapabilityReport,
   defaultCapabilityStatus,
+  detectHostAdapter,
   evaluateWriteGate,
+  INTERNAL_FIXTURE_SEAM_ENV,
+  INTERNAL_FIXTURE_SEAM_VALUE,
+  isolatedFixtureRepairCapabilityOptions,
+  productionRepairCapabilityOptions,
   resolveEffectiveStatus,
+  resolvePublicRepairCapability,
   runtimeDomainFor,
 } from "./capability.js";
+export type { PublicRepairCapabilityOptions } from "./capability.js";
 
 export {
   discoverBoundedSurfaces,

@@ -14,6 +14,23 @@ import type {
 } from "./types.js";
 import { validateSupportReceipt } from "./support-receipt.js";
 
+/**
+ * Internal Scenario Harness / test seam env name.
+ * Ordinary MCP tool JSON cannot set process env; only the harness or an
+ * operator-controlled process environment can enable isolated-fixture PREVIEW.
+ */
+export const INTERNAL_FIXTURE_SEAM_ENV = "CHANGEGUARD_INTERNAL_FIXTURE_SEAM";
+
+/** Exact value required for the internal fixture repair seam. */
+export const INTERNAL_FIXTURE_SEAM_VALUE = "1";
+
+/** Options bound into public repair-preview / repair-apply shared paths. */
+export interface PublicRepairCapabilityOptions {
+  capability_status: PlatformCapabilityStatus;
+  isolation: "isolated_fixture" | "user_owned_registered" | "production_unknown";
+  allow_limited_user_owned_recovery: boolean;
+}
+
 /** Ship defaults — fail closed; no FULL without real-machine receipt. */
 const DEFAULT_STATUS: Record<AdapterId, PlatformCapabilityStatus> = {
   unknown: "READ_ONLY",
@@ -85,6 +102,71 @@ export function defaultCapabilityStatus(
   adapter: AdapterId,
 ): PlatformCapabilityStatus {
   return DEFAULT_STATUS[adapter] ?? "READ_ONLY";
+}
+
+/**
+ * Detect trusted host adapter from process/env (not user JSON).
+ * WSL is distinguished via WSL_DISTRO_NAME / WSL_INTEROP only.
+ */
+export function detectHostAdapter(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): AdapterId {
+  if (env.WSL_DISTRO_NAME || env.WSL_INTEROP) return "wsl";
+  switch (platform) {
+    case "darwin":
+      return "macos";
+    case "win32":
+      return "windows";
+    case "linux":
+      return "linux";
+    default:
+      return "unknown";
+  }
+}
+
+/**
+ * Production public repair defaults: host capability + production_unknown isolation.
+ * unknown/linux/wsl → READ_ONLY/LIMITED with writes disabled; never invent PREVIEW.
+ */
+export function productionRepairCapabilityOptions(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): PublicRepairCapabilityOptions {
+  const adapter = detectHostAdapter(env, platform);
+  return {
+    capability_status: defaultCapabilityStatus(adapter),
+    isolation: "production_unknown",
+    allow_limited_user_owned_recovery: false,
+  };
+}
+
+/**
+ * Internal isolated-fixture PREVIEW options (Scenario Harness / unit tests only).
+ * Not reachable from ordinary user tool JSON.
+ */
+export function isolatedFixtureRepairCapabilityOptions(): PublicRepairCapabilityOptions {
+  return {
+    capability_status: "PREVIEW",
+    isolation: "isolated_fixture",
+    allow_limited_user_owned_recovery: false,
+  };
+}
+
+/**
+ * Resolve capability options for public CLI/MCP repair seams.
+ * - Production: trusted host adapter + production_unknown (fail-closed writes).
+ * - Internal seam: env CHANGEGUARD_INTERNAL_FIXTURE_SEAM=1 → explicit PREVIEW.
+ * User JSON cannot set this env via MCP tool arguments.
+ */
+export function resolvePublicRepairCapability(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): PublicRepairCapabilityOptions {
+  if (env[INTERNAL_FIXTURE_SEAM_ENV] === INTERNAL_FIXTURE_SEAM_VALUE) {
+    return isolatedFixtureRepairCapabilityOptions();
+  }
+  return productionRepairCapabilityOptions(env, platform);
 }
 
 export function runtimeDomainFor(

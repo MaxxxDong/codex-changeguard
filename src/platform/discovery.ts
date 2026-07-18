@@ -42,17 +42,34 @@ function pathHash(abs: string): string {
   return crypto.createHash("sha256").update(`path:v1:${normalized}`).digest("hex");
 }
 
+/** Collapse separators and trailing slash for stable prefix checks. */
+function normalizePosixAbs(abs: string): string {
+  let s = abs.split(path.sep).join("/");
+  // Strip redundant `./` segments and collapse slashes without resolving `..`.
+  s = s.replace(/\/+/g, "/");
+  if (s.length > 1 && s.endsWith("/")) s = s.slice(0, -1);
+  return s;
+}
+
+/**
+ * Windows host drive mounts under WSL: `/mnt/<letter>` (any a–z, case-insensitive).
+ * Does not treat `/mnt/wsl` or other non-drive mounts as host drives.
+ */
+const HOST_DRIVE_MOUNT_RE = /^\/mnt\/([a-z])(?:\/|$)/i;
+
+function isHostDriveMountNormalized(norm: string): boolean {
+  return HOST_DRIVE_MOUNT_RE.test(norm);
+}
+
 function isRefused(abs: string, refusePrefixes: string[]): boolean {
-  const norm = abs.split(path.sep).join("/");
+  const norm = normalizePosixAbs(abs);
   for (const p of refusePrefixes) {
-    const pref = p.split(path.sep).join("/");
+    const pref = normalizePosixAbs(p);
     if (norm === pref || norm.startsWith(pref.endsWith("/") ? pref : pref + "/")) {
       return true;
     }
   }
-  // Default host-mount refuse for WSL guest.
-  if (norm === "/mnt/c" || norm.startsWith("/mnt/c/")) return true;
-  if (norm === "/mnt/d" || norm.startsWith("/mnt/d/")) return true;
+  if (isHostDriveMountNormalized(norm)) return true;
   return false;
 }
 
@@ -267,7 +284,50 @@ export function discoverBoundedSurfaces(caps: DiscoveryCaps = {}): DiscoveryObse
   return out;
 }
 
-/** True when a candidate absolute path is a WSL host mount that must not be a Linux trusted root. */
+/**
+ * True when a candidate absolute path is a Windows host drive mount under WSL
+ * (`/mnt/<drive>`, any letter; case/normalization/realpath-safe) that must not
+ * become a Linux/WSL trusted root, version-metadata source, or instance evidence.
+ *
+ * Path-shape match is primary (works without the mount existing). When the
+ * path exists, a realpath landing on a host drive is also refused so symlinks
+ * cannot launder host mounts into trusted roots.
+ */
 export function isHostMountPath(abs: string): boolean {
-  return isRefused(abs, []);
+  if (typeof abs !== "string" || abs.length === 0) return false;
+  const norm = normalizePosixAbs(abs);
+  if (isHostDriveMountNormalized(norm)) return true;
+  // realpath safety — refuse when the leaf resolves onto a host drive.
+  try {
+    const st = fs.lstatSync(abs);
+    if (st.isSymbolicLink()) {
+      // Resolve one hop without requiring intermediate parents to exist as mounts.
+      try {
+        const real = fs.realpathSync(abs);
+        if (isHostDriveMountNormalized(normalizePosixAbs(real))) return true;
+      } catch {
+        // Broken link or unreadable — still refuse if the link text is a host mount.
+        try {
+          const link = fs.readlinkSync(abs);
+          const resolved = path.isAbsolute(link)
+            ? link
+            : path.resolve(path.dirname(abs), link);
+          if (isHostDriveMountNormalized(normalizePosixAbs(resolved))) return true;
+        } catch {
+          /* ignore */
+        }
+      }
+      return false;
+    }
+    // Non-symlink existing path: realpath for case/normalization aliases.
+    try {
+      const real = fs.realpathSync(abs);
+      if (isHostDriveMountNormalized(normalizePosixAbs(real))) return true;
+    } catch {
+      /* ignore */
+    }
+  } catch {
+    // Missing path: shape match above is authoritative.
+  }
+  return false;
 }

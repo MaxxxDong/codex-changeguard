@@ -5,10 +5,19 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  INTERNAL_FIXTURE_SEAM_ENV,
+  INTERNAL_FIXTURE_SEAM_VALUE,
+} from "../platform/capability.js";
 
 export interface McpClientOptions {
   serverEntry?: string;
   timeoutMs?: number;
+  /**
+   * Child process env. Defaults enable the internal fixture PREVIEW seam
+   * (this client is test-only). Pass production-like env to assert fail-closed.
+   */
+  env?: NodeJS.ProcessEnv;
 }
 
 export class McpTestClient {
@@ -24,6 +33,7 @@ export class McpTestClient {
   >();
   private readonly timeoutMs: number;
   private readonly serverEntry: string;
+  private readonly env: NodeJS.ProcessEnv;
   /** Accumulates partial stdout chunks until a full NDJSON line is available. */
   private partialStdout = "";
   private initialized = false;
@@ -33,13 +43,18 @@ export class McpTestClient {
     const here = path.dirname(fileURLToPath(import.meta.url));
     this.serverEntry =
       opts.serverEntry ?? path.join(here, "server.js");
+    this.env = opts.env ?? {
+      ...process.env,
+      NO_COLOR: "1",
+      [INTERNAL_FIXTURE_SEAM_ENV]: INTERNAL_FIXTURE_SEAM_VALUE,
+    };
   }
 
   start(): void {
     if (this.child) return;
     this.child = spawn(process.execPath, [this.serverEntry], {
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, NO_COLOR: "1" },
+      env: this.env,
     });
     // Handle partial stdout chunks manually so incomplete frames wait for more data.
     this.child.stdout.setEncoding("utf8");

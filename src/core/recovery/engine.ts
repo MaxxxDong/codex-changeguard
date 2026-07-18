@@ -304,24 +304,14 @@ export function previewRepair(
     return fail("preview", "TARGET_ERROR", "Target refused.");
   }
 
-  // Capability write-disable (Ticket 15) — managed policy still evaluated later
-  // for full IT Handoff; generic READ_ONLY/LIMITED refuse mutation early.
-  const earlyBlock = capabilityBlocksMutation(previewOptions, false);
-  if (earlyBlock && previewOptions?.capability_status) {
-    // Only enforce when caller explicitly supplies capability (default path
-    // remains PREVIEW for isolated fixture recovery).
-    if (
-      previewOptions.capability_status === "READ_ONLY" ||
-      (previewOptions.capability_status === "LIMITED" &&
-        previewOptions.allow_limited_user_owned_recovery !== true)
-    ) {
-      return refuseWriteDisabled("preview", earlyBlock.reason_code, []);
-    }
-  }
+  // Normalize Ticket 15 capability options fail-closed (no silent PREVIEW).
+  // Managed-policy IT Handoff is evaluated later on the config path before the
+  // write gate so LIMITED/READ_ONLY still surfaces ADMIN_ACTION_REQUIRED.
+  const capOpts = normalizeRepairCapability(previewOptions);
 
   // Ticket 08 plugin-cache pack takes precedence when inventory is present.
   if (isPluginCacheTarget(targetReal)) {
-    return previewPluginCacheRepair(targetReal);
+    return previewPluginCacheRepair(targetReal, capOpts);
   }
 
   const evidence: MeasuredEvidence[] = [];
@@ -347,6 +337,10 @@ export function previewRepair(
       if (preHandshakeFailureStillPresent(source)) {
         const plan = removeProtectedProcessBlock(source);
         if (plan && plan.result_pattern_count === 0) {
+          const blocked = capabilityBlocksMutation(capOpts, false);
+          if (blocked) {
+            return refuseWriteDisabled("preview", blocked.reason_code, evidence);
+          }
           const op_digest = operationDigest();
           const capsule = buildCapsule({
             scope_digest,
@@ -403,7 +397,7 @@ export function previewRepair(
 
   // --- Ticket 07 config path ---
   try {
-    return previewConfigRepair(targetReal, scope_digest, evidence, previewOptions);
+    return previewConfigRepair(targetReal, scope_digest, evidence, capOpts);
   } catch (e) {
     if (e instanceof PathSafetyError) {
       return fail("preview", e.code, e.message, { evidence });
@@ -413,7 +407,10 @@ export function previewRepair(
 }
 
 /** Ticket 08: preview plugin-cache verified resource copy capsule. */
-function previewPluginCacheRepair(targetReal: string): RepairResult {
+function previewPluginCacheRepair(
+  targetReal: string,
+  previewOptions?: PreviewOptions,
+): RepairResult {
   const evidence: MeasuredEvidence[] = [];
   try {
     const planned = planPluginCacheRepair(targetReal);
@@ -458,6 +455,11 @@ function previewPluginCacheRepair(targetReal: string): RepairResult {
       detail: `verified rebuild source sha256=${plan.trusted_file.sha256.slice(0, 16)}…`,
       measured: true,
     });
+
+    const blocked = capabilityBlocksMutation(previewOptions, false);
+    if (blocked) {
+      return refuseWriteDisabled("preview", blocked.reason_code, evidence);
+    }
 
     const capsule = buildPluginCacheCapsule({
       scope_digest,
@@ -534,21 +536,33 @@ function refuseWriteDisabled(
   );
 }
 
+/**
+ * Fail-closed defaults for repair capability.
+ * Omitted options never invent PREVIEW / isolated_fixture.
+ */
+function normalizeRepairCapability(
+  options: PreviewOptions | ApplyOptions | undefined,
+): PreviewOptions {
+  return {
+    capability_status: options?.capability_status ?? "READ_ONLY",
+    isolation: options?.isolation ?? "production_unknown",
+    allow_limited_user_owned_recovery:
+      options?.allow_limited_user_owned_recovery === true,
+  };
+}
+
 function capabilityBlocksMutation(
   options: PreviewOptions | ApplyOptions | undefined,
   managed: boolean,
 ): WriteDisabled | null {
-  // Default: isolated fixture recovery path remains available (Tickets 02/07/08).
-  const status = options?.capability_status ?? "PREVIEW";
-  const isolation =
-    (options as PreviewOptions | undefined)?.isolation ?? "isolated_fixture";
+  const normalized = normalizeRepairCapability(options);
   const gate = evaluateWriteGate({
-    capability_status: status,
-    isolation,
+    capability_status: normalized.capability_status!,
+    isolation: normalized.isolation!,
     managed_policy: managed,
     admin_permission_bound: managed,
     allow_limited_user_owned_recovery:
-      options?.allow_limited_user_owned_recovery === true,
+      normalized.allow_limited_user_owned_recovery === true,
   });
   if (!gate.may_mutate) {
     return { reason_code: gate.reason_code };
@@ -1280,16 +1294,10 @@ export function applyRepair(targetPath: string, options: ApplyOptions): RepairRe
     return fail("apply", "AUTH_INVALID", "Authorization token refused.");
   }
 
-  if (options.capability_status) {
-    const block = capabilityBlocksMutation(options, false);
-    if (
-      block &&
-      (options.capability_status === "READ_ONLY" ||
-        (options.capability_status === "LIMITED" &&
-          options.allow_limited_user_owned_recovery !== true))
-    ) {
-      return refuseWriteDisabled("apply", block.reason_code, []);
-    }
+  // Always bind apply to the shared write gate (fail-closed when capability omitted).
+  const block = capabilityBlocksMutation(options, false);
+  if (block) {
+    return refuseWriteDisabled("apply", block.reason_code, []);
   }
 
   let targetReal: string;

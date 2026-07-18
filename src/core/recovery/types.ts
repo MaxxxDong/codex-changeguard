@@ -235,16 +235,27 @@ export interface ApplyOptions {
    */
   authorization: string;
   /**
-   * Ticket 15 platform capability gate. When omitted, isolated fixture recovery
-   * remains allowed (PREVIEW isolation path for Tickets 02/07/08).
+   * Ticket 15 platform capability gate.
+   * When omitted, fail-closed to READ_ONLY / production_unknown (no mutation).
+   * Public CLI/MCP must pass host-derived options explicitly. Isolated-fixture
+   * PREVIEW is only for the internal Scenario Harness / test seam.
    */
   capability_status?: "READ_ONLY" | "LIMITED" | "PREVIEW" | "FULL";
   allow_limited_user_owned_recovery?: boolean;
+  isolation?: "isolated_fixture" | "user_owned_registered" | "production_unknown";
 }
 
 /** Optional preview gates (Ticket 15 write-disable / capability). */
 export interface PreviewOptions {
+  /**
+   * When omitted, fail-closed to READ_ONLY / production_unknown.
+   * Explicit PREVIEW + isolated_fixture is the internal fixture seam only.
+   */
   capability_status?: "READ_ONLY" | "LIMITED" | "PREVIEW" | "FULL";
+  /**
+   * LIMITED user-owned recovery only when true AND isolation is
+   * isolated_fixture or user_owned_registered. Never set from user JSON alone.
+   */
   allow_limited_user_owned_recovery?: boolean;
   isolation?: "isolated_fixture" | "user_owned_registered" | "production_unknown";
 }
