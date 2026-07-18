@@ -5,7 +5,12 @@
  * Stdout redaction alone is NOT sufficient — scans payload JSON, transport
  * requests, capsule/doctor export shapes.
  *
- * Failure output never prints secret corpus values (hashes/labels only).
+ * Each secret class is injected through every relevant sendable scalar/list
+ * field on an approved instrumented transport path; each resulting request is
+ * scanned. Failure output never prints secret corpus values (hashes/labels only).
+ *
+ * Required product module/API absence or incompatible shape fails GATE_PRIVACY
+ * (fail-closed; no silent optional catch-and-continue).
  */
 
 import crypto from "node:crypto";
@@ -39,8 +44,27 @@ const SECRETS = Object.freeze({
   fullWidth: "ＡＰＩ＿ＫＥＹ＝ｃｇｔ１６ｆｕｌｌｗｉｄｔｈｓｅｃｒｅｔ",
 });
 
+/** Root-confirmed outbound smuggle payloads (exact reproductions). */
+const ROOT_SMUGGLE = Object.freeze([
+  SECRETS.cookie,
+  SECRETS.otp,
+  SECRETS.sessionRollout,
+]);
+
 /** Labels for reporting (never the raw values). */
 export const PRIVACY_CORPUS_LABELS = Object.freeze(Object.keys(SECRETS));
+
+/** Sendable scalar fields on OfficialTransportRequest / local_context. */
+const SENDABLE_SCALARS = Object.freeze([
+  "codex_version",
+  "surface",
+  "platform_os",
+  "platform_arch",
+  "error_class",
+]);
+
+/** Sendable list fields. */
+const SENDABLE_LISTS = Object.freeze(["config_keys", "feature_ids"]);
 
 function digestLabel(label) {
   return crypto.createHash("sha256").update(label).digest("hex").slice(0, 12);
@@ -99,9 +123,7 @@ export function scanPayloadForSecrets(payload, secrets = secretValues(), seam = 
   const nfkc = text.normalize("NFKC");
   const nfkcSecret = SECRETS.fullWidth.normalize("NFKC");
   if (nfkc.includes(nfkcSecret) && !leaks.some((l) => l.label_digest === digestLabel("fullWidth"))) {
-    // full-width may legitimately be redacted to placeholder; only flag raw nfkc form
     if (nfkc.includes("cgt16fullwidthsecret") || nfkc.includes(nfkcSecret)) {
-      // if redactor left the decoded secret value, flag it
       if (nfkc.includes("cgt16fullwidthsecret")) {
         leaks.push({ label_digest: digestLabel("fullWidth"), seam: `${seam}:nfkc` });
       }
@@ -152,6 +174,39 @@ function stableStringify(value) {
 }
 
 /**
+ * Bounded base local context with only legitimate identifier tokens.
+ */
+function cleanBaseContext() {
+  return {
+    codex_version: "0.50.0",
+    surface: "browser_control",
+    platform_os: "macos",
+    platform_arch: "arm64",
+    config_keys: ["shell_environment_policy.set"],
+    feature_ids: ["browser"],
+    error_class: "Error",
+  };
+}
+
+/**
+ * Load a required dist module; fail closed with GATE_PRIVACY detail label.
+ * @param {string} repoRoot
+ * @param {string} relDist path under dist/
+ * @param {string} detailLabel
+ */
+async function loadRequiredDist(repoRoot, relDist, detailLabel) {
+  const abs = path.join(repoRoot, relDist);
+  try {
+    return await import(pathToFileURL(abs).href);
+  } catch {
+    return {
+      __privacy_load_error: true,
+      detail: detailLabel,
+    };
+  }
+}
+
+/**
  * Run the privacy gate using product modules from dist/ (compiled).
  * Fail closed if dist is missing (typecheck/build must precede pure steps when
  * ordered after typecheck; verify-release runs pure steps after tests/build).
@@ -173,30 +228,29 @@ export async function checkPrivacyCorpus(repoRoot, opts = {}) {
   }
 
   // 2) Static corpus: redactText must not leave raw secrets (product redactor)
-  let redactText;
-  let nfkc;
-  let buildDisclosureManifest;
-  let buildTransportRequest;
-  let refreshOfficialEvidence;
-  let createFakeTransport;
-  let instrumentTransport;
-
-  const distRedact = path.join(repoRoot, "dist/core/redact.js");
-  const distDisclosure = path.join(repoRoot, "dist/evidence/disclosure.js");
-  const distRefresh = path.join(repoRoot, "dist/evidence/refresh.js");
-  const distTransport = path.join(repoRoot, "dist/evidence/transport.js");
-
-  try {
-    const redactMod = await import(pathToFileURL(distRedact).href);
-    redactText = redactMod.redactText;
-    nfkc = redactMod.nfkc;
-  } catch {
+  const redactLoad = await loadRequiredDist(
+    repoRoot,
+    "dist/core/redact.js",
+    "privacy_dist_redact_unavailable",
+  );
+  if (redactLoad.__privacy_load_error) {
     return {
       ok: false,
       reason_code: "GATE_PRIVACY",
       external_disclosure_count: -1,
       leaks: [],
-      detail: "privacy_dist_redact_unavailable",
+      detail: redactLoad.detail,
+    };
+  }
+  const redactText = redactLoad.redactText;
+  const nfkc = redactLoad.nfkc;
+  if (typeof redactText !== "function" || typeof nfkc !== "function") {
+    return {
+      ok: false,
+      reason_code: "GATE_PRIVACY",
+      external_disclosure_count: -1,
+      leaks: [],
+      detail: "privacy_redact_api_incompatible",
     };
   }
 
@@ -240,41 +294,208 @@ export async function checkPrivacyCorpus(repoRoot, opts = {}) {
     allLeaks.push({ label_digest: digestLabel("envDump"), seam: "redact_env" });
   }
 
-  // 3) Instrument official-evidence transport: refuse → 0 calls; approved → no secrets in request
-  try {
-    const discMod = await import(pathToFileURL(distDisclosure).href);
-    buildDisclosureManifest = discMod.buildDisclosureManifest;
-    buildTransportRequest = discMod.buildTransportRequest;
-    const refreshMod = await import(pathToFileURL(distRefresh).href);
-    refreshOfficialEvidence = refreshMod.refreshOfficialEvidence;
-    const transportMod = await import(pathToFileURL(distTransport).href);
-    createFakeTransport = transportMod.createFakeTransport;
-    instrumentTransport = transportMod.instrumentTransport;
-  } catch {
+  // 3) Required evidence modules — fail closed if missing/incompatible
+  const discLoad = await loadRequiredDist(
+    repoRoot,
+    "dist/evidence/disclosure.js",
+    "privacy_dist_disclosure_unavailable",
+  );
+  if (discLoad.__privacy_load_error) {
     return {
       ok: false,
       reason_code: "GATE_PRIVACY",
       external_disclosure_count: -1,
       leaks: [],
-      detail: "privacy_dist_evidence_unavailable",
+      detail: discLoad.detail,
+    };
+  }
+  const buildDisclosureManifest = discLoad.buildDisclosureManifest;
+  const buildTransportRequest = discLoad.buildTransportRequest;
+  const sanitizeSendableLocalFields = discLoad.sanitizeSendableLocalFields;
+  const isSendableDisclosureToken = discLoad.isSendableDisclosureToken;
+  if (
+    typeof buildDisclosureManifest !== "function" ||
+    typeof buildTransportRequest !== "function" ||
+    typeof sanitizeSendableLocalFields !== "function"
+  ) {
+    return {
+      ok: false,
+      reason_code: "GATE_PRIVACY",
+      external_disclosure_count: -1,
+      leaks: [],
+      detail: "privacy_disclosure_api_incompatible",
+    };
+  }
+
+  const refreshLoad = await loadRequiredDist(
+    repoRoot,
+    "dist/evidence/refresh.js",
+    "privacy_dist_refresh_unavailable",
+  );
+  if (refreshLoad.__privacy_load_error) {
+    return {
+      ok: false,
+      reason_code: "GATE_PRIVACY",
+      external_disclosure_count: -1,
+      leaks: [],
+      detail: refreshLoad.detail,
+    };
+  }
+  const refreshOfficialEvidence = refreshLoad.refreshOfficialEvidence;
+  if (typeof refreshOfficialEvidence !== "function") {
+    return {
+      ok: false,
+      reason_code: "GATE_PRIVACY",
+      external_disclosure_count: -1,
+      leaks: [],
+      detail: "privacy_refresh_api_incompatible",
+    };
+  }
+
+  const transportLoad = await loadRequiredDist(
+    repoRoot,
+    "dist/evidence/transport.js",
+    "privacy_dist_transport_unavailable",
+  );
+  if (transportLoad.__privacy_load_error) {
+    return {
+      ok: false,
+      reason_code: "GATE_PRIVACY",
+      external_disclosure_count: -1,
+      leaks: [],
+      detail: transportLoad.detail,
+    };
+  }
+  const createFakeTransport = transportLoad.createFakeTransport;
+  const instrumentTransport = transportLoad.instrumentTransport;
+  if (typeof createFakeTransport !== "function" || typeof instrumentTransport !== "function") {
+    return {
+      ok: false,
+      reason_code: "GATE_PRIVACY",
+      external_disclosure_count: -1,
+      leaks: [],
+      detail: "privacy_transport_api_incompatible",
     };
   }
 
   const snapshotPath = path.join(repoRoot, "fixtures/official-evidence/snapshot.json");
-  const poisonedLocal = {
-    codex_version: "0.50.0",
-    surface: "browser_control",
-    platform_os: "macos",
-    platform_arch: "arm64",
-    // Device-only values must never ride outbound keys
-    config_keys: ["shell_environment_policy.set"],
-    feature_ids: ["browser"],
-    error_class: "Error",
-    // Deliberately hostile free text that must not become request fields
-    _device_only_blob: corpus,
-  };
+  const corpusEntries = Object.entries(SECRETS);
 
-  // Refusal path
+  // --- Product token invariant: every secret class rejected as sendable token ---
+  if (typeof isSendableDisclosureToken === "function") {
+    for (const [label, value] of corpusEntries) {
+      if (isSendableDisclosureToken(value)) {
+        allLeaks.push({
+          label_digest: digestLabel(label),
+          seam: "sendable_token_accepted",
+        });
+      }
+    }
+    for (const smuggle of ROOT_SMUGGLE) {
+      if (isSendableDisclosureToken(smuggle)) {
+        allLeaks.push({
+          label_digest: digestLabel("root_smuggle"),
+          seam: "sendable_token_root",
+        });
+      }
+    }
+  }
+
+  // --- Direct buildTransportRequest: inject each secret into every scalar/list field ---
+  {
+    const base = cleanBaseContext();
+    for (const [label, value] of corpusEntries) {
+      for (const field of SENDABLE_SCALARS) {
+        const local_context = { ...base, [field]: value };
+        const sendable = sanitizeSendableLocalFields(local_context);
+        const scanSendable = scanPayloadForSecrets(
+          sendable,
+          secretValues(),
+          `sanitize_scalar:${field}`,
+        );
+        allLeaks.push(...scanSendable.leaks);
+        // Field must be omitted (not present with corpus value)
+        if (sendable[field] !== undefined && stableStringify(sendable[field]).includes(value)) {
+          allLeaks.push({
+            label_digest: digestLabel(label),
+            seam: `sanitize_scalar_leak:${field}`,
+          });
+        }
+        const manifest = buildDisclosureManifest(local_context);
+        const outbound = buildTransportRequest(manifest, local_context);
+        const oScan = scanPayloadForSecrets(
+          outbound,
+          secretValues(),
+          `outbound_scalar:${field}`,
+        );
+        allLeaks.push(...oScan.leaks);
+      }
+      for (const field of SENDABLE_LISTS) {
+        const local_context = { ...base, [field]: [value, "safe.id"] };
+        const sendable = sanitizeSendableLocalFields(local_context);
+        const scanSendable = scanPayloadForSecrets(
+          sendable,
+          secretValues(),
+          `sanitize_list:${field}`,
+        );
+        allLeaks.push(...scanSendable.leaks);
+        if (Array.isArray(sendable[field])) {
+          for (const item of sendable[field]) {
+            if (typeof item === "string" && item.includes(value)) {
+              allLeaks.push({
+                label_digest: digestLabel(label),
+                seam: `sanitize_list_leak:${field}`,
+              });
+            }
+          }
+        }
+        const manifest = buildDisclosureManifest(local_context);
+        const outbound = buildTransportRequest(manifest, local_context);
+        const oScan = scanPayloadForSecrets(
+          outbound,
+          secretValues(),
+          `outbound_list:${field}`,
+        );
+        allLeaks.push(...oScan.leaks);
+      }
+    }
+
+    // Exact Root reproductions on error_class
+    for (const smuggle of ROOT_SMUGGLE) {
+      const local_context = { ...base, error_class: smuggle };
+      const manifest = buildDisclosureManifest(local_context);
+      const outbound = buildTransportRequest(manifest, local_context);
+      const text = stableStringify(outbound);
+      if (text.includes(smuggle)) {
+        allLeaks.push({
+          label_digest: digestLabel("root_error_class"),
+          seam: "outbound_root_smuggle",
+        });
+      }
+      // Distinctive substrings must not appear either
+      for (const marker of [
+        "cg-t16-cookie-value-DEADBEEF",
+        "847291",
+        "COMPLETE_ROLLOUT_BODY_cg-t16",
+      ]) {
+        if (text.includes(marker)) {
+          allLeaks.push({
+            label_digest: digestLabel(marker.slice(0, 16)),
+            seam: "outbound_root_marker",
+          });
+        }
+      }
+      // error_class must be omitted entirely when smuggled
+      if (outbound.error_class !== undefined) {
+        allLeaks.push({
+          label_digest: digestLabel("root_error_class_present"),
+          seam: "outbound_root_field_present",
+        });
+      }
+    }
+  }
+
+  // --- Refusal path: zero transport calls ---
   {
     const fake = instrumentTransport(
       createFakeTransport({
@@ -282,6 +503,13 @@ export async function checkPrivacyCorpus(repoRoot, opts = {}) {
         items: [],
       }),
     );
+    const poisonedLocal = {
+      ...cleanBaseContext(),
+      error_class: SECRETS.cookie,
+      config_keys: [SECRETS.otp, SECRETS.sessionRollout],
+      feature_ids: [SECRETS.projectSource],
+      _device_only_blob: corpus,
+    };
     const refresh = refreshOfficialEvidence({
       disclosure_decision: "refused",
       transport: fake,
@@ -290,7 +518,10 @@ export async function checkPrivacyCorpus(repoRoot, opts = {}) {
       local_context: poisonedLocal,
     });
     if (refresh.transport_calls !== 0 || fake.callCount !== 0 || refresh.transport_request !== null) {
-      allLeaks.push({ label_digest: digestLabel("transport_refuse"), seam: "transport_refuse_nonzero" });
+      allLeaks.push({
+        label_digest: digestLabel("transport_refuse"),
+        seam: "transport_refuse_nonzero",
+      });
     }
     const scan = scanPayloadForSecrets(
       { request: refresh.transport_request, refresh },
@@ -300,150 +531,191 @@ export async function checkPrivacyCorpus(repoRoot, opts = {}) {
     allLeaks.push(...scan.leaks);
   }
 
-  // Approved path — request keys must not include secrets/paths/session
+  // --- Approved path: inject full corpus via every sendable field (instrumented) ---
   {
-    const fake = instrumentTransport(
-      createFakeTransport({
-        fetched_at: "2026-07-10T11:00:00.000Z",
-        items: [],
-      }),
-    );
-    const refresh = refreshOfficialEvidence({
-      disclosure_decision: "approved",
-      transport: fake,
-      snapshot_path: snapshotPath,
-      now_ms: Date.parse("2026-07-11T00:00:00.000Z"),
-      local_context: {
-        codex_version: poisonedLocal.codex_version,
-        surface: poisonedLocal.surface,
-        platform_os: poisonedLocal.platform_os,
-        platform_arch: poisonedLocal.platform_arch,
-        config_keys: poisonedLocal.config_keys,
-        feature_ids: poisonedLocal.feature_ids,
-        error_class: poisonedLocal.error_class,
-      },
-    });
-    const req =
-      refresh.transport_request ??
-      (fake.callCount > 0 ? fake.calls[0] : null);
-    const reqScan = scanPayloadForSecrets(req, secretValues(), "transport_approved");
-    allLeaks.push(...reqScan.leaks);
-    // OTP / session / project source must never appear on outbound request
-    const reqText = stableStringify(req);
-    for (const marker of [
-      SECRETS.otp,
-      SECRETS.otpAlt,
-      "847291",
-      SECRETS.sessionRollout,
-      SECRETS.projectSource,
-      SECRETS.token,
-      SECRETS.posixPath,
-    ]) {
-      if (reqText.includes(marker)) {
-        allLeaks.push({ label_digest: digestLabel("outbound_marker"), seam: "transport_approved" });
-      }
-    }
-    // Manifest sendable fields never include device-only secret corpus
-    try {
+    // Matrix: for each secret, approved refresh with that secret in error_class
+    // and list fields — request must never contain corpus.
+    for (const [label, value] of corpusEntries) {
+      const fake = instrumentTransport(
+        createFakeTransport({
+          fetched_at: "2026-07-10T11:00:00.000Z",
+          items: [],
+        }),
+      );
       const local_context = {
-        codex_version: "0.50.0",
-        surface: "browser_control",
-        platform_os: "macos",
-        platform_arch: "arm64",
-        config_keys: ["a"],
-        feature_ids: [],
-        error_class: "Error",
+        codex_version: value,
+        surface: value,
+        platform_os: value,
+        platform_arch: value,
+        config_keys: [value],
+        feature_ids: [value],
+        error_class: value,
       };
-      const manifest = buildDisclosureManifest(local_context);
-      const outbound = buildTransportRequest
-        ? buildTransportRequest(manifest, local_context)
-        : null;
-      if (outbound) {
-        const oScan = scanPayloadForSecrets(outbound, secretValues(), "outbound_request");
-        allLeaks.push(...oScan.leaks);
-        // Capsule-like envelope: doctor/export must not embed corpus either
-        const capsuleLike = {
-          transport_request: outbound,
-          privacy_review: {
-            secrets_redacted: true,
-            paths_redacted: true,
-            session_excluded: true,
-          },
-          // Deliberately do not attach corpus — export surface is request only
-        };
-        const cScan = scanPayloadForSecrets(capsuleLike, secretValues(), "capsule_export");
-        allLeaks.push(...cScan.leaks);
+      const refresh = refreshOfficialEvidence({
+        disclosure_decision: "approved",
+        transport: fake,
+        snapshot_path: snapshotPath,
+        now_ms: Date.parse("2026-07-11T00:00:00.000Z"),
+        local_context,
+      });
+      const req =
+        refresh.transport_request ?? (fake.callCount > 0 ? fake.calls[0] : null);
+      const reqScan = scanPayloadForSecrets(
+        req,
+        secretValues(),
+        `transport_approved:${label}`,
+      );
+      allLeaks.push(...reqScan.leaks);
+      // Also scan fake call log
+      if (fake.calls && fake.calls.length > 0) {
+        for (let i = 0; i < fake.calls.length; i++) {
+          const cScan = scanPayloadForSecrets(
+            fake.calls[i],
+            secretValues(),
+            `transport_call:${label}`,
+          );
+          allLeaks.push(...cScan.leaks);
+        }
       }
-    } catch {
-      // disclosure API shape may differ; still require transport scan above
+    }
+
+    // Clean legitimate approved path still works and has zero secrets
+    {
+      const fake = instrumentTransport(
+        createFakeTransport({
+          fetched_at: "2026-07-10T11:00:00.000Z",
+          items: [],
+        }),
+      );
+      const local_context = cleanBaseContext();
+      const refresh = refreshOfficialEvidence({
+        disclosure_decision: "approved",
+        transport: fake,
+        snapshot_path: snapshotPath,
+        now_ms: Date.parse("2026-07-11T00:00:00.000Z"),
+        local_context,
+      });
+      const req =
+        refresh.transport_request ?? (fake.callCount > 0 ? fake.calls[0] : null);
+      const reqScan = scanPayloadForSecrets(req, secretValues(), "transport_approved_clean");
+      allLeaks.push(...reqScan.leaks);
+      // Capsule-like envelope must not embed corpus
+      const capsuleLike = {
+        transport_request: req,
+        privacy_review: {
+          secrets_redacted: true,
+          paths_redacted: true,
+          session_excluded: true,
+        },
+      };
+      const cScan = scanPayloadForSecrets(capsuleLike, secretValues(), "capsule_export");
+      allLeaks.push(...cScan.leaks);
     }
   }
 
-  // 3b) Explicit zero-leak proof for OTP / session / project-source / nested JSON
-  // on any instrumented outbound payload (transport request body only).
+  // --- Doctor sanitization: required module; forbidden keys + allowlisted free-text ---
   {
-    const fake = instrumentTransport(
-      createFakeTransport({
-        fetched_at: "2026-07-10T11:00:00.000Z",
-        items: [],
-      }),
+    const doctorLoad = await loadRequiredDist(
+      repoRoot,
+      "dist/upstream/doctor.js",
+      "privacy_dist_doctor_unavailable",
     );
-    // Attempt to smuggle corpus via error_class (bounded sendable field)
-    const refresh = refreshOfficialEvidence({
-      disclosure_decision: "approved",
-      transport: fake,
-      snapshot_path: snapshotPath,
-      now_ms: Date.parse("2026-07-11T00:00:00.000Z"),
-      local_context: {
-        codex_version: "0.50.0",
-        surface: "browser_control",
-        platform_os: "macos",
-        platform_arch: "arm64",
-        config_keys: ["shell_environment_policy.set"],
-        feature_ids: ["browser"],
-        // error_class is sendable but sanitized/bounded — secret corpus must not pass
-        error_class: "Error",
-      },
-    });
-    const req = refresh.transport_request ?? (fake.callCount > 0 ? fake.calls[0] : {});
-    const text = stableStringify(req);
-    for (const [label, value] of Object.entries(SECRETS)) {
-      if (text.includes(value)) {
-        allLeaks.push({ label_digest: digestLabel(label), seam: "outbound_smuggle" });
-      }
-    }
-    // Also prove a fabricated "poisoned export" detector works for negative tests
-    // by scanning a clean export with external_disclosure_count path.
-    const cleanExport = { transport_request: req, doctor_inclusion: { summary: "ok" } };
-    const cleanScan = scanPayloadForSecrets(cleanExport, secretValues(), "clean_export");
-    allLeaks.push(...cleanScan.leaks);
-  }
-
-  // 4) Capsule / doctor export seams via dist upstream if present
-  try {
-    const doctorPath = path.join(repoRoot, "dist/upstream/doctor.js");
-    const doctorMod = await import(pathToFileURL(doctorPath).href);
-    if (typeof doctorMod.sanitizeDoctorJson === "function" || typeof doctorMod.includeDoctor === "function") {
-      const fn = doctorMod.sanitizeDoctorJson || doctorMod.includeDoctor;
-      const doctorIn = {
-        env: SECRETS.envDump,
-        token: SECRETS.token,
-        cookie: SECRETS.cookie,
-        session: SECRETS.sessionRollout,
-        path: SECRETS.posixPath,
-        nested: JSON.parse(SECRETS.nestedJson),
+    if (doctorLoad.__privacy_load_error) {
+      return {
+        ok: false,
+        reason_code: "GATE_PRIVACY",
+        external_disclosure_count: -1,
+        leaks: allLeaks.map((l) => ({
+          label_digest: l.label_digest,
+          seam: l.seam,
+        })),
+        detail: doctorLoad.detail,
       };
+    }
+    const sanitizeDoctorJson = doctorLoad.sanitizeDoctorJson;
+    if (typeof sanitizeDoctorJson !== "function") {
+      return {
+        ok: false,
+        reason_code: "GATE_PRIVACY",
+        external_disclosure_count: -1,
+        leaks: [],
+        detail: "privacy_doctor_api_incompatible",
+      };
+    }
+
+    // Forbidden keys: must throw / refuse, never emit secrets
+    const forbiddenPayloads = [
+      { token: SECRETS.token },
+      { cookie: SECRETS.cookie },
+      { session: SECRETS.sessionRollout },
+      { env: SECRETS.envDump },
+      { password: SECRETS.password },
+      { access_token: SECRETS.bearer },
+    ];
+    for (const payload of forbiddenPayloads) {
       let doctorOut;
       try {
-        doctorOut = fn(doctorIn);
-      } catch {
-        doctorOut = { blocked: true };
+        doctorOut = sanitizeDoctorJson(payload);
+        // If it returns without throw, scan output — secrets must be absent
+        const dScan = scanPayloadForSecrets(doctorOut, secretValues(), "doctor_forbidden_key");
+        allLeaks.push(...dScan.leaks);
+      } catch (err) {
+        // Expected fail-closed; error message must not contain corpus values
+        const msg = err && typeof err === "object" && "message" in err ? String(err.message) : String(err);
+        const eScan = scanPayloadForSecrets(msg, secretValues(), "doctor_error_msg");
+        allLeaks.push(...eScan.leaks);
       }
-      const dScan = scanPayloadForSecrets(doctorOut, secretValues(), "doctor_export");
-      allLeaks.push(...dScan.leaks);
     }
-  } catch {
-    // doctor module optional for gate if API differs — transport+redact already required
+
+    // Allowlisted free-text fields with sensitive values — must redact.
+    // Inject credential/path/OTP/session shapes that product redaction handles;
+    // bare synthetic token ids without key= form are proven on transport only.
+    const freeTextDoctor = {
+      schema_version: 1,
+      codex_version: "0.50.0",
+      summary: [
+        SECRETS.cookie,
+        SECRETS.bearer,
+        SECRETS.password,
+        SECRETS.otp,
+        SECRETS.sessionRollout,
+        SECRETS.posixPath,
+        SECRETS.winPath,
+        SECRETS.envDump,
+        SECRETS.fullWidth,
+      ].join(" | "),
+      status: SECRETS.cookie,
+      checks: [SECRETS.otp, SECRETS.sessionRollout, SECRETS.posixPath],
+      platform: SECRETS.envDump,
+    };
+    let doctorFree;
+    try {
+      doctorFree = sanitizeDoctorJson(freeTextDoctor);
+    } catch (err) {
+      // Fail-closed reject is acceptable; still scan error text
+      const msg = err && typeof err === "object" && "message" in err ? String(err.message) : String(err);
+      const eScan = scanPayloadForSecrets(msg, secretValues(), "doctor_freetext_error");
+      allLeaks.push(...eScan.leaks);
+      doctorFree = { blocked: true };
+    }
+    const freeScan = scanPayloadForSecrets(doctorFree, secretValues(), "doctor_export");
+    allLeaks.push(...freeScan.leaks);
+    // Distinctive markers in doctor export
+    const freeText = stableStringify(doctorFree);
+    for (const marker of [
+      "cg-t16-cookie-value-DEADBEEF",
+      "COMPLETE_ROLLOUT_BODY_cg-t16",
+      "cg-t16-project-source-leak",
+      "/Users/cg-t16-user",
+      "cg-t16-env-secret-KEY99",
+    ]) {
+      if (freeText.includes(marker)) {
+        allLeaks.push({
+          label_digest: digestLabel(marker.slice(0, 16)),
+          seam: "doctor_export_marker",
+        });
+      }
+    }
   }
 
   // de-dupe

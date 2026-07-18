@@ -162,19 +162,54 @@ const DEVICE_ONLY_FIELDS: readonly DisclosureField[] = Object.freeze([
   },
 ]);
 
-function boundToken(value: string, field: string): string {
+/**
+ * Centralized sendable-token invariant for every scalar/list disclosure field.
+ *
+ * Accepts only bounded identifier/token shapes used by the product today:
+ * versions, platform/arch labels, surface labels, dotted config keys,
+ * feature ids (including `plugin:…`), and error-class identifiers.
+ *
+ * Rejects free text that could smuggle cookies, OTPs, session/log bodies,
+ * project source, env/path dumps, full-width/NFKC secrets, or control/whitespace.
+ */
+const SENDABLE_TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9._:+-]*$/;
+
+/** Secret-shaped substrings that must never ride a sendable identifier. */
+const SENDABLE_SECRET_SHAPE_RE =
+  /(?:password|secret|token|api[_-]?key|bearer|cookie|authorization|session[_-]?rollout|one[_-]?time[_-]?code|\botp\b|set-cookie|process\.env)/i;
+
+/** High-confidence credential prefixes (never legitimate version/surface labels). */
+const SENDABLE_CREDENTIAL_PREFIX_RE =
+  /^(?:sk|pk|rk|ak|xox[baprs])[-_]/i;
+
+/**
+ * Return true when `value` is a genuinely bounded sendable disclosure token.
+ * Exported for product-level negative controls (Ticket 16).
+ */
+export function isSendableDisclosureToken(value: string): boolean {
+  if (typeof value !== "string") return false;
+  // Reject leading/trailing whitespace by requiring exact match after trim.
   const t = value.trim();
-  if (t.length === 0 || t.length > MAX_DISCLOSURE_TOKEN) {
-    throw new Error(`Disclosure field ${field} failed bounds check.`);
+  if (t.length === 0 || t.length > MAX_DISCLOSURE_TOKEN) return false;
+  if (t !== value) return false; // embedded or surrounding whitespace
+  // NFKC must not reveal a different secret form; non-ASCII is never an id.
+  if (/[^\x20-\x7E]/.test(t)) return false;
+  const nfkc = t.normalize("NFKC");
+  if (nfkc !== t) return false;
+  if (!SENDABLE_TOKEN_RE.test(t)) return false;
+  // Path / URL / assignment / header free-text shapes.
+  if (/[/\\]/.test(t)) return false;
+  if (/=|;|,|\s|"|'|`|\{|\}|\[|\]/.test(t)) return false;
+  if (SENDABLE_SECRET_SHAPE_RE.test(t)) return false;
+  if (SENDABLE_CREDENTIAL_PREFIX_RE.test(t)) return false;
+  return true;
+}
+
+function boundToken(value: string, field: string): string {
+  if (!isSendableDisclosureToken(value)) {
+    throw new Error(`Disclosure field ${field} rejected non-sendable token.`);
   }
-  // Refuse path-like and secret-shaped tokens in sendable fields.
-  if (/[/\\]/.test(t)) {
-    throw new Error(`Disclosure field ${field} rejected path-like value.`);
-  }
-  if (/(?:password|secret|token|api[_-]?key|bearer)/i.test(t)) {
-    throw new Error(`Disclosure field ${field} rejected secret-shaped value.`);
-  }
-  return t;
+  return value.trim();
 }
 
 function boundStringList(

@@ -28,6 +28,7 @@ export {
   buildTransportRequest,
   disclosureFieldNames,
   disclosureSendableFieldNames,
+  isSendableDisclosureToken,
   sanitizeSendableLocalFields,
 } from "./disclosure.js";
 export {

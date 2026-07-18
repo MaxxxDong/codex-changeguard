@@ -30,6 +30,9 @@ const CREDENTIAL_SHAPES = [
   /\bCookie\s*[:=]\s*\S+/gi,
   /\bsession[_-]?(?:id|token|key|cookie)\s*[:=]\s*\S+/gi,
   /\b(?:JSESSIONID|PHPSESSID|connect\.sid)\s*[:=]\s*\S+/gi,
+  // OTP / one-time codes and session rollout export bodies (device-only material).
+  /\b(?:one[_-]?time[_-]?code|otp)\s*[:=]\s*\S+/gi,
+  /\bsession[_-]?rollout(?:_content)?\s*[:=]\s*\S+/gi,
 ];
 
 /** Full-width Latin letters/digits/punctuation → compatibility (NFKC). */

