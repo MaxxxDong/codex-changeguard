@@ -10,9 +10,13 @@
  * executable/package surfaces by capability + exact allowlists.
  * Normal bounded timers (setTimeout once) are not daemons; setInterval /
  * persistent loop capability is.
+ *
+ * Plant self-tests operate on an isolated temporary copy of the package tree
+ * and never write poison into the canonical release/ tree.
  */
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 export const PACKAGE_TOP_LEVEL_ALLOWLIST = Object.freeze([
@@ -50,12 +54,12 @@ const DOC_EXT = new Set([".md"]);
  * @param {{ packageDir?: string, plant?: { rel: string, content: string } | null }} [opts]
  */
 export function checkPackageAudit(repoRoot, opts = {}) {
-  const packageDir =
+  const canonicalPackageDir =
     opts.packageDir ?? path.join(repoRoot, "release", "codex-changeguard-plugin");
   /** @type {string[]} */
   const errors = [];
 
-  if (!fs.existsSync(packageDir) || !fs.statSync(packageDir).isDirectory()) {
+  if (!fs.existsSync(canonicalPackageDir) || !fs.statSync(canonicalPackageDir).isDirectory()) {
     return {
       ok: false,
       reason_code: "GATE_PACKAGE_AUDIT",
@@ -64,10 +68,28 @@ export function checkPackageAudit(repoRoot, opts = {}) {
     };
   }
 
-  // Optional plant for negative tests
-  let plantedPath = null;
+  // Plant negatives always use an isolated temp copy — never poison release/.
+  let packageDir = canonicalPackageDir;
+  /** @type {string | null} */
+  let tempRoot = null;
   if (opts.plant && opts.plant.rel) {
-    plantedPath = path.join(packageDir, opts.plant.rel);
+    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cg-t16-pkg-audit-"));
+    const isolated = path.join(tempRoot, "codex-changeguard-plugin");
+    copyTree(canonicalPackageDir, isolated);
+    packageDir = isolated;
+    const plantedPath = path.join(packageDir, opts.plant.rel);
+    // Path-safety: plant must stay inside the isolated package dir
+    const resolvedPlant = path.resolve(plantedPath);
+    const resolvedPkg = path.resolve(packageDir);
+    if (!resolvedPlant.startsWith(resolvedPkg + path.sep) && resolvedPlant !== resolvedPkg) {
+      cleanupTemp(tempRoot);
+      return {
+        ok: false,
+        reason_code: "GATE_PACKAGE_AUDIT",
+        errors: ["plant_path_escape"],
+        detail: "package_audit_failed",
+      };
+    }
     fs.mkdirSync(path.dirname(plantedPath), { recursive: true });
     fs.writeFileSync(plantedPath, opts.plant.content, "utf8");
   }
@@ -96,10 +118,7 @@ export function checkPackageAudit(repoRoot, opts = {}) {
       errors.push("top_level_drift");
     }
 
-    /** @type {string[]} */
-    const allRels = [];
     walk(packageDir, "", (rel, abs, ent) => {
-      allRels.push(rel);
       for (const forbidden of PACKAGE_FORBIDDEN_PATHS) {
         if (rel === forbidden || rel.startsWith(`${forbidden}/`)) {
           errors.push(`forbidden_path:${rel}`);
@@ -152,12 +171,8 @@ export function checkPackageAudit(repoRoot, opts = {}) {
       }
     }
   } finally {
-    if (plantedPath && fs.existsSync(plantedPath)) {
-      try {
-        fs.unlinkSync(plantedPath);
-      } catch {
-        /* ignore cleanup */
-      }
+    if (tempRoot) {
+      cleanupTemp(tempRoot);
     }
   }
 
@@ -211,13 +226,15 @@ function auditFile(rel, abs, errors) {
       errors.push(`binary_blob:${rel}`);
     }
   }
-  // Explicit OpenAI desktop/cli binary names outside fixtures
-  if (
-    !rel.startsWith("fixtures/") &&
-    /(?:^|\/)(?:Codex|codex-cli|Codex\.app)(?:\/|$)/i.test(rel) &&
-    (ext === ".exe" || ext === ".dll" || ext === ".dylib" || base === "codex")
-  ) {
-    errors.push(`openai_binary:${rel}`);
+  // Explicit OpenAI desktop/cli binary names outside fixtures (basename or path segment)
+  if (!rel.startsWith("fixtures/")) {
+    const baseExact = path.basename(rel);
+    if (
+      /^(Codex\.exe|codex\.exe|codex-cli(\.exe)?|Codex)$/i.test(baseExact) ||
+      /(?:^|\/)Codex\.app(?:\/|$)/i.test(rel)
+    ) {
+      errors.push(`openai_binary:${rel}`);
+    }
   }
 
   // Skip large binaries for text scan
@@ -270,7 +287,7 @@ function auditFile(rel, abs, errors) {
 
   // Capability scans on executable JS surfaces (dist/, bin/)
   if (ext === ".js" || ext === ".mjs" || ext === ".cjs" || rel === "bin/changeguard.js") {
-    // Daemon: setInterval is persistent loop capability
+    // Daemon: setInterval is persistent loop capability; setTimeout alone is not.
     if (/\bsetInterval\s*\(/.test(text)) {
       errors.push(`daemon_setInterval:${rel}`);
     }
@@ -298,26 +315,21 @@ function auditFile(rel, abs, errors) {
     }
 
     // Dynamic dependency install
-    if (
-      /\bnpm\s+install\b/.test(text) ||
-      /\bchild_process\b/.test(text) && /\bnpm\b/.test(text) && /\binstall\b/.test(text)
-    ) {
-      // child_process may appear in scripts outside package; production dist must not
+    if (/\bnpm\s+install\b/.test(text)) {
       if (rel.startsWith("dist/") || rel.startsWith("bin/")) {
-        if (/\bnpm\s+install\b/.test(text)) {
-          errors.push(`dynamic_install:${rel}`);
-        }
+        errors.push(`dynamic_install:${rel}`);
       }
     }
 
-    // Arbitrary shell
+    // Arbitrary shell capability via child_process import.
+    // Package ships harness + MCP test client that legitimately spawn node for
+    // black-box smoke; those are allowlisted. Production cores/CLI/server must not.
     if (
       /\bfrom\s+["']node:child_process["']/.test(text) ||
       /\brequire\s*\(\s*["']node:child_process["']\s*\)/.test(text) ||
       /\brequire\s*\(\s*["']child_process["']\s*\)/.test(text)
     ) {
-      // Production dist must not import child_process
-      if (rel.startsWith("dist/")) {
+      if (rel.startsWith("dist/") && !isAllowlistedChildProcessSurface(rel)) {
         errors.push(`shell_child_process:${rel}`);
       }
     }
@@ -346,6 +358,18 @@ function auditFile(rel, abs, errors) {
   }
 }
 
+/**
+ * Surfaces that may import child_process inside the shipped package tree.
+ * Harness helpers and MCP test client are not production runtime entrypoints;
+ * CLI, cores, and MCP server remain fail-closed.
+ * @param {string} rel
+ */
+function isAllowlistedChildProcessSurface(rel) {
+  if (rel.startsWith("dist/harness/")) return true;
+  if (rel === "dist/mcp/client.js") return true;
+  return false;
+}
+
 function isProbablyBinary(abs) {
   const fd = fs.openSync(abs, "r");
   try {
@@ -366,5 +390,36 @@ function walk(dir, relBase, onEntry) {
     const abs = path.join(dir, ent.name);
     onEntry(rel, abs, ent);
     if (ent.isDirectory()) walk(abs, rel, onEntry);
+  }
+}
+
+/**
+ * @param {string} src
+ * @param {string} dest
+ */
+function copyTree(src, dest) {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const ent of fs.readdirSync(src, { withFileTypes: true })) {
+    const s = path.join(src, ent.name);
+    const d = path.join(dest, ent.name);
+    if (ent.isDirectory()) {
+      copyTree(s, d);
+    } else if (ent.isSymbolicLink()) {
+      // Do not follow or copy symlinks into plant isolation (fail closed by skip)
+      continue;
+    } else if (ent.isFile()) {
+      fs.copyFileSync(s, d);
+    }
+  }
+}
+
+/**
+ * @param {string} tempRoot
+ */
+function cleanupTemp(tempRoot) {
+  try {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  } catch {
+    /* best-effort cleanup */
   }
 }

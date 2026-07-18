@@ -309,6 +309,83 @@ Black-box and contract coverage in `tests/ticket11-upstream-actions.test.ts`:
 - target tree hash unchanged; no token/cookie leakage in JSON
 - package-smoke: packaged action-preview exit 0, confirm without adapter → `ADAPTER_UNAVAILABLE`, blocked capsule refused
 
+## Ticket 16 release / privacy / regression gate
+
+Canonical command (one summary JSON; fail-closed; never `scripts/run-verification.sh`):
+
+```bash
+npm run verify:release
+```
+
+Orchestrator: `scripts/verify-release.mjs`. Ordered mandatory steps and stable reason codes:
+
+| Order | Step id | Reason on failure | Kind |
+| --- | --- | --- | --- |
+| 1 | `typecheck` | `GATE_TYPECHECK` | `npm run typecheck` |
+| 2 | `test` | `GATE_TEST` | `npm test` |
+| 3 | `boundary` | `GATE_BOUNDARY` | `npm run check:boundary` |
+| 4 | `boundary_selftest` | `GATE_BOUNDARY_SELFTEST` | `node scripts/check-production-boundary.mjs --self-test` |
+| 5 | `schema` | `GATE_SCHEMA` | pure schema structural + fixture bind |
+| 6 | `fixture_accounting` | `GATE_FIXTURE_ACCOUNTING` | pure 2/2/3 public-seam accounting |
+| 7 | `privacy` | `GATE_PRIVACY` | pure outbound/capsule/doctor zero-leak corpus |
+| 8 | `injection` | `GATE_INJECTION` | pure injection/evidence matrix bind |
+| 9 | `write_path` | `GATE_WRITE_PATH` | pure production write-path inventory |
+| 10 | `package` | `GATE_PACKAGE` | `npm run package` |
+| 11 | `package_smoke` | `GATE_PACKAGE_SMOKE` | `npm run package:smoke` |
+| 12 | `package_audit` | `GATE_PACKAGE_AUDIT` | pure package threat audit |
+| 13 | `cli_hash` | `GATE_CLI_HASH` | `node scripts/cli-hash-proof.mjs` |
+| 14 | `diff_check` | `GATE_DIFF_CHECK` | `git diff --check` |
+
+Exit 0 only when every step passes. First failure prints bounded JSON
+`{ok:false, failed_step, reason_code, steps}` and exits nonzero. Unknown CLI
+arguments or unknown `--self-test=` modes fail with `GATE_UNKNOWN_STEP`.
+
+### Fixture accounting (2 / 2 / 3)
+
+Mechanical public-seam binds (test file + name substring + fixture path); does not re-run repair engines:
+
+| Bucket | Min | Example binds |
+| --- | --- | --- |
+| `resolved_verified` | ≥2 | T02 protected-process repair; T07 config_set; T08 plugin-cache |
+| `mitigation_or_upstream_blocked` | ≥2 | T06 surface rollback mitigation; T09 crash UPSTREAM_BLOCKED; T02 explicit rollback |
+| `wrong_repair_refusal` | ≥3 | T02 negative control; T07 wrong candidate; T09 symptom repair refuse; T08 plugin-cache negative |
+
+### Privacy zero-leak corpus
+
+- Inspects redactor, instrumented transport (refuse + approved), outbound request shapes, capsule/doctor export seams when present.
+- `external_disclosure_count === 0` required.
+- Failure output uses label digests/seams only — never emits corpus secret values.
+- Stdout redaction alone is not sufficient.
+
+### Injection / evidence matrix
+
+Binds existing Ticket 05/04/10/11/12/09/15 tests for malicious page, Issue/upstream injection, official prose quarantine, model edge-escalation refuse, blocked actions, follow-up authority, repair DSL candidate-only, platform capability closed, official-fix supersession.
+
+### Write-path inventory
+
+Every production writer classified as `repair` | `state` | `ledger`. Repair requires backup / atomic replace / rollback markers and companion “RESOLVED_VERIFIED is impossible” on verify failure. State/ledger must not be forced into a false repair contract. Unregistered writers under known write surfaces fail the gate.
+
+### Package threat audit
+
+Audits built `release/codex-changeguard-plugin/`: top-level allowlist, forbidden paths, no `node_modules`, no dynamic install scripts, no runtime deps, MCP node-only. Executable capability scan (not prose word-search): `setInterval` = daemon; bounded `setTimeout` alone is not; network modules, child_process in `dist/`, telemetry hosts, OpenAI binary names, planted secrets. Plant negatives use an isolated temp copy and never poison canonical `release/`.
+
+### Gate-of-gate negative controls
+
+Public script only (`node scripts/verify-release.mjs --self-test=<mode>`). Do **not** recursively invoke full `verify:release` from `npm test`.
+
+| Mode | Expected reason |
+| --- | --- |
+| `undercount` | `GATE_FIXTURE_ACCOUNTING` |
+| `fixture_missing_test` | `GATE_FIXTURE_ACCOUNTING` |
+| `privacy_poison` | `GATE_PRIVACY` |
+| `missing_writer` | `GATE_WRITE_PATH` |
+| `schema_fail` | `GATE_SCHEMA` |
+| `package_secret` / `package_network` / `package_shell` / `package_daemon` / `package_binary` | `GATE_PACKAGE_AUDIT` |
+| `unknown_step` | `GATE_UNKNOWN_STEP` |
+| unknown arg / unknown self-test mode | `GATE_UNKNOWN_STEP` |
+
+Coverage: `tests/ticket16-release-gate.test.ts`.
+
 ## Initial commands
 
 ```bash
@@ -319,6 +396,7 @@ npm test
 npm run check:boundary
 npm run package
 npm run package:smoke
+npm run verify:release
 node scripts/cli-hash-proof.mjs
 node scripts/check-production-boundary.mjs --self-test
 node bin/changeguard.js diagnose fixtures/protected-process

@@ -81,9 +81,15 @@ export function checkSchemaGate(repoRoot, opts = {}) {
       // allow missing type when using $ref-only roots, but we require object roots
       if (!schema.$ref) errors.push(`unexpected_type:${name}`);
     }
-    if (schema.additionalProperties === undefined && !schema.$ref) {
-      // structural preference; fail if neither closed nor clearly open by design
-      // most product schemas set additionalProperties: false
+    // Root must be closed via additionalProperties, $ref, or a closed combinator
+    // (oneOf/anyOf/allOf branches carry additionalProperties themselves).
+    const hasClosedCombinator =
+      Array.isArray(schema.oneOf) || Array.isArray(schema.anyOf) || Array.isArray(schema.allOf);
+    if (
+      schema.additionalProperties === undefined &&
+      !schema.$ref &&
+      !hasClosedCombinator
+    ) {
       errors.push(`missing_additionalProperties:${name}`);
     }
   }

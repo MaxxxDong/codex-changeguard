@@ -19,7 +19,7 @@ ChangeGuard is not a generic changelog summarizer, Issue chatbot, environment do
 - Ticket 10: `LOCAL_COMPLETE` on integrated HEAD `3265acd` (commits `0829936` → `7ef87e6` → `26d58b4` → `3265acd`; Root full regression 260/260; final static review `changeguard-ticket10-regression-review-r7` → `NO_P0_P1`, empty patch)
 - Tickets 11 / 13 / 14 / 15: Wave 4 integrated on `407789c` — see per-ticket rows below and [HANDOFF.md](HANDOFF.md) § Wave 4 closeout
 - Ticket 12: `LOCAL_COMPLETE` on clean commit `6083c6f` (Root: typecheck/build; Ticket 06+12 targeted 99/99; boundary + self-test 175/175; package + package:smoke; Ticket 13 rerun 35/35 after one recorded transient; full regression 474/474; final static reviews `changeguard-ticket12-final-spec-review-r5` + `changeguard-ticket12-final-security-review-r5` → `ACCEPT` / no P0/P1)
-- Broader product: still `IN_PROGRESS` (Tickets **16, 17** not complete; Ticket 14 platform Full and Ticket 15 real-host Full remain open)
+- Broader product: still `IN_PROGRESS` (Ticket **16** is a **review-ready candidate** only — not `LOCAL_COMPLETE`; Ticket **17** not complete; Ticket 14 platform Full and Ticket 15 real-host Full remain open). Canonical release gate: `npm run verify:release` (see [docs/TEST_PLAN.md](docs/TEST_PLAN.md) Ticket 16 section).
 - Platform claims (canonical matrix: [docs/SUPPORT_MATRIX.md](docs/SUPPORT_MATRIX.md)):
   - **macOS:** receipt-scoped **Full** on this host after Ticket 13 real-machine Scenario Harness (`support_level=full`, live witness, all required scenarios pass). Full is **not** universal for every macOS/Codex version; external JSON alone is at most Preview
   - **Windows 11:** Ticket 14 framework integrated; platform remains **Preview** until a real Windows 11 host covers W11-S01…S11 **and** seals a process-local live witness (external JSON cannot Full)
@@ -57,6 +57,7 @@ npm test
 npm run check:boundary
 npm run package
 npm run package:smoke
+npm run verify:release
 node bin/changeguard.js diagnose fixtures/protected-process
 node bin/changeguard.js diagnose fixtures/negative-control
 node bin/changeguard.js diagnose fixtures/crash-family/access-violation-crbrowser

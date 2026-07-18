@@ -17,6 +17,7 @@
     "check:boundary": "node scripts/check-production-boundary.mjs",
     "package": "node scripts/package-plugin.mjs",
     "package:smoke": "node scripts/package-smoke.mjs",
+    "verify:release": "node scripts/verify-release.mjs",
     "harness:macos": "node scripts/run-macos-harness.mjs",
     "cli": "node bin/changeguard.js"
   },

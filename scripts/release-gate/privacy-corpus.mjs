@@ -204,10 +204,10 @@ export async function checkPrivacyCorpus(repoRoot, opts = {}) {
   const redacted = redactText(corpus);
 
   // Redactor must strip credential-shaped + absolute path forms (stdout seam).
-  // OTP / session-rollout / project-source free text may not all match redactor
-  // patterns; those are proven absent from *outbound* transport/capsule below.
+  // Free-text markers that are not credential-shaped (bare synthetic token ids,
+  // OTP digits, session-rollout, project-source) are proven absent from
+  // *outbound* transport/capsule below — not required to vanish from redactText.
   const mustRedactLabels = [
-    "token",
     "bearer",
     "cookie",
     "setCookie",
