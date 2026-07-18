@@ -760,13 +760,15 @@ test("CLI/MCP: action preview equivalence and no network by default", async () =
   assert.equal(conf.result!.status, "ADAPTER_UNAVAILABLE");
   assert.equal(conf.result!.external_write, false);
 
-  // Cancel via MCP works as pure draft
+  // Cancel via MCP works as pure draft.
+  // MCP confirm has no now_ms and validates TTL with process wall clock; mint
+  // this token with Date.now() so it is not already EXPIRED_CONFIRMATION vs fixed NOW_FRESH.
   const preview2 = previewUpstreamAction({
     targetPath: target,
     capsule,
     action: "create_issue",
     adapter: null,
-    nowMs: NOW_FRESH,
+    nowMs: Date.now(),
     nonce: "cd".repeat(16),
   });
   const client2 = new McpTestClient({ serverEntry: mcpServerEntry() });
