@@ -291,6 +291,12 @@ export interface UpstreamEvidenceRef {
   ref: string;
   evidence_digest: string;
   verified: boolean;
+  /**
+   * Ticket 12: when true, supersession was bound to measured probe/core evidence
+   * plus this allowlisted official evidence digest. Optional for legacy T06
+   * supersede_recipe CLI; Ticket 12 always sets this after measured validation.
+   */
+  measured_validation?: boolean;
 }
 
 export interface LifecycleLedger {
@@ -423,6 +429,12 @@ export interface CanaryInput {
    * Omitted/false → UPGRADE_CANARY_AVAILABLE (availability only).
    */
   canary_executed?: boolean;
+  /**
+   * Ticket 12: when true, outcome flags are independently measured by registered
+   * probes (evidence.measured=true). Caller-declared alone remains measured=false.
+   * Does not by itself grant RECOMMEND_UPGRADE without canary_executed.
+   */
+  measured_outcomes?: boolean;
   nowMs?: number;
 }
 

@@ -103,6 +103,8 @@ const DEFAULT_STATE_WRITE_ALLOWLIST = new Set([
   "src/instances/state.ts",
   // Ticket 11: durable one-shot confirmation ledger + install-local HMAC key.
   "src/upstream/actions/ledger.ts",
+  // Ticket 12: explicit subscription / follow-up ledger (ChangeGuard-owned state).
+  "src/upstream/followup/ledger.ts",
 ]);
 
 /**

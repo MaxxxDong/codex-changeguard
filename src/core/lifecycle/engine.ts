@@ -1027,6 +1027,10 @@ export function runCanary(input: CanaryInput): LifecycleResult {
       detail,
     };
 
+    // Ticket 12: only exact true means outcomes were independently measured.
+    // Caller-declared flags alone remain measured=false (never fake measurement).
+    const outcomesMeasured = input.measured_outcomes === true;
+
     // Persist under default instance ledger when present.
     // Corrupt/tampered ledgers must fail closed (never recommend upgrade).
     let ledger: LifecycleLedger | null = null;
@@ -1066,9 +1070,9 @@ export function runCanary(input: CanaryInput): LifecycleResult {
       evidence: [
         {
           kind: "canary_result",
-          detail: `guidance=${guidance};executed=${executed};fault_absent=${canary.original_fault_absent};core_ok=${canary.core_regressions_passed};caller_declared=true`,
-          // Caller-supplied outcome flags are not independently measured here.
-          measured: false,
+          detail: `guidance=${guidance};executed=${executed};fault_absent=${canary.original_fault_absent};core_ok=${canary.core_regressions_passed};measured_outcomes=${outcomesMeasured}`,
+          // Only Ticket 12 measured probe path may claim measured=true.
+          measured: outcomesMeasured,
         },
       ],
       target_mutated: true,

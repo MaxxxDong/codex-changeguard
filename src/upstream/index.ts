@@ -83,3 +83,6 @@ export type { UpstreamPreviewOptions } from "./preview.js";
 
 /** Ticket 11 confirmed upstream actions (namespaced). */
 export * as actions from "./actions/index.js";
+
+/** Ticket 12 maintainer follow-up / upstream-fix closure (namespaced). */
+export * as followup from "./followup/index.js";
