@@ -73,3 +73,23 @@ export {
   STALE_HIGH_SECONDS,
   MAX_FETCHED_AT_FUTURE_SKEW_SECONDS,
 } from "./limits.js";
+export {
+  PHASE_A_VERSION_RE,
+  PHASE_A_PROTECTED_PROCESS_PROFILE_ID,
+  PHASE_A_REQUIRED_SURFACE,
+  PHASE_A_REQUIRED_ARTIFACT_ALIAS,
+  UPSTREAM_FIX_EVIDENCE_KINDS,
+  UPSTREAM_FIX_MAINTAINER_STATUSES,
+  isPhaseACandidateVersion,
+  bindCandidateVersionToOfficial,
+  bindOfficialEvidenceItem,
+  bindOfficialFixForSupersession,
+  isBaseUpstreamFixItem,
+  itemMeetsProfileMechanismPolicy,
+} from "./official-fix-authority.js";
+export type {
+  OfficialBindOk,
+  OfficialBindFail,
+  OfficialBindResult,
+  BindOfficialEvidenceInput,
+} from "./official-fix-authority.js";

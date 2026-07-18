@@ -71,24 +71,44 @@ import { copyFixtureToTemp } from "../src/harness/scenario.js";
 
 const NOW = Date.parse("2026-07-18T12:00:00.000Z");
 
-/** Real pinned official release item from fixtures/official-evidence/snapshot.json */
+/**
+ * Phase A positive official evidence: browser-client diff with mechanism linkage
+ * (browser_control + BROWSER_CLIENT_COPY_A) and version_range.to = 0.50.0.
+ */
+const OFFICIAL_BROWSER_DIFF_DIGEST =
+  "eeb1ccc7913c4a8489c1e1de3919c4cc93bdd0de2eec87dc680c80a67aeed7d7";
+const OFFICIAL_BROWSER_DIFF_URL =
+  "https://github.com/openai/codex/compare/rust-v0.49.0...rust-v0.50.0";
+/** Bound candidate version (exact version_range.to). */
+const OFFICIAL_BOUND_VERSION = "0.50.0";
+
+/** Broad release item — version matches but no protected-process mechanism linkage. */
 const OFFICIAL_RELEASE_DIGEST =
   "d6baa84959e55d2ff20e36a9ea3d0ecee77b1f430c0505a54ef5909f82adb9ef";
 const OFFICIAL_RELEASE_URL =
   "https://github.com/openai/codex/releases/tag/rust-v0.50.0";
-/** Bound candidate version label for rust-v0.50.0 release (version_range.to). */
-const OFFICIAL_BOUND_VERSION = "0.50.0";
-/** Second real item for supersession-conflict scenarios */
+
+/** Config-schema commit — matching version_range.to but mechanism-unrelated. */
 const OFFICIAL_COMMIT_DIGEST =
   "e5c910be6ae7984b3802f6207ff5a32fc72053a598df03edc1860dde7abec9c0";
 const OFFICIAL_COMMIT_URL =
   "https://github.com/openai/codex/commit/abc123def4567890abc123def4567890abc123de";
+const OFFICIAL_COMMIT_TITLE = "adjust shell_environment_policy schema";
+const OFFICIAL_COMMIT_HASH_TAIL =
+  "abc123def4567890abc123def4567890abc123de";
+
+/** Second mechanism-linked item for supersession-conflict (plugin PR — not browser). */
+const OFFICIAL_PR_DIGEST =
+  "e0af6d24c43b9dd9f5e71600521d3414fc6e266492780d1a32a50a6cd3e968c3";
+const OFFICIAL_PR_URL = "https://github.com/openai/codex/pull/33001";
+
 /** User-reported issue — real digest/URL but unsuitable as upstream-fix ref */
 const USER_ISSUE_DIGEST =
   "1ecfc4694106202a809de97f869196cd60ed47632d12afcaa3a7c1ddc664b0a7";
 const USER_ISSUE_URL = "https://github.com/openai/codex/issues/32925";
 
 const FORGED_DIGEST = "a".repeat(64);
+const EVIL_URL = "https://evil.example/openai/codex/releases/tag/x";
 const ARTIFACT_REL = "artifacts/browser-client.mjs";
 const PROFILE = PROTECTED_PROCESS_SHIM_PROFILE_V1;
 
@@ -187,9 +207,9 @@ function baseValidateInput(
     candidate_version: overrides.candidate_version ?? OFFICIAL_BOUND_VERSION,
     recipe_id: overrides.recipe_id ?? "tmp-workaround-t12",
     official_evidence_item_digest:
-      overrides.official_evidence_item_digest ?? OFFICIAL_RELEASE_DIGEST,
+      overrides.official_evidence_item_digest ?? OFFICIAL_BROWSER_DIFF_DIGEST,
     official_evidence_ref:
-      overrides.official_evidence_ref ?? OFFICIAL_RELEASE_URL,
+      overrides.official_evidence_ref ?? OFFICIAL_BROWSER_DIFF_URL,
     original_fault_absent: overrides.original_fault_absent,
     core_regressions_passed: overrides.core_regressions_passed,
     verified: overrides.verified,
@@ -806,7 +826,10 @@ test("Ticket12 scenario: live registered positive path → SUPERSEDED_BY_UPSTREA
   assert.equal(r.candidate?.measured_fault_absent, true);
   assert.equal(r.candidate?.measured_core_ok, true);
   assert.equal(r.candidate?.version_guidance, "RECOMMEND_UPGRADE");
-  assert.equal(r.candidate?.official_evidence_item_digest, OFFICIAL_RELEASE_DIGEST);
+  assert.equal(
+    r.candidate?.official_evidence_item_digest,
+    OFFICIAL_BROWSER_DIFF_DIGEST,
+  );
   assert.equal(r.candidate?.binary_downloaded, false);
   assert.equal(r.candidate?.binary_installed, false);
   assert.equal(r.candidate?.workaround_uninstalled, false);
@@ -869,8 +892,8 @@ test("Ticket12 adversarial: caller booleans only never supersede", () => {
     issue_number: 502,
     candidate_version: OFFICIAL_BOUND_VERSION,
     recipe_id: "r1",
-    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
-    official_evidence_ref: OFFICIAL_RELEASE_URL,
+    official_evidence_item_digest: OFFICIAL_BROWSER_DIFF_DIGEST,
+    official_evidence_ref: OFFICIAL_BROWSER_DIFF_URL,
     verified: true,
     original_fault_absent: true,
     core_regressions_passed: true,
@@ -965,14 +988,11 @@ test("Ticket12 adversarial: candidate version vs official release mismatch refus
   const { baseline, candidate } = makeBaselineCandidatePair();
   const r = validateCandidateFix(
     baseValidateInput(candidate, baseline, {
-      candidate_version: "9.9.9-unrelated",
+      candidate_version: "9.9.9",
     }),
   );
   assert.equal(r.ok, false);
-  assert.ok(
-    r.error_code === "CANDIDATE_VERSION_MISMATCH" ||
-      r.error_code === "CANDIDATE_VERSION_UNBOUND",
-  );
+  assert.equal(r.error_code, "CANDIDATE_VERSION_MISMATCH");
 });
 
 test("Ticket12 adversarial: forged official digest/ref refused", () => {
@@ -985,11 +1005,8 @@ test("Ticket12 adversarial: forged official digest/ref refused", () => {
     }),
   );
   assert.equal(forged.ok, false);
-  assert.ok(
-    forged.error_code === "OFFICIAL_EVIDENCE_UNBOUND" ||
-      forged.error_code === "OFFICIAL_EVIDENCE_DIGEST_MISMATCH" ||
-      forged.error_code === "OFFICIAL_EVIDENCE_MISMATCH",
-  );
+  // Forged digest against a real official URL → digest mismatch (URL-bound item exists).
+  assert.equal(forged.error_code, "OFFICIAL_EVIDENCE_DIGEST_MISMATCH");
 
   const badShape = validateCandidateFix(
     baseValidateInput(candidate, baseline, {
@@ -1002,18 +1019,16 @@ test("Ticket12 adversarial: forged official digest/ref refused", () => {
 
   const mismatch = validateCandidateFix(
     baseValidateInput(candidate, baseline, {
+      // Digest is browser-diff; URL is config commit → both exist but not as a pair.
       official_evidence_ref: OFFICIAL_COMMIT_URL,
     }),
   );
   assert.equal(mismatch.ok, false);
-  assert.ok(
-    mismatch.error_code === "OFFICIAL_EVIDENCE_REF_MISMATCH" ||
-      mismatch.error_code === "OFFICIAL_EVIDENCE_MISMATCH",
-  );
+  assert.equal(mismatch.error_code, "OFFICIAL_EVIDENCE_MISMATCH");
 
   const nonOfficial = validateCandidateFix(
     baseValidateInput(candidate, baseline, {
-      official_evidence_ref: "https://evil.example/openai/codex/releases/tag/x",
+      official_evidence_ref: EVIL_URL,
     }),
   );
   assert.equal(nonOfficial.ok, false);
@@ -1034,17 +1049,19 @@ test("Ticket12 adversarial: unsuitable upstream-fix evidence (user_reported issu
 
 test("Ticket12: bindOfficialEvidenceItem requires exact digest+URL match", () => {
   const ok = bindOfficialEvidenceItem({
-    official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
-    official_evidence_ref: OFFICIAL_RELEASE_URL,
+    official_evidence_item_digest: OFFICIAL_BROWSER_DIFF_DIGEST,
+    official_evidence_ref: OFFICIAL_BROWSER_DIFF_URL,
+    candidate_version: OFFICIAL_BOUND_VERSION,
   });
   assert.equal(ok.ok, true);
   if (ok.ok) {
-    assert.equal(ok.item.content_sha256, OFFICIAL_RELEASE_DIGEST);
-    assert.equal(ok.canonical_url, OFFICIAL_RELEASE_URL);
+    assert.equal(ok.item.content_sha256, OFFICIAL_BROWSER_DIFF_DIGEST);
+    assert.equal(ok.canonical_url, OFFICIAL_BROWSER_DIFF_URL);
   }
   const bad = bindOfficialEvidenceItem({
     official_evidence_item_digest: FORGED_DIGEST,
-    official_evidence_ref: OFFICIAL_RELEASE_URL,
+    official_evidence_ref: OFFICIAL_BROWSER_DIFF_URL,
+    candidate_version: OFFICIAL_BOUND_VERSION,
   });
   assert.equal(bad.ok, false);
 });
@@ -1071,8 +1088,8 @@ test("Ticket12 adversarial: direct supersedeRecipe verified/measured without wit
     recipe_id: "workaround-process-shim",
     candidate_version: OFFICIAL_BOUND_VERSION,
     upstream: {
-      ref: OFFICIAL_RELEASE_URL,
-      evidence_digest: OFFICIAL_RELEASE_DIGEST,
+      ref: OFFICIAL_BROWSER_DIFF_URL,
+      evidence_digest: OFFICIAL_BROWSER_DIFF_DIGEST,
       verified: true,
       measured_validation: true,
     },
@@ -1080,6 +1097,7 @@ test("Ticket12 adversarial: direct supersedeRecipe verified/measured without wit
   });
   assert.equal(r.ok, false);
   assert.equal(r.error_code, "LIVE_WITNESS_REQUIRED");
+  assert.notEqual(r.version_guidance, "RECOMMEND_UPGRADE");
 });
 
 test("Ticket12 adversarial: plain-object/JSON-cloned witness cannot authorize", () => {
@@ -1124,8 +1142,8 @@ test("Ticket12 adversarial: plain-object/JSON-cloned witness cannot authorize", 
     candidate_version: OFFICIAL_BOUND_VERSION,
     live_measurement_witness: plain,
     upstream: {
-      ref: OFFICIAL_RELEASE_URL,
-      evidence_digest: OFFICIAL_RELEASE_DIGEST,
+      ref: OFFICIAL_BROWSER_DIFF_URL,
+      evidence_digest: OFFICIAL_BROWSER_DIFF_DIGEST,
       verified: true,
       measured_validation: true,
     },
@@ -1133,6 +1151,7 @@ test("Ticket12 adversarial: plain-object/JSON-cloned witness cannot authorize", 
   });
   assert.equal(sup.ok, false);
   assert.equal(sup.error_code, "LIVE_WITNESS_REQUIRED");
+  assert.notEqual(sup.version_guidance, "RECOMMEND_UPGRADE");
 });
 
 test("Ticket12 adversarial: witness replay after supersession fails closed", () => {
@@ -1174,8 +1193,8 @@ test("Ticket12 adversarial: witness replay after supersession fails closed", () 
     candidate_version: OFFICIAL_BOUND_VERSION,
     live_measurement_witness: w,
     upstream: {
-      ref: OFFICIAL_RELEASE_URL,
-      evidence_digest: OFFICIAL_RELEASE_DIGEST,
+      ref: OFFICIAL_BROWSER_DIFF_URL,
+      evidence_digest: OFFICIAL_BROWSER_DIFF_DIGEST,
       verified: true,
       measured_validation: true,
     },
@@ -1189,8 +1208,8 @@ test("Ticket12 adversarial: witness replay after supersession fails closed", () 
     candidate_version: OFFICIAL_BOUND_VERSION,
     live_measurement_witness: w,
     upstream: {
-      ref: OFFICIAL_RELEASE_URL,
-      evidence_digest: OFFICIAL_RELEASE_DIGEST,
+      ref: OFFICIAL_BROWSER_DIFF_URL,
+      evidence_digest: OFFICIAL_BROWSER_DIFF_DIGEST,
       verified: true,
       measured_validation: true,
     },
@@ -1198,6 +1217,7 @@ test("Ticket12 adversarial: witness replay after supersession fails closed", () 
   });
   assert.equal(sup2.ok, false);
   assert.equal(sup2.error_code, "LIVE_WITNESS_REPLAY");
+  assert.notEqual(sup2.version_guidance, "RECOMMEND_UPGRADE");
 });
 
 // ─── P0 canary stage + target-binding authority (Ticket 12 correction) ───
@@ -1257,6 +1277,7 @@ function directSupersede(
   witness: unknown,
   recipe_id: string,
   nowMs: number,
+  upstream?: { ref: string; evidence_digest: string },
 ) {
   return supersedeRecipe({
     targetPath,
@@ -1264,8 +1285,8 @@ function directSupersede(
     candidate_version: OFFICIAL_BOUND_VERSION,
     live_measurement_witness: witness,
     upstream: {
-      ref: OFFICIAL_RELEASE_URL,
-      evidence_digest: OFFICIAL_RELEASE_DIGEST,
+      ref: upstream?.ref ?? OFFICIAL_BROWSER_DIFF_URL,
+      evidence_digest: upstream?.evidence_digest ?? OFFICIAL_BROWSER_DIFF_DIGEST,
       verified: true,
       measured_validation: true,
     },
@@ -1364,6 +1385,10 @@ test("Ticket12 P0: canary under target B cannot use witness measured under A", (
   const w = measurePositiveWitness(pairA.candidate, pairA.baseline, NOW);
   assert.equal(witnessStage(w), "fresh");
 
+  const bLedgerBefore = lifecycleLedgerExists(pairB.candidate)
+    ? fs.readFileSync(path.join(pairB.candidate, LIFECYCLE_LEDGER_REL), "utf8")
+    : null;
+
   const canaryB = runCanary({
     targetPath: pairB.candidate,
     candidate_version: OFFICIAL_BOUND_VERSION,
@@ -1374,12 +1399,22 @@ test("Ticket12 P0: canary under target B cannot use witness measured under A", (
     live_measurement_witness: w,
     nowMs: NOW + 1,
   });
-  assert.equal(canaryB.ok, true);
+  // Cross-target live witness: fail without writing B lifecycle ledger.
+  assert.equal(canaryB.ok, false);
+  assert.equal(canaryB.error_code, "LIVE_WITNESS_BINDING");
   assert.notEqual(canaryB.version_guidance, "RECOMMEND_UPGRADE");
   assert.equal(
     witnessStage(w),
     "fresh",
     "mismatched-target canary must not advance stage",
+  );
+  const bLedgerAfter = lifecycleLedgerExists(pairB.candidate)
+    ? fs.readFileSync(path.join(pairB.candidate, LIFECYCLE_LEDGER_REL), "utf8")
+    : null;
+  assert.equal(
+    bLedgerAfter,
+    bLedgerBefore,
+    "B lifecycle ledger must not be mutated on cross-target canary refusal",
   );
 
   const supB = directSupersede(pairB.candidate, w, "p0-cross-b", NOW + 2);
@@ -1507,20 +1542,10 @@ test("Ticket12 adversarial: supersession evidence digest conflict refused", () =
   assert.equal(first.ok, true);
   assert.equal(first.status, "SUPERSEDED");
 
-  // Second attempt with different official evidence on a fresh positive pair.
-  const pair2 = makeBaselineCandidatePair("cg-t12-conf2-");
-  const second = validateCandidate(
-    baseValidateInput(pair2.candidate, pair2.baseline, {
-      recipe_id: "recipe-conflict",
-      issue_number: 503,
-      // Commit binds version_range.to 0.50.0 as well — use same version.
-      official_evidence_item_digest: OFFICIAL_COMMIT_DIGEST,
-      official_evidence_ref: OFFICIAL_COMMIT_URL,
-    }),
-  );
-  // Conflict is on lifecycle ledger under candidate root — first supersede
-  // wrote to first candidate root; second pair is a different root so no conflict.
-  // Force conflict on same target by re-running validate on same candidate with new evidence.
+  // Different official digest on same recipe/target: mechanism-unrelated commit
+  // is refused before ledger conflict; broad release is also mechanism-unrelated.
+  // Conflict path: re-supersede with different *bound* digest is not reachable
+  // for mechanism-unrelated items. Assert mechanism refusal + no silent overwrite.
   const third = validateCandidate(
     baseValidateInput(candidate, baseline, {
       recipe_id: "recipe-conflict",
@@ -1530,12 +1555,252 @@ test("Ticket12 adversarial: supersession evidence digest conflict refused", () =
     }),
   );
   assert.equal(third.ok, false);
-  assert.ok(
-    third.error_code === "SUPERSESSION_EVIDENCE_CONFLICT" ||
-      third.candidate?.error_code === "SUPERSESSION_EVIDENCE_CONFLICT" ||
-      third.status === "REFUSED",
+  assert.equal(third.status, "REFUSED");
+  assert.equal(
+    third.error_code ?? third.candidate?.error_code,
+    "OFFICIAL_EVIDENCE_MECHANISM_UNRELATED",
   );
-  void second;
+  // Original supersession still present; no alternate digest overwrite.
+  const recipes = readLifecycleRecipes(candidate);
+  const superRecipe = recipes.find((r) => r.recipe_id === "recipe-conflict");
+  assert.equal(superRecipe?.status, "SUPERSEDED_BY_UPSTREAM_FIX");
+  void OFFICIAL_PR_DIGEST;
+  void OFFICIAL_PR_URL;
+});
+
+// ─── Ticket 12 Phase A P1 official-fix authority ──────────────────────────
+
+test("Ticket12 P1-A: candidate_version equal to pinned commit full title refused as non-version", () => {
+  const { baseline, candidate } = makeBaselineCandidatePair("cg-t12-p1a-title-");
+  // Prose title never binds as version — even when pointing at a real commit item.
+  const r = validateCandidateFix(
+    baseValidateInput(candidate, baseline, {
+      candidate_version: OFFICIAL_COMMIT_TITLE,
+      // Keep official pair as mechanism-linked so version gate is the first fail
+      // for non-version-shaped tokens (binder checks syntax before mechanism).
+      official_evidence_item_digest: OFFICIAL_BROWSER_DIFF_DIGEST,
+      official_evidence_ref: OFFICIAL_BROWSER_DIFF_URL,
+    }),
+  );
+  assert.equal(r.ok, false);
+  assert.equal(r.error_code, "CANDIDATE_VERSION_UNBOUND");
+  assert.notEqual(r.status, "SUPERSEDED");
+});
+
+test("Ticket12 P1-A: candidate_version equal to commit hash/URL tail refused", () => {
+  const { baseline, candidate } = makeBaselineCandidatePair("cg-t12-p1a-hash-");
+  const r = validateCandidateFix(
+    baseValidateInput(candidate, baseline, {
+      candidate_version: OFFICIAL_COMMIT_HASH_TAIL,
+      official_evidence_item_digest: OFFICIAL_BROWSER_DIFF_DIGEST,
+      official_evidence_ref: OFFICIAL_BROWSER_DIFF_URL,
+    }),
+  );
+  assert.equal(r.ok, false);
+  assert.equal(r.error_code, "CANDIDATE_VERSION_UNBOUND");
+});
+
+test("Ticket12 P1-B: mechanism-unrelated config commit with matching version_range.to refused", () => {
+  const { baseline, candidate } = makeBaselineCandidatePair("cg-t12-p1b-cfg-");
+  const r = validateCandidateFix(
+    baseValidateInput(candidate, baseline, {
+      candidate_version: OFFICIAL_BOUND_VERSION,
+      official_evidence_item_digest: OFFICIAL_COMMIT_DIGEST,
+      official_evidence_ref: OFFICIAL_COMMIT_URL,
+    }),
+  );
+  assert.equal(r.ok, false);
+  assert.equal(r.error_code, "OFFICIAL_EVIDENCE_MECHANISM_UNRELATED");
+  assert.notEqual(r.version_guidance, "RECOMMEND_UPGRADE");
+});
+
+test("Ticket12 P1-B: broad release item without protected-process mechanism linkage refused", () => {
+  const { baseline, candidate } = makeBaselineCandidatePair("cg-t12-p1b-rel-");
+  const r = validateCandidateFix(
+    baseValidateInput(candidate, baseline, {
+      candidate_version: OFFICIAL_BOUND_VERSION,
+      official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
+      official_evidence_ref: OFFICIAL_RELEASE_URL,
+    }),
+  );
+  assert.equal(r.ok, false);
+  assert.equal(r.error_code, "OFFICIAL_EVIDENCE_MECHANISM_UNRELATED");
+});
+
+test("Ticket12 P1-B: mechanism-linked browser-client diff + 0.50.0 remains positive official path", () => {
+  const { baseline, candidate } = makeBaselineCandidatePair("cg-t12-p1b-pos-");
+  const r = validateCandidate(
+    baseValidateInput(candidate, baseline, {
+      candidate_version: OFFICIAL_BOUND_VERSION,
+      official_evidence_item_digest: OFFICIAL_BROWSER_DIFF_DIGEST,
+      official_evidence_ref: OFFICIAL_BROWSER_DIFF_URL,
+    }),
+  );
+  assert.equal(r.ok, true);
+  assert.equal(r.status, "SUPERSEDED");
+  assert.equal(
+    r.candidate?.official_evidence_item_digest,
+    OFFICIAL_BROWSER_DIFF_DIGEST,
+  );
+  assert.equal(r.candidate?.recipe_status, "SUPERSEDED_BY_UPSTREAM_FIX");
+});
+
+test("Ticket12 P1-C: evil URL + arbitrary 64-hex + verified:true fails; witness retryable with correct official", () => {
+  const { baseline, candidate } = makeBaselineCandidatePair("cg-t12-p1c-evil-");
+  const w = measurePositiveWitness(candidate, baseline, NOW);
+
+  const canary = runCanary({
+    targetPath: candidate,
+    candidate_version: OFFICIAL_BOUND_VERSION,
+    original_fault_absent: true,
+    core_regressions_passed: true,
+    canary_executed: true,
+    measured_outcomes: true,
+    live_measurement_witness: w,
+    nowMs: NOW + 1,
+  });
+  assert.equal(canary.version_guidance, "RECOMMEND_UPGRADE");
+  assert.equal(witnessStage(w), "canary_recorded");
+
+  const evil = supersedeRecipe({
+    targetPath: candidate,
+    recipe_id: "p1c-evil",
+    candidate_version: OFFICIAL_BOUND_VERSION,
+    live_measurement_witness: w,
+    upstream: {
+      ref: EVIL_URL,
+      evidence_digest: FORGED_DIGEST,
+      verified: true,
+      measured_validation: true,
+    },
+    nowMs: NOW + 2,
+  });
+  assert.equal(evil.ok, false);
+  assert.equal(evil.error_code, "OFFICIAL_EVIDENCE_REF_REFUSED");
+  assert.notEqual(evil.version_guidance, "RECOMMEND_UPGRADE");
+  assertNoSupersededRecipe(candidate, "p1c-evil");
+  assert.equal(
+    witnessStage(w),
+    "canary_recorded",
+    "forged official must not consume witness",
+  );
+
+  // Retry with correct mechanism-linked official evidence succeeds once.
+  const ok = directSupersede(candidate, w, "p1c-retry-ok", NOW + 3);
+  assert.equal(ok.ok, true);
+  assert.equal(ok.recipe?.status, "SUPERSEDED_BY_UPSTREAM_FIX");
+  assert.equal(witnessStage(w), "consumed");
+});
+
+test("Ticket12 P1-C: correct official + same-target witness supersedes once; replay fails", () => {
+  const { baseline, candidate } = makeBaselineCandidatePair("cg-t12-p1c-once-");
+  const w = measurePositiveWitness(candidate, baseline, NOW);
+  const canary = runCanary({
+    targetPath: candidate,
+    candidate_version: OFFICIAL_BOUND_VERSION,
+    original_fault_absent: true,
+    core_regressions_passed: true,
+    canary_executed: true,
+    measured_outcomes: true,
+    live_measurement_witness: w,
+    nowMs: NOW + 1,
+  });
+  assert.equal(canary.version_guidance, "RECOMMEND_UPGRADE");
+
+  const sup1 = directSupersede(candidate, w, "p1c-once", NOW + 2);
+  assert.equal(sup1.ok, true);
+  assert.equal(sup1.recipe?.upstream_ref, OFFICIAL_BROWSER_DIFF_URL);
+  assert.equal(sup1.recipe?.upstream_evidence_digest, OFFICIAL_BROWSER_DIFF_DIGEST);
+
+  const sup2 = directSupersede(candidate, w, "p1c-once-replay", NOW + 3);
+  assert.equal(sup2.ok, false);
+  assert.equal(sup2.error_code, "LIVE_WITNESS_REPLAY");
+  assert.notEqual(sup2.version_guidance, "RECOMMEND_UPGRADE");
+  assertNoSupersededRecipe(candidate, "p1c-once-replay");
+});
+
+test("Ticket12 P2: caller-supplied snapshot_path cannot authorize alternate official root", () => {
+  const { baseline, candidate } = makeBaselineCandidatePair("cg-t12-p2-snap-");
+  // Even if a path is smuggled, public bind ignores it and uses bundled only.
+  // Mechanism-unrelated release remains refused regardless of path.
+  const r = validateCandidateFix({
+    ...baseValidateInput(candidate, baseline, {
+      official_evidence_item_digest: OFFICIAL_RELEASE_DIGEST,
+      official_evidence_ref: OFFICIAL_RELEASE_URL,
+    }),
+    snapshot_path: "/tmp/forged-official-snapshot.json",
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.error_code, "OFFICIAL_EVIDENCE_MECHANISM_UNRELATED");
+
+  // Positive path still only works with real bundled mechanism-linked item.
+  const pos = validateCandidate(
+    baseValidateInput(candidate, baseline, {
+      official_evidence_item_digest: OFFICIAL_BROWSER_DIFF_DIGEST,
+      official_evidence_ref: OFFICIAL_BROWSER_DIFF_URL,
+    }),
+  );
+  // Candidate root already may have been measured; use fresh pair for clean positive.
+  void pos;
+  const pair2 = makeBaselineCandidatePair("cg-t12-p2-snap2-");
+  const pos2 = validateCandidate(
+    {
+      ...baseValidateInput(pair2.candidate, pair2.baseline),
+      snapshot_path: "/tmp/forged-official-snapshot.json",
+    },
+  );
+  assert.equal(pos2.ok, true);
+  assert.equal(pos2.status, "SUPERSEDED");
+  assert.equal(
+    pos2.candidate?.official_evidence_item_digest,
+    OFFICIAL_BROWSER_DIFF_DIGEST,
+  );
+});
+
+test("Ticket12 P2: refused supersede paths never claim RECOMMEND_UPGRADE", () => {
+  const target = makeTarget();
+  const cases = [
+    supersedeRecipe({
+      targetPath: target,
+      recipe_id: "p2-vg-1",
+      candidate_version: OFFICIAL_BOUND_VERSION,
+      upstream: {
+        ref: EVIL_URL,
+        evidence_digest: FORGED_DIGEST,
+        verified: true,
+        measured_validation: true,
+      },
+      nowMs: NOW,
+    }),
+    supersedeRecipe({
+      targetPath: target,
+      recipe_id: "p2-vg-2",
+      candidate_version: OFFICIAL_BOUND_VERSION,
+      upstream: {
+        ref: OFFICIAL_RELEASE_URL,
+        evidence_digest: OFFICIAL_RELEASE_DIGEST,
+        verified: true,
+        measured_validation: true,
+      },
+      nowMs: NOW,
+    }),
+    supersedeRecipe({
+      targetPath: target,
+      recipe_id: "p2-vg-3",
+      candidate_version: OFFICIAL_BOUND_VERSION,
+      upstream: {
+        ref: OFFICIAL_BROWSER_DIFF_URL,
+        evidence_digest: OFFICIAL_BROWSER_DIFF_DIGEST,
+        verified: true,
+        measured_validation: true,
+      },
+      nowMs: NOW,
+    }),
+  ];
+  for (const r of cases) {
+    assert.equal(r.ok, false);
+    assert.notEqual(r.version_guidance, "RECOMMEND_UPGRADE");
+  }
 });
 
 test("Ticket12 adversarial: active/protected non-disposable roots refused", () => {

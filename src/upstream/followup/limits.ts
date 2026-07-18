@@ -39,20 +39,14 @@ export const CANDIDATE_MEASUREMENT_REL = "canary/candidate-measurement.json";
 export const CANDIDATE_MEASUREMENT_MAX_BYTES = 4_096;
 export const CANDIDATE_MEASUREMENT_SCHEMA_VERSION = 1;
 
-/** Official evidence kinds accepted as an upstream-fix reference (closed). */
-export const UPSTREAM_FIX_EVIDENCE_KINDS = Object.freeze([
-  "release",
-  "tag",
-  "commit",
-  "pr",
-  "diff",
-] as const);
-
-/** Maintainer statuses accepted for upstream-fix references (closed). */
-export const UPSTREAM_FIX_MAINTAINER_STATUSES = Object.freeze([
-  "official",
-  "maintainer",
-] as const);
+/**
+ * Official evidence kinds accepted as an upstream-fix reference (closed).
+ * Re-exported from the evidence-domain canonical binder for stable followup imports.
+ */
+export {
+  UPSTREAM_FIX_EVIDENCE_KINDS,
+  UPSTREAM_FIX_MAINTAINER_STATUSES,
+} from "../../evidence/official-fix-authority.js";
 
 export const OFFICIAL_HOST = "github.com";
 export const OFFICIAL_REPOSITORY = "openai/codex";

@@ -576,13 +576,11 @@ function bindingMatch(
 }
 
 /**
- * Record canary under live measurement authority.
- * Advances fresh → canary_recorded only when the caller has already established
- * the successful measured-canary branch (executed + fault absent + core ok)
- * and target/version/profile bind. Plain objects / clones / failed canaries
- * never reach this mutator with authority; stage is not advanced on mismatch.
+ * Non-mutating canary binding precheck for a process-local live witness.
+ * Used so invalid target/version binding fails without advancing stage or
+ * writing another target's lifecycle ledger.
  */
-export function recordCanaryWithLiveWitness(
+export function precheckWitnessForCanary(
   witness: unknown,
   expected: {
     candidate_version: string;
@@ -625,6 +623,37 @@ export function recordCanaryWithLiveWitness(
       ok: false,
       code: "LIVE_WITNESS_BINDING",
       message: "Live measurement witness binding mismatch for canary.",
+    };
+  }
+  return {
+    ok: true,
+    attestation: publicAttestationView(st),
+  };
+}
+
+/**
+ * Record canary under live measurement authority.
+ * Advances fresh → canary_recorded only when the caller has already established
+ * the successful measured-canary branch (executed + fault absent + core ok)
+ * and target/version/profile bind. Plain objects / clones / failed canaries
+ * never reach this mutator with authority; stage is not advanced on mismatch.
+ */
+export function recordCanaryWithLiveWitness(
+  witness: unknown,
+  expected: {
+    candidate_version: string;
+    profile_id?: string;
+    target_real: string;
+  },
+): WitnessAuthorityOk | WitnessAuthorityFail {
+  const pre = precheckWitnessForCanary(witness, expected);
+  if (!pre.ok) return pre;
+  const st = liveMeasurementStore.get(witness as object);
+  if (!st) {
+    return {
+      ok: false,
+      code: "LIVE_WITNESS_INVALID",
+      message: "Live measurement witness not recognized in this process.",
     };
   }
   st.stage = "canary_recorded";

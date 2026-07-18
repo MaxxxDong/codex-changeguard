@@ -733,10 +733,15 @@ test("Ticket06: upstream supersession requires live measurement witness (boolean
     "--upstream-verified=true",
   ]);
   assert.notEqual(sup.exitCode, 0, sup.stdout);
+  // Boolean path closed: official bind and/or live witness refuse supersession.
   assert.ok(
     sup.result!.error_code === "LIVE_WITNESS_REQUIRED" ||
-      sup.result!.error_code === "UPSTREAM_NOT_VERIFIED",
+      sup.result!.error_code === "UPSTREAM_NOT_VERIFIED" ||
+      sup.result!.error_code === "OFFICIAL_EVIDENCE_REF_REFUSED" ||
+      sup.result!.error_code === "OFFICIAL_EVIDENCE_UNBOUND" ||
+      sup.result!.error_code === "OFFICIAL_EVIDENCE_REQUIRED",
   );
+  assert.notEqual(sup.result!.version_guidance, "RECOMMEND_UPGRADE");
 
   // Unverified still refused
   const unver = runLifecycle(target, "supersede_recipe", [
@@ -749,19 +754,24 @@ test("Ticket06: upstream supersession requires live measurement witness (boolean
   assert.equal(unver.result!.error_code, "UPSTREAM_NOT_VERIFIED");
 
   // Direct core seam without witness also refuses (no SUPERSEDED_BY_UPSTREAM_FIX).
+  // Non-official/forged refs fail official bind before witness; use real mechanism-
+  // linked digest+URL so the remaining gate is LIVE_WITNESS_REQUIRED.
   const core = supersedeRecipe({
     targetPath: target,
     recipe_id: "workaround-process-shim",
     candidate_version: "0.50.0",
     upstream: {
-      ref: "openai/codex#32925",
-      evidence_digest: digest,
+      ref: "https://github.com/openai/codex/compare/rust-v0.49.0...rust-v0.50.0",
+      evidence_digest:
+        "eeb1ccc7913c4a8489c1e1de3919c4cc93bdd0de2eec87dc680c80a67aeed7d7",
       verified: true,
       measured_validation: true,
     },
   });
   assert.equal(core.ok, false);
   assert.equal(core.error_code, "LIVE_WITNESS_REQUIRED");
+  assert.notEqual(core.version_guidance, "RECOMMEND_UPGRADE");
+  void digest;
 });
 
 test("Ticket06: corrupt/tampered/symlink ledger refused", () => {

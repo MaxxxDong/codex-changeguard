@@ -68,6 +68,7 @@ export {
   runRegisteredLiveMeasurement,
   isLiveMeasurementWitness,
   readLiveMeasurementAttestation,
+  precheckWitnessForCanary,
 } from "./live-measurement.js";
 export type {
   RegisteredMeasurementProfileId,

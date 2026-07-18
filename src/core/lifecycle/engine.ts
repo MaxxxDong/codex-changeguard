@@ -77,7 +77,12 @@ import {
   rawCliInstallSource,
 } from "./types.js";
 import {
+  bindOfficialFixForSupersession,
+} from "../../evidence/official-fix-authority.js";
+import {
   consumeWitnessForSupersede,
+  isLiveMeasurementWitness,
+  precheckWitnessForCanary,
   recordCanaryWithLiveWitness,
 } from "./live-measurement.js";
 
@@ -1004,14 +1009,29 @@ export function runCanary(input: CanaryInput): LifecycleResult {
     // Ticket 12 P0 authority: never mutate witness stage until the successful
     // measured-canary branch is established in this same call
     // (executed + fault absent + core ok + live witness bind + exact target).
+    // When a real live witness is supplied with invalid target/version binding,
+    // fail closed without writing this target's lifecycle ledger (P2).
     let hasLiveAuthority = false;
     if (executed && faultAbsent && coreOk) {
+      const expected = {
+        candidate_version: input.candidate_version,
+        target_real: targetReal,
+      };
+      if (isLiveMeasurementWitness(input.live_measurement_witness)) {
+        const pre = precheckWitnessForCanary(
+          input.live_measurement_witness,
+          expected,
+        );
+        if (!pre.ok && pre.code === "LIVE_WITNESS_BINDING") {
+          return fail(op, pre.code, pre.message, {
+            version_guidance: null,
+            target_mutated: false,
+          });
+        }
+      }
       const liveAuth = recordCanaryWithLiveWitness(
         input.live_measurement_witness,
-        {
-          candidate_version: input.candidate_version,
-          target_real: targetReal,
-        },
+        expected,
       );
       hasLiveAuthority = liveAuth.ok === true;
     }
@@ -1116,13 +1136,16 @@ export function supersedeRecipe(input: SupersedeInput): LifecycleResult {
       input.recipe_id.length === 0 ||
       input.recipe_id.length > 128
     ) {
-      return fail(op, "INVALID_RECIPE", "Invalid recipe_id.");
+      return fail(op, "INVALID_RECIPE", "Invalid recipe_id.", {
+        version_guidance: null,
+      });
     }
     if (!input.upstream || input.upstream.verified !== true) {
       return fail(
         op,
         "UPSTREAM_NOT_VERIFIED",
         "Upstream fix must be verified before supersession.",
+        { version_guidance: null },
       );
     }
     // Ticket 12: explicit measured_validation=false refuses supersession.
@@ -1131,6 +1154,7 @@ export function supersedeRecipe(input: SupersedeInput): LifecycleResult {
         op,
         "UPSTREAM_NOT_VERIFIED",
         "Supersession requires measured validation when measured_validation is provided.",
+        { version_guidance: null },
       );
     }
     if (
@@ -1139,30 +1163,17 @@ export function supersedeRecipe(input: SupersedeInput): LifecycleResult {
       typeof input.upstream.evidence_digest !== "string" ||
       !/^[a-f0-9]{64}$/.test(input.upstream.evidence_digest)
     ) {
-      return fail(op, "INVALID_UPSTREAM", "Invalid upstream evidence.");
+      return fail(op, "INVALID_UPSTREAM", "Invalid upstream evidence.", {
+        version_guidance: null,
+      });
     }
 
     // Load ledger first so corrupt/tampered ledgers fail closed before any
-    // authority decision (including live-witness checks).
+    // authority decision (official bind or live-witness consume).
     const nowMs = nowOf(input.nowMs);
     const ledger = loadLedger(targetReal, "default", nowMs);
-    const existing = ledger.recipes.find((r) => r.recipe_id === input.recipe_id);
-    // Replay/TOCTOU: if already superseded with different evidence, refuse silent overwrite.
-    if (
-      existing &&
-      existing.status === "SUPERSEDED_BY_UPSTREAM_FIX" &&
-      existing.upstream_evidence_digest &&
-      existing.upstream_evidence_digest !== input.upstream.evidence_digest
-    ) {
-      return fail(
-        op,
-        "SUPERSESSION_EVIDENCE_CONFLICT",
-        "Recipe already superseded with different upstream evidence.",
-      );
-    }
 
-    // Ticket 12 authority: process-local live witness required.
-    // verified/measured_validation booleans alone never mark SUPERSEDED.
+    // Ticket 12 Phase A: candidate_version required for version bind + witness.
     const candidateVersion =
       typeof input.candidate_version === "string" &&
       input.candidate_version.length > 0
@@ -1173,22 +1184,62 @@ export function supersedeRecipe(input: SupersedeInput): LifecycleResult {
         op,
         "LIVE_WITNESS_REQUIRED",
         "Supersession requires candidate_version bound to a live measurement witness.",
+        { version_guidance: null },
       );
     }
+
+    // Canonical official-fix bind BEFORE live-witness consume so a forged
+    // ref/digest never strands a valid canary-recorded witness (P1-C / P2).
+    // verified/digest-shape alone never authorize SUPERSEDED_BY_UPSTREAM_FIX.
+    const officialBind = bindOfficialFixForSupersession({
+      official_evidence_item_digest: input.upstream.evidence_digest,
+      official_evidence_ref: input.upstream.ref,
+      candidate_version: candidateVersion,
+    });
+    if (!officialBind.ok) {
+      return fail(op, officialBind.code, officialBind.message, {
+        version_guidance: null,
+        target_mutated: false,
+      });
+    }
+
+    const existing = ledger.recipes.find((r) => r.recipe_id === input.recipe_id);
+    // Replay/TOCTOU: if already superseded with different evidence, refuse silent overwrite.
+    if (
+      existing &&
+      existing.status === "SUPERSEDED_BY_UPSTREAM_FIX" &&
+      existing.upstream_evidence_digest &&
+      existing.upstream_evidence_digest !== officialBind.item.content_sha256
+    ) {
+      return fail(
+        op,
+        "SUPERSESSION_EVIDENCE_CONFLICT",
+        "Recipe already superseded with different upstream evidence.",
+        { version_guidance: null },
+      );
+    }
+
+    // Process-local live witness required after official bind succeeds.
     const liveAuth = consumeWitnessForSupersede(input.live_measurement_witness, {
       candidate_version: candidateVersion,
       // Exact canonical target must match the measured candidate root.
       target_real: targetReal,
     });
     if (!liveAuth.ok) {
-      return fail(op, liveAuth.code, liveAuth.message);
+      return fail(op, liveAuth.code, liveAuth.message, {
+        version_guidance: null,
+        target_mutated: false,
+      });
     }
+
+    const boundRef = officialBind.canonical_url;
+    const boundDigest = officialBind.item.content_sha256;
 
     const recipe = {
       recipe_id: input.recipe_id,
       status: "SUPERSEDED_BY_UPSTREAM_FIX" as const,
-      upstream_ref: input.upstream.ref,
-      upstream_evidence_digest: input.upstream.evidence_digest,
+      upstream_ref: boundRef,
+      upstream_evidence_digest: boundDigest,
       superseded_at_ms: existing?.superseded_at_ms ?? nowMs,
       recommendable: false,
     };
@@ -1214,7 +1265,7 @@ export function supersedeRecipe(input: SupersedeInput): LifecycleResult {
       upstream_contribution: upstreamReceipt(
         "CANDIDATE_ONLY",
         "Canonical upstream fix evidence tracked locally; no crawler, no external submission.",
-        [input.upstream.ref],
+        [boundRef],
       ),
       ledger: sealed,
       recipe,
@@ -1222,7 +1273,7 @@ export function supersedeRecipe(input: SupersedeInput): LifecycleResult {
       evidence: [
         {
           kind: "recipe_superseded",
-          detail: `recipe_id=${input.recipe_id};ref=${input.upstream.ref};live_witness=true`,
+          detail: `recipe_id=${input.recipe_id};ref=${boundRef};digest=${boundDigest.slice(0, 12)}…;live_witness=true;official_bind=true`,
           measured: true,
         },
       ],

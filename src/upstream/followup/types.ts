@@ -195,9 +195,9 @@ export interface CandidateValidationInput {
   core_regressions_passed?: boolean;
   verified?: boolean;
   /**
-   * Optional bounded local official-evidence snapshot path for tests/orchestration.
-   * Validated exclusively by loadBundledSnapshot; production omits → bundled default.
-   * Never accepts raw objects or network URLs.
+   * @deprecated Caller-controlled snapshot_path is not accepted as an official
+   * trust root. Production and public candidate validation always use the
+   * immutable bundled official snapshot. If supplied, it is ignored.
    */
   snapshot_path?: string;
   nowMs?: number;

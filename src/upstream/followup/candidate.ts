@@ -9,9 +9,9 @@
  *    candidate_version / profile / artifact digests — never absence-as-success
  *    or caller booleans or persisted self-attestation JSON
  * 2. Real pinned official evidence item: digest + canonical URL both match
- *    exactly one bundled-snapshot item suitable as an upstream-fix reference
- * 3. Candidate version meaningfully bound to the official item
- *    (version_range.to or normalized release/tag version token)
+ *    exactly one bundled-snapshot item suitable as an upstream-fix reference,
+ *    with Phase A mechanism linkage for the measurement profile
+ * 3. Candidate version exactly bound to explicit version_range.to (version-shaped)
  *
  * Never download/install/mutate OpenAI binaries; guidance only.
  * Never automatically uninstall a user workaround.
@@ -19,13 +19,7 @@
 import { runCanary, supersedeRecipe } from "../../core/lifecycle/index.js";
 import { resolveTargetDirectory } from "../../core/path-safety.js";
 import type { VersionGuidance } from "../../core/lifecycle/types.js";
-import {
-  assertOfficialUrl,
-  AllowlistError,
-  loadBundledSnapshot,
-  SnapshotError,
-} from "../../evidence/index.js";
-import type { OfficialEvidenceItem } from "../../evidence/types.js";
+import { bindOfficialEvidenceItem } from "../../evidence/official-fix-authority.js";
 import {
   measureWithRegisteredProfile,
   loadCandidateMeasurement,
@@ -39,214 +33,14 @@ import type {
 import {
   MAX_RECIPE_ID_LEN,
   MAX_VERSION_LEN,
-  UPSTREAM_FIX_EVIDENCE_KINDS,
-  UPSTREAM_FIX_MAINTAINER_STATUSES,
 } from "./limits.js";
 import { parseCanonicalIssue, IssueUrlError } from "./issue-url.js";
 
-const SHA256_HEX = /^[a-f0-9]{64}$/;
-const FIX_KIND_SET = new Set<string>(UPSTREAM_FIX_EVIDENCE_KINDS);
-const FIX_STATUS_SET = new Set<string>(UPSTREAM_FIX_MAINTAINER_STATUSES);
-
-function isSuitableUpstreamFix(item: OfficialEvidenceItem): boolean {
-  if (!FIX_KIND_SET.has(item.kind)) return false;
-  if (!FIX_STATUS_SET.has(item.maintainer_status)) return false;
-  if (item.quarantine !== null) return false;
-  return true;
-}
-
-/**
- * Normalize a version label for binding comparison.
- * Strips common release/tag prefixes (rust-v, v, desktop-win-) and lowercases.
- */
-function normalizeVersionToken(raw: string): string {
-  let s = raw.trim().toLowerCase();
-  // Drop trailing prerelease/build suffixes for binding against release "to".
-  // Keep the core numeric-ish token.
-  s = s.replace(/^rust-v/, "");
-  s = s.replace(/^desktop-win-/, "");
-  s = s.replace(/^notes-unmapped-/, "");
-  s = s.replace(/^v/, "");
-  return s;
-}
-
-/**
- * Bind requested candidate_version to a suitable official evidence item.
- * Prefer version_range.to; also accept exact normalized title/tag token match.
- * Fail closed when the official item cannot bind a candidate version.
- */
-export function bindCandidateVersionToOfficial(
-  candidate_version: string,
-  item: OfficialEvidenceItem,
-): { ok: true; bound_token: string } | { ok: false; code: string; message: string } {
-  const cand = normalizeVersionToken(candidate_version);
-  if (!cand) {
-    return {
-      ok: false,
-      code: "CANDIDATE_VERSION_UNBOUND",
-      message: "Candidate version cannot bind to official release token.",
-    };
-  }
-
-  const tokens = new Set<string>();
-  if (item.version_range?.to) {
-    tokens.add(normalizeVersionToken(item.version_range.to));
-  }
-  // Release/tag title often embeds the version (e.g. rust-v0.50.0).
-  if (typeof item.title === "string" && item.title.length > 0) {
-    tokens.add(normalizeVersionToken(item.title));
-  }
-  // Canonical URL last path segment as a token source.
-  try {
-    const u = new URL(item.canonical_url);
-    const seg = u.pathname.split("/").filter(Boolean).pop();
-    if (seg) tokens.add(normalizeVersionToken(seg));
-  } catch {
-    /* ignore */
-  }
-
-  tokens.delete("");
-  if (tokens.size === 0) {
-    return {
-      ok: false,
-      code: "CANDIDATE_VERSION_UNBOUND",
-      message:
-        "Official evidence item has no bindable release/version token for candidate_version.",
-    };
-  }
-
-  // Exact normalized token match against version_range.to / title / tag segment.
-  if (tokens.has(cand)) {
-    return { ok: true, bound_token: cand };
-  }
-
-  return {
-    ok: false,
-    code: "CANDIDATE_VERSION_MISMATCH",
-    message:
-      "Requested candidate_version is not meaningfully bound to the official evidence release/tag version.",
-  };
-}
-
-/**
- * Bind caller digest+ref to exactly one real official-evidence snapshot item.
- * Fail closed on forge, mismatch, ambiguity, non-official URL, unsuitable kinds.
- */
-export function bindOfficialEvidenceItem(input: {
-  official_evidence_item_digest: string;
-  official_evidence_ref: string;
-  /** Optional bounded local snapshot path (tests/orchestration); validated by loadBundledSnapshot. */
-  snapshot_path?: string;
-}):
-  | { ok: true; item: OfficialEvidenceItem; canonical_url: string }
-  | { ok: false; code: string; message: string } {
-  const digest = input.official_evidence_item_digest;
-  const ref = input.official_evidence_ref;
-  if (typeof digest !== "string" || !SHA256_HEX.test(digest)) {
-    return {
-      ok: false,
-      code: "OFFICIAL_EVIDENCE_REQUIRED",
-      message: "Allowlisted official evidence item digest required (64 hex).",
-    };
-  }
-  if (typeof ref !== "string" || ref.length === 0 || ref.length > 256) {
-    return {
-      ok: false,
-      code: "OFFICIAL_EVIDENCE_REQUIRED",
-      message: "Official evidence ref required.",
-    };
-  }
-
-  let canonical_url: string;
-  try {
-    ({ canonical_url } = assertOfficialUrl(ref));
-  } catch (e) {
-    if (e instanceof AllowlistError) {
-      return {
-        ok: false,
-        code: "OFFICIAL_EVIDENCE_REF_REFUSED",
-        message: e.message,
-      };
-    }
-    return {
-      ok: false,
-      code: "OFFICIAL_EVIDENCE_REF_REFUSED",
-      message: "Official evidence ref refused.",
-    };
-  }
-
-  let snapshot;
-  try {
-    snapshot = loadBundledSnapshot(input.snapshot_path);
-  } catch (e) {
-    if (e instanceof SnapshotError) {
-      return {
-        ok: false,
-        code: "OFFICIAL_SNAPSHOT_REFUSED",
-        message: e.message,
-      };
-    }
-    return {
-      ok: false,
-      code: "OFFICIAL_SNAPSHOT_REFUSED",
-      message: "Official evidence snapshot load failed.",
-    };
-  }
-
-  const matches = snapshot.items.filter(
-    (it) =>
-      it.content_sha256 === digest && it.canonical_url === canonical_url,
-  );
-  if (matches.length === 0) {
-    // Distinguish digest-only vs ref-only for clearer fail-closed diagnostics.
-    const byDigest = snapshot.items.filter((it) => it.content_sha256 === digest);
-    const byUrl = snapshot.items.filter((it) => it.canonical_url === canonical_url);
-    if (byDigest.length === 0 && byUrl.length === 0) {
-      return {
-        ok: false,
-        code: "OFFICIAL_EVIDENCE_UNBOUND",
-        message:
-          "Digest and ref do not bind to any pinned official evidence item.",
-      };
-    }
-    if (byDigest.length > 0 && byUrl.length === 0) {
-      return {
-        ok: false,
-        code: "OFFICIAL_EVIDENCE_REF_MISMATCH",
-        message: "Official evidence ref does not match digest-bound item URL.",
-      };
-    }
-    if (byDigest.length === 0 && byUrl.length > 0) {
-      return {
-        ok: false,
-        code: "OFFICIAL_EVIDENCE_DIGEST_MISMATCH",
-        message: "Official evidence digest does not match ref-bound item.",
-      };
-    }
-    return {
-      ok: false,
-      code: "OFFICIAL_EVIDENCE_MISMATCH",
-      message: "Official evidence digest/ref pair does not match a single item.",
-    };
-  }
-  if (matches.length > 1) {
-    return {
-      ok: false,
-      code: "OFFICIAL_EVIDENCE_AMBIGUOUS",
-      message: "Official evidence digest/ref matches multiple snapshot items.",
-    };
-  }
-  const item = matches[0]!;
-  if (!isSuitableUpstreamFix(item)) {
-    return {
-      ok: false,
-      code: "OFFICIAL_EVIDENCE_UNSUITABLE",
-      message:
-        "Bound evidence item is not suitable as an upstream-fix reference.",
-    };
-  }
-  return { ok: true, item, canonical_url };
-}
+// Re-export canonical binders so followup public surface stays stable.
+export {
+  bindOfficialEvidenceItem,
+  bindCandidateVersionToOfficial,
+} from "../../evidence/official-fix-authority.js";
 
 export function validateCandidateFix(
   input: CandidateValidationInput,
@@ -320,6 +114,8 @@ export function validateCandidateFix(
   void input.original_fault_absent;
   void input.core_regressions_passed;
   void input.verified;
+  // Caller-controlled snapshot_path is not a trust root (P2-1); ignore if present.
+  void (input as { snapshot_path?: unknown }).snapshot_path;
 
   // Profile must be the closed Phase-A id (or fail closed).
   const profile_id =
@@ -395,7 +191,8 @@ export function validateCandidateFix(
       ? bindOfficialEvidenceItem({
           official_evidence_item_digest: input.official_evidence_item_digest,
           official_evidence_ref: input.official_evidence_ref,
-          snapshot_path: input.snapshot_path,
+          measurement_profile_id: profile_id,
+          candidate_version: input.candidate_version,
         })
       : null;
 
@@ -407,24 +204,6 @@ export function validateCandidateFix(
       probe_results,
       { measured_fault_absent, measured_core_ok },
     );
-  }
-
-  // Version binding: positive path requires candidate_version meaningfully
-  // bound to the official release/tag token.
-  if (verdict === "positive" && bind && bind.ok) {
-    const vbind = bindCandidateVersionToOfficial(
-      input.candidate_version,
-      bind.item,
-    );
-    if (!vbind.ok) {
-      return baseFail(
-        "REFUSED",
-        vbind.code,
-        vbind.message,
-        probe_results,
-        { measured_fault_absent, measured_core_ok },
-      );
-    }
   }
 
   // Drive canary with MEASURED values + live witness only.
@@ -457,7 +236,7 @@ export function validateCandidateFix(
       status: "REFUSED",
       measured_fault_absent,
       measured_core_ok,
-      version_guidance,
+      version_guidance: null,
       recipe_status: null,
       recipe_recommendable: null,
       official_evidence_item_digest: null,
@@ -531,6 +310,7 @@ export function validateCandidateFix(
       ? `candidate_artifact=${digests.candidate_artifact_sha256.slice(0, 12)}…`
       : "candidate_artifact=unknown";
 
+  // supersedeRecipe re-runs the same canonical official binder + consumes witness.
   const sup = supersedeRecipe({
     targetPath: input.targetPath,
     recipe_id: input.recipe_id,
@@ -551,7 +331,8 @@ export function validateCandidateFix(
       status: "REFUSED",
       measured_fault_absent,
       measured_core_ok,
-      version_guidance: "RECOMMEND_UPGRADE",
+      // P2-3: refused supersede must not claim RECOMMEND_UPGRADE success.
+      version_guidance: null,
       recipe_status: null,
       recipe_recommendable: null,
       official_evidence_item_digest: boundDigest,
