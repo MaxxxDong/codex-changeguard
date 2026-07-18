@@ -318,6 +318,20 @@ Each public identity includes:
 
 Version/build evidence is read only from metadata/manifest files (`version.json`, `package.json`, `Info.plist`, `AppxManifest.xml`, or fixture-declared fields) and only under **explicit allowed roots** (inventory root and/or system-adapter trusted install roots). Implicit parent traversal (`../Info.plist`, npm parent paths) is not used; parent metadata requires a separately registered trusted root and remains bounded with Ticket 01-equivalent no-follow checks.
 
+### 9.1.1 macOS platform adapter and support receipts (Ticket 13)
+
+`src/platform/macos/` is the namespaced macOS adapter. It advertises only bounded registered install sources (`desktop_bundled`, `path`, `package_manager`), path-role **aliases** (profile/config/log/cache/crash metadata), and registered operations. Constraints are fixed closed: no broad home crawl, no raw path export, no executing discovered binaries for version, no sudo, no system certificate/proxy/security-control change, no signed-app or OpenAI binary mutation, no active primary-profile mutation.
+
+Public seams:
+
+| Seam | Role |
+| --- | --- |
+| `changeguard platform-status` / MCP `changeguard_platform_status` | Read-only capabilities + optional receipt validation |
+| `changeguard platform-receipt-validate` / MCP `changeguard_platform_receipt_validate` | Strict receipt validation (schema, leak checks, Full-only-with-proof) |
+| `npm run harness:macos` / `scripts/run-macos-harness.mjs` | Real-machine isolated Scenario Harness (black-box CLI; disposable temps only) |
+
+`schemas/platform-support-receipt.schema.json` is the receipt contract. Full support is declared only when every required real-machine scenario passes and validation succeeds; otherwise the receipt stays **Preview** with exact `uncovered_gaps`. See `docs/SUPPORT_MATRIX.md`.
+
 ### 9.2 Affected-instance resolution
 
 The actually affected instance is resolved from observed process, log, and launch-context evidence (path hash or sole-instance rules). ChangeGuard **never** selects the highest/newest version by default. When evidence does not identify exactly one instance, `affected_resolution` remains `ambiguous`.

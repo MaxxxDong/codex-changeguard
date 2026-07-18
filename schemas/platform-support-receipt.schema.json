@@ -1,0 +1,249 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://changeguard.local/schemas/platform-support-receipt.schema.json",
+  "title": "PlatformSupportReceipt",
+  "description": "Real-machine Scenario Harness receipt for platform Full/Preview claims. No usernames, raw home paths, or temp paths.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_id",
+    "platform",
+    "arch",
+    "coarse_os_version",
+    "changeguard_version",
+    "changeguard_commit",
+    "codex_version_provenance",
+    "capabilities",
+    "scenarios",
+    "isolation",
+    "started_at",
+    "ended_at",
+    "duration_ms",
+    "support_level",
+    "uncovered_gaps",
+    "assertions",
+    "network_used"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "receipt_id": { "type": "string", "minLength": 8, "maxLength": 128 },
+    "platform": {
+      "type": "string",
+      "enum": ["macos", "windows", "linux", "wsl", "unknown"]
+    },
+    "arch": { "type": "string", "minLength": 1, "maxLength": 32 },
+    "coarse_os_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "changeguard_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "changeguard_commit": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 64,
+          "pattern": "^[0-9a-fA-F]{7,64}$"
+        }
+      ]
+    },
+    "codex_version_provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["available", "version", "provenance"],
+      "properties": {
+        "available": { "type": "boolean" },
+        "version": { "type": ["string", "null"], "maxLength": 64 },
+        "provenance": {
+          "type": "string",
+          "enum": [
+            "package_json",
+            "plist_metadata",
+            "msix_manifest",
+            "version_file",
+            "fixture_declared",
+            "unavailable"
+          ]
+        }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "platform",
+        "arch",
+        "coarse_os_version",
+        "install_sources",
+        "path_aliases",
+        "operations",
+        "constraints",
+        "mutation_enabled",
+        "declared_support_level"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "platform": {
+          "type": "string",
+          "enum": ["macos", "windows", "linux", "wsl", "unknown"]
+        },
+        "arch": { "type": "string" },
+        "coarse_os_version": { "type": ["string", "null"] },
+        "install_sources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "desktop_bundled",
+              "path",
+              "package_manager",
+              "windows_msix",
+              "wsl",
+              "unknown"
+            ]
+          }
+        },
+        "path_aliases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["alias", "role", "registered"],
+            "properties": {
+              "alias": { "type": "string", "maxLength": 64 },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "install",
+                  "profile",
+                  "config",
+                  "log",
+                  "cache",
+                  "crash_metadata"
+                ]
+              },
+              "registered": { "const": true }
+            }
+          }
+        },
+        "operations": {
+          "type": "array",
+          "items": { "type": "string", "maxLength": 64 }
+        },
+        "constraints": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "broad_home_crawl",
+            "raw_path_export",
+            "execute_discovered_binaries",
+            "sudo_required",
+            "system_certificate_change",
+            "system_proxy_change",
+            "security_control_change",
+            "signed_app_mutation",
+            "openai_binary_mutation",
+            "active_profile_mutation"
+          ],
+          "properties": {
+            "broad_home_crawl": { "const": false },
+            "raw_path_export": { "const": false },
+            "execute_discovered_binaries": { "const": false },
+            "sudo_required": { "const": false },
+            "system_certificate_change": { "const": false },
+            "system_proxy_change": { "const": false },
+            "security_control_change": { "const": false },
+            "signed_app_mutation": { "const": false },
+            "openai_binary_mutation": { "const": false },
+            "active_profile_mutation": { "const": false }
+          }
+        },
+        "mutation_enabled": { "type": "boolean" },
+        "declared_support_level": {
+          "type": "string",
+          "enum": ["full", "preview", "limited", "read_only", "unsupported"]
+        }
+      }
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scenario_id",
+          "scenario_hash",
+          "status",
+          "outcome_summary",
+          "duration_ms",
+          "required"
+        ],
+        "properties": {
+          "scenario_id": { "type": "string", "maxLength": 128 },
+          "scenario_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "status": { "type": "string", "enum": ["pass", "fail", "skipped"] },
+          "outcome_summary": { "type": "string", "maxLength": 240 },
+          "duration_ms": { "type": "integer", "minimum": 0 },
+          "required": { "type": "boolean" }
+        }
+      }
+    },
+    "isolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active_codex_home_untouched",
+        "disposable_targets_only",
+        "no_sudo",
+        "no_protected_write",
+        "no_active_profile_mutation",
+        "isolation_digest"
+      ],
+      "properties": {
+        "active_codex_home_untouched": { "const": true },
+        "disposable_targets_only": { "const": true },
+        "no_sudo": { "const": true },
+        "no_protected_write": { "const": true },
+        "no_active_profile_mutation": { "const": true },
+        "isolation_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "started_at": { "type": "string", "minLength": 10, "maxLength": 64 },
+    "ended_at": { "type": "string", "minLength": 10, "maxLength": 64 },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "support_level": {
+      "type": "string",
+      "enum": ["full", "preview", "limited", "read_only", "unsupported"]
+    },
+    "uncovered_gaps": {
+      "type": "array",
+      "items": { "type": "string", "maxLength": 256 }
+    },
+    "assertions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "no_sudo",
+        "no_active_profile",
+        "no_protected_write",
+        "no_username",
+        "no_raw_temp_path"
+      ],
+      "properties": {
+        "no_sudo": { "const": true },
+        "no_active_profile": { "const": true },
+        "no_protected_write": { "const": true },
+        "no_username": { "const": true },
+        "no_raw_temp_path": { "const": true }
+      }
+    },
+    "network_used": { "const": false }
+  }
+}
