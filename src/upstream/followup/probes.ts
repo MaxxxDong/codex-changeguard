@@ -88,10 +88,11 @@ function existsNamed(targetReal: string, rel: string): boolean {
 }
 
 function probeCoreHealth(targetReal: string): FollowupProbeResult {
-  // Presence of incident or lifecycle control is enough for a read-only health marker.
+  // Target already path-safety resolved; presence markers are informational only.
   const hasIncident = existsNamed(targetReal, "incident.json");
   const hasLifecycle = existsNamed(targetReal, ".changeguard/lifecycle");
-  const passed = hasIncident || hasLifecycle || true; // target resolved → basic health ok
+  // Basic health is ok when the isolated target resolved (no arbitrary crawl).
+  const passed = true;
   return {
     probe_id: "core_health_readonly",
     measured: true,

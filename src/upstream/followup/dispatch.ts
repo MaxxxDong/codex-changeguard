@@ -11,6 +11,7 @@ import {
   unsubscribeIssue,
   validateCandidate,
 } from "./engine.js";
+import { parseCanonicalIssue, IssueUrlError } from "./issue-url.js";
 import type { FollowupOperation, FollowupResult } from "./types.js";
 
 const OPS = new Set<FollowupOperation>([
@@ -166,11 +167,12 @@ export function dispatchFollowup(args: FollowupDispatchArgs): FollowupResult {
         );
       }
       let issue_number: number;
-      if (typeof issue === "number") {
-        issue_number = issue;
-      } else {
-        const n = Number(String(issue).replace(/^.*\//, ""));
-        issue_number = Number.isInteger(n) ? n : 0;
+      try {
+        issue_number = parseCanonicalIssue(issue as string | number).issue_number;
+      } catch (e) {
+        const msg =
+          e instanceof IssueUrlError ? e.message : "Invalid issue for candidate validation.";
+        return failUsage(op, msg);
       }
       return validateCandidate({
         targetPath: target,

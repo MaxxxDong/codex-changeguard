@@ -1101,6 +1101,15 @@ export function supersedeRecipe(input: SupersedeInput): LifecycleResult {
         "Upstream fix must be verified before supersession.",
       );
     }
+    // Ticket 12: explicit measured_validation=false refuses supersession.
+    // Omitted remains T06-compatible; T12 always sets true after measured probes.
+    if (input.upstream.measured_validation === false) {
+      return fail(
+        op,
+        "UPSTREAM_NOT_VERIFIED",
+        "Supersession requires measured validation when measured_validation is provided.",
+      );
+    }
     if (
       typeof input.upstream.ref !== "string" ||
       input.upstream.ref.length === 0 ||

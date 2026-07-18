@@ -179,7 +179,9 @@ export function validateCandidateFix(
     };
   }
 
-  // Measured pass + official evidence digest → supersede temporary recipe.
+  // Measured pass + allowlisted official evidence digest → supersede temporary recipe.
+  // verified/measured_validation are set only after independent probe measurement above;
+  // caller-supplied verified=true alone never reaches this branch without measures.
   const sup = supersedeRecipe({
     targetPath: input.targetPath,
     recipe_id: input.recipe_id,

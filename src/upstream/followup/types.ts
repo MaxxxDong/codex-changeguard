@@ -266,6 +266,16 @@ export interface RefreshInput {
    * Production without snapshot → silent / no-new-evidence.
    */
   event?: unknown;
+  /**
+   * Disclosure decision for any injected transport. Default network is never used.
+   * Transport without `approved` is fail-closed.
+   */
+  disclosure_decision?: "approved" | "refused" | "not_requested";
+  /**
+   * Injected transport handle only (tests/orchestration). Production omits/null.
+   * Non-null without approved disclosure → REFUSED. Core never opens sockets.
+   */
+  transport?: unknown | null;
   nowMs?: number;
   stateDir?: string;
 }

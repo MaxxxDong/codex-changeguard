@@ -407,6 +407,21 @@ export function refreshFollowup(input: RefreshInput): FollowupResult {
     resolveTargetDirectory(input.targetPath);
     const nowMs = nowOf(input.nowMs);
     const root = stateRoot(input.stateDir);
+    // Disclosure gate: any injected transport requires approved disclosure.
+    // Production path injects null/omits transport → zero network.
+    if (input.transport != null && input.transport !== undefined) {
+      const decision = input.disclosure_decision ?? "not_requested";
+      if (decision !== "approved") {
+        return fail(
+          op,
+          "REFUSED",
+          "DISCLOSURE_REFUSED",
+          "Injected follow-up transport requires approved disclosure; no network.",
+        );
+      }
+      // Even with approval, this core phase never opens sockets — local event only.
+      // Adapter remains unavailable; network_used stays false.
+    }
     let ledger = loadFollowupLedger(root, nowMs);
     if (!input.event) {
       // Touch refresh timestamps for due subscriptions (local only).
@@ -620,16 +635,15 @@ export function processFollowupEvent(input: ProcessEventInput): FollowupResult {
       ? []
       : runRegisteredProbes(input.targetPath, probe_plan.runnable);
 
-    const capsule =
-      intentResult.instruction_like || probe_results.length > 0 || true
-        ? buildEvidenceCapsule({
-            issue_number: ref.issue_number,
-            canonical_url: ref.canonical_url,
-            intents: intentResult.intents,
-            probe_results,
-            quarantine: intentResult.quarantine,
-          })
-        : null;
+    // Always build a local capsule (privacy flags / quarantine) so Ticket 11
+    // confirmation can bind to a stable capsule_id; never auto-posts.
+    const capsule = buildEvidenceCapsule({
+      issue_number: ref.issue_number,
+      canonical_url: ref.canonical_url,
+      intents: intentResult.intents,
+      probe_results,
+      quarantine: intentResult.quarantine,
+    });
 
     const reply_draft = buildReplyDraft({
       capsule,

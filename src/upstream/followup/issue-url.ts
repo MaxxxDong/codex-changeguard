@@ -81,9 +81,11 @@ export function parseCanonicalIssue(input: string | number): CanonicalIssueRef {
   if (url.hostname.toLowerCase() !== OFFICIAL_HOST) {
     throw new IssueUrlError("UNAUTHORIZED_REPOSITORY", "Non-official host refused.");
   }
-  // Query strings are not part of the resource identity; refuse rather than strip silently
-  // when they look like tracking — but GitHub issue URLs with empty query are fine.
-  // Fragments are stripped (client-only); path must match exactly.
+  // Query strings are not part of the resource identity; refuse rather than strip.
+  // Fragments are client-only and ignored by URL.pathname; path must match exactly.
+  if (url.search !== "") {
+    throw new IssueUrlError("UNAUTHORIZED_ISSUE", "Issue URL query string refused.");
+  }
   const path = url.pathname.replace(/\/+$/, "") || "/";
   const m = path.match(CANONICAL_ISSUE_PATH_RE);
   if (!m) {
