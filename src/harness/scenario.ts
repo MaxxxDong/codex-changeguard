@@ -68,7 +68,10 @@ export function runCliDiagnose(target: string): {
 }
 
 /** Invoke Rescue CLI and parse JSON stdout (shared by diagnose + recovery). */
-export function runCliJson(args: string[]): {
+export function runCliJson(
+  args: string[],
+  opts?: { env?: NodeJS.ProcessEnv },
+): {
   exitCode: number;
   stdout: string;
   stderr: string;
@@ -76,7 +79,7 @@ export function runCliJson(args: string[]): {
 } {
   const res = spawnSync(process.execPath, [cliEntry(), ...args], {
     encoding: "utf8",
-    env: { ...process.env, NO_COLOR: "1" },
+    env: { ...process.env, NO_COLOR: "1", ...(opts?.env ?? {}) },
     maxBuffer: 4 * 1024 * 1024,
   });
   let result: Record<string, unknown> | null = null;

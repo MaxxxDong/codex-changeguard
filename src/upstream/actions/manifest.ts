@@ -227,6 +227,14 @@ function officialIssueUrl(url: string): string | null {
   return trimmed;
 }
 
+/** Confirm-time revalidation: only official openai/codex issue URLs. */
+export function isOfficialCanonicalTarget(url: string): boolean {
+  if (typeof url !== "string" || url.length === 0 || url.length > 512) {
+    return false;
+  }
+  return officialIssueUrl(url) !== null;
+}
+
 /**
  * Resolve canonical remote target for the action from the capsule.
  */

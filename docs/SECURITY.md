@@ -90,7 +90,7 @@ Upstream Submission Capsules are **preview artifacts**, not submissions.
 - `codex doctor --json` is orchestrator-supplied only; never collected by executing codex or shell. Inclusion manifest lists sanitized fields before any later Ticket 11 export.
 - Ticket 11 confirmation is mandatory before any external write; Ticket 10 never emits `SUBMITTED` / `POSTED`.
 - Ticket 11 never requests, stores, or displays access tokens, cookies, or session material. Auth capability is only `gh_authenticated` or `visible_browser_authenticated` (host-reported). Production seams inject no real adapter (`ADAPTER_UNAVAILABLE`); cancellation/auth-unavailable remain pure draft and never simulate success.
-- Ticket 11 action confirmations bind capsule integrity, privacy result, canonical target, body/attachment manifests, incident digest, evidence delta hash, and a one-shot nonce/expiry. Blocked/gate-failed Ticket 10 capsules cannot become actions. Attachments require secrets/paths redacted and session excluded.
+- Ticket 11 action confirmations bind capsule integrity, privacy result, canonical target, body/attachment manifests, incident digest, evidence delta hash, and a one-shot nonce/expiry. Tokens use install-local HMAC (key only in ChangeGuard confirmation state; never in token/log/receipt) and must be registered in the durable confirmation ledger by preview before confirm. Offline-forged or unregistered tokens are refused; confirm rechecks official target allowlist and body/attachment digests. Cancel/success/uncertain terminate the nonce. Blocked/gate-failed Ticket 10 capsules cannot become actions. Attachments require secrets/paths redacted and session excluded. The confirmation HMAC key is not a GitHub/API token.
 
 ## Probe safety
 

@@ -881,6 +881,14 @@ if (
 }
 
 // Ticket 11: packaged upstream-action-preview / confirm (no real adapter).
+// Shared confirmation ledger root so preview mint and confirm parse share HMAC+nonce state.
+const ticket11LedgerRoot = path.join(outside, "ticket11-confirmation-state");
+fs.mkdirSync(ticket11LedgerRoot, { recursive: true });
+const ticket11Env = {
+  ...process.env,
+  NO_COLOR: "1",
+  CHANGEGUARD_CONFIRMATION_STATE_DIR: ticket11LedgerRoot,
+};
 const capsulePath = path.join(outside, "ticket11-capsule.json");
 fs.writeFileSync(
   capsulePath,
@@ -899,7 +907,7 @@ const actionPreview = spawnSync(
   {
     cwd: outside,
     encoding: "utf8",
-    env: { ...process.env, NO_COLOR: "1" },
+    env: ticket11Env,
   },
 );
 if (actionPreview.status !== 0) {
@@ -939,7 +947,7 @@ const actionConfirm = spawnSync(
   {
     cwd: outside,
     encoding: "utf8",
-    env: { ...process.env, NO_COLOR: "1" },
+    env: ticket11Env,
   },
 );
 if (actionConfirm.status === 0) {

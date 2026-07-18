@@ -164,7 +164,10 @@ action (`create_issue`, `comment_with_delta`, `react_upvote`, `subscribe`,
 privacy, recommendation, content hash). Blocked/gate-failed capsules never become
 actions. Preview emits a one-shot confirmation (`ua1.…`) binding canonical target,
 body/attachment manifest, incident fingerprint digest, evidence delta hash,
-capsule content hash, privacy result, nonce, and expiry.
+capsule content hash, privacy result, nonce, and expiry. Tokens are HMAC-authenticated
+with an install-local key held only in ChangeGuard confirmation state (not a
+GitHub/API token; never in logs/receipts) and registered in a durable one-shot ledger
+before return.
 
 `changeguard upstream-action-confirm` / `changeguard_upstream_action_confirm` accepts
 `decision=confirm|cancel`. Cancel remains pure draft. Production injects no real
@@ -173,9 +176,10 @@ capsule content hash, privacy result, nonce, and expiry.
 adapter that reports only `gh_authenticated` or `visible_browser_authenticated`
 (never request/store/display tokens, cookies, or sessions). Idempotency keys prevent
 duplicate same-diagnosis actions; ambiguous timeout queries remote by the same key
-and stops with `UNCERTAIN_NO_RETRY` rather than blind retry. Success yields a minimal
-Upstream Contribution Receipt (action, canonical URL, timestamp, receipt/idempotency
-hashes only).
+and stops with `UNCERTAIN_NO_RETRY` (ledger `terminal_uncertain`) rather than blind
+retry. Cancel/success/uncertain permanently terminate the nonce. Success yields a
+minimal Upstream Contribution Receipt (action, canonical URL, timestamp,
+receipt/idempotency hashes only).
 
 ## Plugin surfaces
 

@@ -108,8 +108,14 @@ export interface ActionConfirmationBinding {
   nonce: string;
   expires_at: string;
   idempotency_key: string;
-  /** Integrity digest of the binding fields (excluding this field). */
+  /** Integrity digest of the binding fields (excluding this field and mac). */
   binding_sha256: string;
+  /**
+   * Install-local HMAC-SHA256 hex over binding material.
+   * Requires per-install key held only in ChangeGuard confirmation state;
+   * key never appears in token fields other than this mac, logs, or receipts.
+   */
+  mac: string;
 }
 
 /**

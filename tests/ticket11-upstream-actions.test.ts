@@ -3,7 +3,8 @@
  * Controlled remote double only; production path injects no real adapter.
  * Covers success, each action preview, cancel, auth failure, invalid/expired/
  * replayed confirmation, timeout found/not-found/uncertain, duplicate existing,
- * attachment privacy, Ticket10 blocked capsule, CLI/MCP equivalence, and
+ * attachment privacy, Ticket10 blocked capsule, CLI/MCP equivalence,
+ * durable confirmation ledger / HMAC, cross-process replay, and
  * no target mutation / leak / network in the default path.
  */
 import assert from "node:assert/strict";
@@ -16,13 +17,22 @@ import {
 import {
   _resetConsumedNoncesForTests,
   confirmUpstreamAction,
+  computeBindingSha256,
+  computeConfirmationMac,
+  CONFIRMATION_LEDGER_CAPACITY,
+  CONFIRMATION_LEDGER_KEY_FILE,
+  CONFIRMATION_LEDGER_STATE_FILE,
+  CONFIRMATION_TOKEN_PREFIX,
   createFakeRemoteAdapter,
   createUnavailableAdapter,
   gateCapsuleForActions,
+  instrumentActionAdapter,
+  mintConfirmation,
+  openConfirmationLedger,
   parseConfirmationToken,
   previewUpstreamAction,
-  CONFIRMATION_TOKEN_PREFIX,
 } from "../src/upstream/actions/index.js";
+import { sha256Canonical } from "../src/evidence/canonical.js";
 import type { UpstreamSubmissionCapsule as Capsule } from "../src/upstream/types.js";
 import {
   copyFixtureToTemp,
@@ -38,6 +48,10 @@ const ACTIONS_FIX = path.join(FIXTURE_DIR, "actions");
 const PROTECTED = "fixtures/protected-process";
 const NOW_FRESH = Date.parse("2026-07-18T12:00:00.000Z");
 const NOW_ISO = "2026-07-18T12:00:00.000Z";
+
+/** Shared durable ledger root for in-process + CLI child inheritance. */
+const LEDGER_ROOT = makeTempDir("cg-t11-ledger-");
+process.env.CHANGEGUARD_CONFIRMATION_STATE_DIR = LEDGER_ROOT;
 
 function loadRequest(name: string): unknown {
   return JSON.parse(
@@ -72,8 +86,8 @@ function assertNoSecrets(text: string): void {
   assert.doesNotMatch(text, /Bearer\s+[A-Za-z0-9._-]+/);
 }
 
-test("before each suite: reset nonces", () => {
-  _resetConsumedNoncesForTests();
+test("before each suite: reset durable confirmation ledger", () => {
+  _resetConsumedNoncesForTests(LEDGER_ROOT);
 });
 
 // --- Capsule gate ---
@@ -700,7 +714,7 @@ test("CLI/MCP: action preview equivalence and no network by default", async () =
 });
 
 test("binding: confirmation binds capsule hash + privacy + nonce", () => {
-  _resetConsumedNoncesForTests();
+  _resetConsumedNoncesForTests(LEDGER_ROOT);
   const target = copyFixtureToTemp(PROTECTED, makeTempDir("cg-t11-bind-"));
   const capsule = makeCapsule("request-new-incident-cli.json", target);
   const preview = previewUpstreamAction({
@@ -710,14 +724,673 @@ test("binding: confirmation binds capsule hash + privacy + nonce", () => {
     adapter: null,
     nowMs: NOW_FRESH,
     nonce: "ef".repeat(16),
+    ledgerRoot: LEDGER_ROOT,
   });
   const binding = parseConfirmationToken(
     preview.confirmation_token!,
     NOW_FRESH,
+    { ledgerRoot: LEDGER_ROOT },
   );
   assert.equal(binding.capsule_content_sha256, capsule.capsule_content_sha256);
   assert.equal(binding.privacy.passed, true);
   assert.equal(binding.action, "create_issue");
   assert.ok(binding.binding_sha256);
+  assert.ok(binding.mac);
   assert.ok(binding.idempotency_key.startsWith("idk_"));
+});
+
+// --- P1: durable ledger, HMAC, terminal uncertain, revalidation ---
+
+test("confirm: timeout not_found marks terminal; second call never re-executes", () => {
+  _resetConsumedNoncesForTests(LEDGER_ROOT);
+  const target = copyFixtureToTemp(PROTECTED, makeTempDir("cg-t11-tnf2-"));
+  const capsule = makeCapsule("request-new-incident-cli.json", target);
+  const fake = createFakeRemoteAdapter({
+    mode: "timeout_not_found",
+    nowIso: NOW_ISO,
+  });
+  const instrumented = instrumentActionAdapter(fake);
+  const preview = previewUpstreamAction({
+    targetPath: target,
+    capsule,
+    action: "create_issue",
+    adapter: instrumented,
+    nowMs: NOW_FRESH,
+    nonce: "aa".repeat(16),
+    ledgerRoot: LEDGER_ROOT,
+  });
+  const first = confirmUpstreamAction({
+    targetPath: target,
+    confirmation_token: preview.confirmation_token!,
+    decision: "confirm",
+    adapter: instrumented,
+    nowMs: NOW_FRESH,
+    ledgerRoot: LEDGER_ROOT,
+  });
+  assert.equal(first.status, "UNCERTAIN_NO_RETRY");
+  assert.equal(instrumented.executeCalls, 1);
+  const second = confirmUpstreamAction({
+    targetPath: target,
+    confirmation_token: preview.confirmation_token!,
+    decision: "confirm",
+    adapter: instrumented,
+    nowMs: NOW_FRESH,
+    ledgerRoot: LEDGER_ROOT,
+  });
+  assert.equal(second.status, "REPLAYED_CONFIRMATION");
+  assert.equal(second.external_write, false);
+  assert.equal(instrumented.executeCalls, 1);
+});
+
+test("confirm: timeout uncertain marks terminal; executeCalls stays 1 across calls", () => {
+  _resetConsumedNoncesForTests(LEDGER_ROOT);
+  const target = copyFixtureToTemp(PROTECTED, makeTempDir("cg-t11-tu2-"));
+  const capsule = makeCapsule("request-new-incident-cli.json", target);
+  const fake = createFakeRemoteAdapter({
+    mode: "timeout_uncertain",
+    nowIso: NOW_ISO,
+  });
+  const instrumented = instrumentActionAdapter(fake);
+  const preview = previewUpstreamAction({
+    targetPath: target,
+    capsule,
+    action: "create_issue",
+    adapter: instrumented,
+    nowMs: NOW_FRESH,
+    nonce: "bb".repeat(16),
+    ledgerRoot: LEDGER_ROOT,
+  });
+  const first = confirmUpstreamAction({
+    targetPath: target,
+    confirmation_token: preview.confirmation_token!,
+    decision: "confirm",
+    adapter: instrumented,
+    nowMs: NOW_FRESH,
+    ledgerRoot: LEDGER_ROOT,
+  });
+  assert.equal(first.status, "UNCERTAIN_NO_RETRY");
+  assert.equal(instrumented.executeCalls, 1);
+  const second = confirmUpstreamAction({
+    targetPath: target,
+    confirmation_token: preview.confirmation_token!,
+    decision: "confirm",
+    adapter: instrumented,
+    nowMs: NOW_FRESH,
+    ledgerRoot: LEDGER_ROOT,
+  });
+  assert.equal(second.status, "REPLAYED_CONFIRMATION");
+  assert.equal(instrumented.executeCalls, 1);
+});
+
+test("confirm: timeout query throw marks terminal_uncertain; no second execute", () => {
+  _resetConsumedNoncesForTests(LEDGER_ROOT);
+  const target = copyFixtureToTemp(PROTECTED, makeTempDir("cg-t11-tq-"));
+  const capsule = makeCapsule("request-new-incident-cli.json", target);
+  const base = createFakeRemoteAdapter({
+    mode: "timeout_not_found",
+    nowIso: NOW_ISO,
+  });
+  let executeCalls = 0;
+  const adapter = {
+    getAuthCapability: () => base.getAuthCapability(),
+    execute: (req: Parameters<typeof base.execute>[0]) => {
+      executeCalls += 1;
+      return base.execute(req);
+    },
+    queryByIdempotencyKey: () => {
+      throw new Error("query boom");
+    },
+  };
+  const preview = previewUpstreamAction({
+    targetPath: target,
+    capsule,
+    action: "create_issue",
+    adapter,
+    nowMs: NOW_FRESH,
+    nonce: "cc".repeat(16),
+    ledgerRoot: LEDGER_ROOT,
+  });
+  const first = confirmUpstreamAction({
+    targetPath: target,
+    confirmation_token: preview.confirmation_token!,
+    decision: "confirm",
+    adapter,
+    nowMs: NOW_FRESH,
+    ledgerRoot: LEDGER_ROOT,
+  });
+  assert.equal(first.status, "UNCERTAIN_NO_RETRY");
+  assert.equal(executeCalls, 1);
+  const second = confirmUpstreamAction({
+    targetPath: target,
+    confirmation_token: preview.confirmation_token!,
+    decision: "confirm",
+    adapter,
+    nowMs: NOW_FRESH,
+    ledgerRoot: LEDGER_ROOT,
+  });
+  assert.equal(second.status, "REPLAYED_CONFIRMATION");
+  assert.equal(executeCalls, 1);
+});
+
+test("ledger: cross-process CLI preview+cancel shares durable ledger", () => {
+  _resetConsumedNoncesForTests(LEDGER_ROOT);
+  const target = copyFixtureToTemp(PROTECTED, makeTempDir("cg-t11-xpc-"));
+  const capsule = makeCapsule("request-new-incident-cli.json", target);
+  const tmp = makeTempDir("cg-t11-xpcfiles-");
+  const capsulePath = writeJson(tmp, "capsule.json", capsule);
+  const env = {
+    ...process.env,
+    NO_COLOR: "1",
+    CHANGEGUARD_CONFIRMATION_STATE_DIR: LEDGER_ROOT,
+  };
+  const preview = runCliJson(
+    [
+      "upstream-action-preview",
+      target,
+      `--capsule=${capsulePath}`,
+      "--action=create_issue",
+    ],
+    { env },
+  );
+  assert.equal(preview.exitCode, 0);
+  assert.equal(preview.result!.status, "PREVIEW_READY");
+  const token = preview.result!.confirmation_token as string;
+  const cancel = runCliJson(
+    [
+      "upstream-action-confirm",
+      target,
+      `--confirmation=${token}`,
+      "--decision=cancel",
+    ],
+    { env },
+  );
+  assert.equal(cancel.exitCode, 0);
+  assert.equal(cancel.result!.status, "CANCELLED");
+  const replay = runCliJson(
+    [
+      "upstream-action-confirm",
+      target,
+      `--confirmation=${token}`,
+      "--decision=confirm",
+    ],
+    { env },
+  );
+  assert.notEqual(replay.exitCode, 0);
+  assert.equal(replay.result!.status, "REPLAYED_CONFIRMATION");
+  assert.equal(replay.result!.external_write, false);
+});
+
+test("ledger: offline forged token without preview registration is refused", () => {
+  _resetConsumedNoncesForTests(LEDGER_ROOT);
+  const target = copyFixtureToTemp(PROTECTED, makeTempDir("cg-t11-forge-"));
+  // Craft a binding-looking payload with only public digests (no install HMAC key).
+  const partial = {
+    schema_version: 1 as const,
+    confirmation_id: "uac_" + "a".repeat(24),
+    action: "create_issue" as const,
+    canonical_target: "https://github.com/openai/codex/issues",
+    body_manifest: {
+      title: "x",
+      body: "y",
+      reaction: null,
+      content_sha256: "b".repeat(64),
+    },
+    attachment_manifest: null,
+    incident_fingerprint_digest: "c".repeat(64),
+    evidence_delta_hash: null,
+    capsule_content_sha256: "d".repeat(64),
+    capsule_id: "forge-capsule",
+    privacy: {
+      passed: true,
+      secrets_redacted: true,
+      paths_redacted: true,
+      session_excluded: true,
+      injection_quarantined: false,
+    },
+    nonce: "dd".repeat(16),
+    expires_at: new Date(NOW_FRESH + 60_000).toISOString(),
+    idempotency_key: "idk_" + "e".repeat(64),
+  };
+  const binding_sha256 = computeBindingSha256(partial);
+  const forged = {
+    ...partial,
+    binding_sha256,
+    mac: "f".repeat(64),
+  };
+  const token =
+    CONFIRMATION_TOKEN_PREFIX +
+    Buffer.from(JSON.stringify(forged), "utf8").toString("base64url");
+  const confirm = confirmUpstreamAction({
+    targetPath: target,
+    confirmation_token: token,
+    decision: "confirm",
+    adapter: createFakeRemoteAdapter({ mode: "success", nowIso: NOW_ISO }),
+    nowMs: NOW_FRESH,
+    ledgerRoot: LEDGER_ROOT,
+  });
+  assert.equal(confirm.ok, false);
+  assert.notEqual(confirm.status, "EXECUTED");
+  assert.equal(confirm.external_write, false);
+  assert.ok(
+    confirm.status === "INVALID_CONFIRMATION" ||
+      confirm.error_code === "UNREGISTERED_CONFIRMATION" ||
+      confirm.error_code === "INVALID_CONFIRMATION" ||
+      confirm.error_code === "MALFORMED_CONFIRMATION",
+  );
+});
+
+test("confirm: non-official canonical_target refused at confirm revalidation", () => {
+  _resetConsumedNoncesForTests(LEDGER_ROOT);
+  const target = copyFixtureToTemp(PROTECTED, makeTempDir("cg-t11-nonoff-"));
+  const capsule = makeCapsule("request-new-incident-cli.json", target);
+  const ledger = openConfirmationLedger(LEDGER_ROOT);
+  const preview = previewUpstreamAction({
+    targetPath: target,
+    capsule,
+    action: "create_issue",
+    adapter: null,
+    nowMs: NOW_FRESH,
+    nonce: "ee".repeat(16),
+    ledger,
+  });
+  assert.equal(preview.ok, true);
+  const raw = JSON.parse(
+    Buffer.from(
+      preview.confirmation_token!.slice(CONFIRMATION_TOKEN_PREFIX.length),
+      "base64url",
+    ).toString("utf8"),
+  ) as Record<string, unknown>;
+  // Build a new binding with non-official target + fresh nonce so we can register it.
+  const nonce = "11".repeat(16);
+  const partial = {
+    schema_version: 1 as const,
+    confirmation_id: "uac_" + "1".repeat(24),
+    action: "create_issue" as const,
+    canonical_target: "https://evil.example/openai/codex/issues",
+    body_manifest: raw.body_manifest as {
+      title: string | null;
+      body: string | null;
+      reaction: string | null;
+      content_sha256: string;
+    },
+    attachment_manifest: null,
+    incident_fingerprint_digest: raw.incident_fingerprint_digest as string,
+    evidence_delta_hash: raw.evidence_delta_hash as string | null,
+    capsule_content_sha256: raw.capsule_content_sha256 as string,
+    capsule_id: raw.capsule_id as string,
+    privacy: raw.privacy as {
+      passed: true;
+      secrets_redacted: true;
+      paths_redacted: true;
+      session_excluded: true;
+      injection_quarantined: false;
+    },
+    nonce,
+    expires_at: raw.expires_at as string,
+    idempotency_key: raw.idempotency_key as string,
+  };
+  const binding_sha256 = computeBindingSha256(partial);
+  const key = ledger.loadOrCreateHmacKey();
+  const mac = computeConfirmationMac(key, { ...partial, binding_sha256 });
+  ledger.register(
+    {
+      nonce,
+      confirmation_id: partial.confirmation_id,
+      binding_sha256,
+      expires_at: partial.expires_at,
+      registered_at_ms: NOW_FRESH,
+      action: partial.action,
+      canonical_target: partial.canonical_target,
+      idempotency_key: partial.idempotency_key,
+    },
+    NOW_FRESH,
+  );
+  const token =
+    CONFIRMATION_TOKEN_PREFIX +
+    Buffer.from(
+      JSON.stringify({ ...partial, binding_sha256, mac }),
+      "utf8",
+    ).toString("base64url");
+  const confirm = confirmUpstreamAction({
+    targetPath: target,
+    confirmation_token: token,
+    decision: "confirm",
+    adapter: createFakeRemoteAdapter({ mode: "success", nowIso: NOW_ISO }),
+    nowMs: NOW_FRESH,
+    ledger,
+  });
+  assert.equal(confirm.ok, false);
+  assert.equal(confirm.external_write, false);
+  assert.notEqual(confirm.status, "EXECUTED");
+  assert.equal(confirm.status, "INVALID_CONFIRMATION");
+});
+
+test("confirm: tampered body content_sha256 refused", () => {
+  _resetConsumedNoncesForTests(LEDGER_ROOT);
+  const target = copyFixtureToTemp(PROTECTED, makeTempDir("cg-t11-tbody-"));
+  const capsule = makeCapsule("request-new-incident-cli.json", target);
+  const ledger = openConfirmationLedger(LEDGER_ROOT);
+  const preview = previewUpstreamAction({
+    targetPath: target,
+    capsule,
+    action: "create_issue",
+    adapter: createFakeRemoteAdapter({ mode: "success", nowIso: NOW_ISO }),
+    nowMs: NOW_FRESH,
+    nonce: "22".repeat(16),
+    ledger,
+  });
+  assert.equal(preview.ok, true);
+  const raw = JSON.parse(
+    Buffer.from(
+      preview.confirmation_token!.slice(CONFIRMATION_TOKEN_PREFIX.length),
+      "base64url",
+    ).toString("utf8"),
+  ) as Record<string, unknown>;
+  const body = {
+    ...(raw.body_manifest as Record<string, unknown>),
+    body: "TAMPERED BODY TEXT",
+    // Leave stale content_sha256 so revalidation fails.
+  };
+  const partial = {
+    schema_version: 1 as const,
+    confirmation_id: raw.confirmation_id as string,
+    action: "create_issue" as const,
+    canonical_target: raw.canonical_target as string,
+    body_manifest: body as {
+      title: string | null;
+      body: string | null;
+      reaction: string | null;
+      content_sha256: string;
+    },
+    attachment_manifest: null,
+    incident_fingerprint_digest: raw.incident_fingerprint_digest as string,
+    evidence_delta_hash: raw.evidence_delta_hash as string | null,
+    capsule_content_sha256: raw.capsule_content_sha256 as string,
+    capsule_id: raw.capsule_id as string,
+    privacy: raw.privacy as {
+      passed: true;
+      secrets_redacted: true;
+      paths_redacted: true;
+      session_excluded: true;
+      injection_quarantined: false;
+    },
+    nonce: raw.nonce as string,
+    expires_at: raw.expires_at as string,
+    idempotency_key: raw.idempotency_key as string,
+  };
+  const binding_sha256 = computeBindingSha256(partial);
+  const key = ledger.loadOrCreateHmacKey();
+  const mac = computeConfirmationMac(key, { ...partial, binding_sha256 });
+  // Update ledger binding hash so HMAC+registration pass; body digest must still fail.
+  const docPath = path.join(LEDGER_ROOT, CONFIRMATION_LEDGER_STATE_FILE);
+  const doc = JSON.parse(fs.readFileSync(docPath, "utf8")) as {
+    entries: Array<Record<string, unknown>>;
+  };
+  const ent = doc.entries.find((e) => e.nonce === partial.nonce);
+  assert.ok(ent);
+  ent!.binding_sha256 = binding_sha256;
+  fs.writeFileSync(docPath, JSON.stringify(doc, null, 2) + "\n", "utf8");
+  const token =
+    CONFIRMATION_TOKEN_PREFIX +
+    Buffer.from(
+      JSON.stringify({ ...partial, binding_sha256, mac }),
+      "utf8",
+    ).toString("base64url");
+  const confirm = confirmUpstreamAction({
+    targetPath: target,
+    confirmation_token: token,
+    decision: "confirm",
+    adapter: createFakeRemoteAdapter({ mode: "success", nowIso: NOW_ISO }),
+    nowMs: NOW_FRESH,
+    ledger,
+  });
+  assert.equal(confirm.ok, false);
+  assert.equal(confirm.external_write, false);
+  assert.notEqual(confirm.status, "EXECUTED");
+});
+
+test("confirm: tampered attachment manifest refused", () => {
+  _resetConsumedNoncesForTests(LEDGER_ROOT);
+  const target = copyFixtureToTemp(PROTECTED, makeTempDir("cg-t11-tatt-"));
+  const capsule = makeCapsule("request-new-incident-cli.json", target);
+  const ledger = openConfirmationLedger(LEDGER_ROOT);
+  const manifest = JSON.parse(
+    fs.readFileSync(
+      path.join(ACTIONS_FIX, "attachment-manifest-clean.json"),
+      "utf8",
+    ),
+  );
+  const preview = previewUpstreamAction({
+    targetPath: target,
+    capsule,
+    action: "attachment_upload",
+    attachment_manifest: manifest,
+    adapter: createFakeRemoteAdapter({ mode: "success", nowIso: NOW_ISO }),
+    nowMs: NOW_FRESH,
+    nonce: "33".repeat(16),
+    ledger,
+  });
+  assert.equal(preview.ok, true);
+  const raw = JSON.parse(
+    Buffer.from(
+      preview.confirmation_token!.slice(CONFIRMATION_TOKEN_PREFIX.length),
+      "base64url",
+    ).toString("utf8"),
+  ) as Record<string, unknown>;
+  const att = raw.attachment_manifest as {
+    schema_version: 1;
+    entries: Array<Record<string, unknown>>;
+    manifest_sha256: string;
+  };
+  // Tamper entry name while leaving manifest_sha256 stale.
+  att.entries = att.entries.map((e) => ({ ...e, name: "tampered.txt" }));
+  const partial = {
+    schema_version: 1 as const,
+    confirmation_id: raw.confirmation_id as string,
+    action: "attachment_upload" as const,
+    canonical_target: raw.canonical_target as string,
+    body_manifest: raw.body_manifest as {
+      title: string | null;
+      body: string | null;
+      reaction: string | null;
+      content_sha256: string;
+    },
+    attachment_manifest: att as never,
+    incident_fingerprint_digest: raw.incident_fingerprint_digest as string,
+    evidence_delta_hash: raw.evidence_delta_hash as string | null,
+    capsule_content_sha256: raw.capsule_content_sha256 as string,
+    capsule_id: raw.capsule_id as string,
+    privacy: raw.privacy as {
+      passed: true;
+      secrets_redacted: true;
+      paths_redacted: true;
+      session_excluded: true;
+      injection_quarantined: false;
+    },
+    nonce: raw.nonce as string,
+    expires_at: raw.expires_at as string,
+    idempotency_key: raw.idempotency_key as string,
+  };
+  const binding_sha256 = computeBindingSha256(partial);
+  const key = ledger.loadOrCreateHmacKey();
+  const mac = computeConfirmationMac(key, { ...partial, binding_sha256 });
+  const docPath = path.join(LEDGER_ROOT, CONFIRMATION_LEDGER_STATE_FILE);
+  const doc = JSON.parse(fs.readFileSync(docPath, "utf8")) as {
+    entries: Array<Record<string, unknown>>;
+  };
+  const ent = doc.entries.find((e) => e.nonce === partial.nonce);
+  assert.ok(ent);
+  ent!.binding_sha256 = binding_sha256;
+  fs.writeFileSync(docPath, JSON.stringify(doc, null, 2) + "\n", "utf8");
+  const token =
+    CONFIRMATION_TOKEN_PREFIX +
+    Buffer.from(
+      JSON.stringify({ ...partial, binding_sha256, mac }),
+      "utf8",
+    ).toString("base64url");
+  const confirm = confirmUpstreamAction({
+    targetPath: target,
+    confirmation_token: token,
+    decision: "confirm",
+    adapter: createFakeRemoteAdapter({ mode: "success", nowIso: NOW_ISO }),
+    nowMs: NOW_FRESH,
+    ledger,
+  });
+  assert.equal(confirm.ok, false);
+  assert.equal(confirm.external_write, false);
+  assert.notEqual(confirm.status, "EXECUTED");
+});
+
+test("ledger: symlink key file refused", () => {
+  const root = makeTempDir("cg-t11-sym-");
+  fs.mkdirSync(root, { recursive: true });
+  const outside = path.join(makeTempDir("cg-t11-sym-out-"), "key");
+  fs.writeFileSync(outside, "ab".repeat(32), "utf8");
+  fs.symlinkSync(outside, path.join(root, CONFIRMATION_LEDGER_KEY_FILE));
+  const ledger = openConfirmationLedger(root);
+  assert.throws(() => ledger.loadOrCreateHmacKey(), /Symlink|refused/i);
+});
+
+test("ledger: oversize state file refused", () => {
+  const root = makeTempDir("cg-t11-over-");
+  fs.mkdirSync(root, { recursive: true });
+  // Create a huge ledger file (> CONFIRMATION_LEDGER_MAX_BYTES is 512KiB).
+  const huge = path.join(root, CONFIRMATION_LEDGER_STATE_FILE);
+  fs.writeFileSync(huge, "x".repeat(600 * 1024), "utf8");
+  const ledger = openConfirmationLedger(root);
+  assert.throws(() => ledger.getEntry("aa".repeat(16), NOW_FRESH), /size|refused|SIZE/i);
+});
+
+test("ledger: TTL expiry drops registered nonce (parse EXPIRED or unregistered)", () => {
+  _resetConsumedNoncesForTests(LEDGER_ROOT);
+  const target = copyFixtureToTemp(PROTECTED, makeTempDir("cg-t11-ttl-"));
+  const capsule = makeCapsule("request-new-incident-cli.json", target);
+  const preview = previewUpstreamAction({
+    targetPath: target,
+    capsule,
+    action: "create_issue",
+    adapter: null,
+    nowMs: NOW_FRESH,
+    nonce: "44".repeat(16),
+    ledgerRoot: LEDGER_ROOT,
+  });
+  assert.equal(preview.ok, true);
+  const later = NOW_FRESH + 16 * 60 * 1000;
+  const confirm = confirmUpstreamAction({
+    targetPath: target,
+    confirmation_token: preview.confirmation_token!,
+    decision: "confirm",
+    adapter: createFakeRemoteAdapter({ mode: "success", nowIso: NOW_ISO }),
+    nowMs: later,
+    ledgerRoot: LEDGER_ROOT,
+  });
+  assert.equal(confirm.status, "EXPIRED_CONFIRMATION");
+  assert.equal(confirm.external_write, false);
+});
+
+test("ledger: capacity bound refuses excess registered nonces", () => {
+  const root = makeTempDir("cg-t11-cap-");
+  const ledger = openConfirmationLedger(root);
+  const expires_at = new Date(NOW_FRESH + 60_000).toISOString();
+  for (let i = 0; i < CONFIRMATION_LEDGER_CAPACITY; i++) {
+    const nonce = i.toString(16).padStart(32, "0");
+    ledger.register(
+      {
+        nonce,
+        confirmation_id: `uac_${i.toString(16).padStart(24, "0")}`,
+        binding_sha256: "a".repeat(64),
+        expires_at,
+        registered_at_ms: NOW_FRESH + i,
+        action: "create_issue",
+        canonical_target: "https://github.com/openai/codex/issues",
+        idempotency_key: `idk_${i.toString(16).padStart(64, "0")}`,
+      },
+      NOW_FRESH + i,
+    );
+  }
+  assert.throws(
+    () =>
+      ledger.register(
+        {
+          nonce: "f".repeat(32),
+          confirmation_id: "uac_" + "f".repeat(24),
+          binding_sha256: "b".repeat(64),
+          expires_at,
+          registered_at_ms: NOW_FRESH + 9999,
+          action: "create_issue",
+          canonical_target: "https://github.com/openai/codex/issues",
+          idempotency_key: "idk_" + "b".repeat(64),
+        },
+        NOW_FRESH + 9999,
+      ),
+    /capacity/i,
+  );
+});
+
+test("mint without ledger context is not a public write bypass", () => {
+  _resetConsumedNoncesForTests(LEDGER_ROOT);
+  assert.throws(
+    () =>
+      mintConfirmation({
+        action: "create_issue",
+        canonical_target: "https://github.com/openai/codex/issues",
+        body_manifest: {
+          title: "t",
+          body: "b",
+          reaction: null,
+          content_sha256: sha256Canonical({
+            title: "t",
+            body: "b",
+            reaction: null,
+            action: "create_issue",
+          }),
+        },
+        attachment_manifest: null,
+        incident_fingerprint_digest: "a".repeat(64),
+        evidence_delta_hash: null,
+        capsule_content_sha256: "b".repeat(64),
+        capsule_id: "x",
+        privacy: {
+          passed: true,
+          secrets_redacted: true,
+          paths_redacted: true,
+          session_excluded: true,
+          injection_quarantined: false,
+        },
+        idempotency_key: "idk_" + "c".repeat(64),
+        ledger: null as never,
+      }),
+    /ledger/i,
+  );
+});
+
+test("hmac key never appears in token, receipt, or confirm result", () => {
+  _resetConsumedNoncesForTests(LEDGER_ROOT);
+  const target = copyFixtureToTemp(PROTECTED, makeTempDir("cg-t11-keyhide-"));
+  const capsule = makeCapsule("request-new-incident-cli.json", target);
+  const ledger = openConfirmationLedger(LEDGER_ROOT);
+  const fake = createFakeRemoteAdapter({ mode: "success", nowIso: NOW_ISO });
+  const preview = previewUpstreamAction({
+    targetPath: target,
+    capsule,
+    action: "create_issue",
+    adapter: fake,
+    nowMs: NOW_FRESH,
+    nonce: "55".repeat(16),
+    ledger,
+  });
+  const keyHex = ledger.loadOrCreateHmacKey().toString("hex");
+  assert.equal(preview.confirmation_token!.includes(keyHex), false);
+  assert.equal(JSON.stringify(preview).includes(keyHex), false);
+  const confirm = confirmUpstreamAction({
+    targetPath: target,
+    confirmation_token: preview.confirmation_token!,
+    decision: "confirm",
+    adapter: fake,
+    nowMs: NOW_FRESH,
+    ledger,
+  });
+  assert.equal(confirm.status, "EXECUTED");
+  assert.equal(JSON.stringify(confirm).includes(keyHex), false);
+  assert.equal(JSON.stringify(confirm.receipt).includes(keyHex), false);
 });

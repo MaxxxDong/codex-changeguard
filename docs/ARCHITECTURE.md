@@ -538,7 +538,15 @@ Only Ticket 10 capsules that pass all of the following may become actions:
 
 Each confirmation binds: exact canonical target, action, body/attachment manifest,
 incident fingerprint digest, evidence delta hash, `capsule_content_sha256`, privacy
-result, one-shot nonce, and expiry (`ua1.…` token; not an access token).
+result, one-shot nonce, and expiry (`ua1.…` token; not an access token). Tokens are
+authenticated with an install-local HMAC key stored only under ChangeGuard-owned
+confirmation state (`CHANGEGUARD_CONFIRMATION_STATE_DIR` / `PLUGIN_DATA` /
+XDG state); the key never enters the token, logs, or receipts. Mint registers the
+nonce in a durable, bounded, symlink-safe confirmation ledger before return;
+confirm revalidates official canonical target allowlist, recomputes
+idempotency/body/attachment digests, and refuses unregistered or offline-forged
+tokens. Cancel, success, and `UNCERTAIN_NO_RETRY` permanently terminate the nonce
+(`consumed` / `terminal_uncertain`) so the same token cannot re-`adapter.execute`.
 
 ### Auth capability and adapter
 
@@ -554,7 +562,9 @@ action + body/attachment content hashes. Exact same diagnosis/action/content can
 execute twice (`DUPLICATE_EXISTING` returns the existing receipt).
 
 Ambiguous timeout: query remote with the same idempotency key. Found → return existing
-receipt. Not found / uncertain → `UNCERTAIN_NO_RETRY` (never blind retry).
+receipt. Not found / uncertain / query throw → `UNCERTAIN_NO_RETRY` (never blind retry)
+and mark the confirmation `terminal_uncertain` in the durable ledger so a later call
+returns `REPLAYED_CONFIRMATION` without a second execute.
 
 ### Upstream Contribution Receipt
 

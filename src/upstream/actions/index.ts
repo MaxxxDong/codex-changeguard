@@ -28,6 +28,9 @@ export type {
 export {
   CONFIRMATION_TOKEN_PREFIX,
   CONFIRMATION_TTL_MS,
+  CONFIRMATION_LEDGER_CAPACITY,
+  CONFIRMATION_LEDGER_KEY_FILE,
+  CONFIRMATION_LEDGER_STATE_FILE,
   FORBIDDEN_ACTION_KEYS,
   MAX_ACTION_REQUEST_BYTES,
   MAX_ATTACHMENTS,
@@ -64,16 +67,33 @@ export {
   mintConfirmation,
   parseConfirmationToken,
   consumeConfirmationNonce,
+  markConfirmationTerminalUncertain,
   computeBindingSha256,
+  computeConfirmationMac,
+  revalidateConfirmationBinding,
   ConfirmationError,
+  openConfirmationLedger,
   _resetConsumedNoncesForTests,
+  _resetConfirmationLedgerForTests,
 } from "./confirmation.js";
-export type { ConfirmationErrorCode } from "./confirmation.js";
+export type {
+  ConfirmationErrorCode,
+  MintConfirmationInput,
+  ParseConfirmationOptions,
+} from "./confirmation.js";
+export { ConfirmationLedger } from "./confirmation.js";
+
+export {
+  resolveConfirmationStateRoot,
+  LedgerError,
+} from "./ledger.js";
+export type { LedgerEntry, LedgerEntryStatus, LedgerErrorCode } from "./ledger.js";
 
 export {
   buildBodyManifest,
   parseAttachmentManifest,
   resolveCanonicalTarget,
+  isOfficialCanonicalTarget,
   ManifestError,
 } from "./manifest.js";
 

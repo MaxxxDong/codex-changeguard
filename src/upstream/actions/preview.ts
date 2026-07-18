@@ -3,7 +3,11 @@ import { assertNoLeakPaths, redactText } from "../../core/redact.js";
 import { sha256Canonical } from "../../evidence/canonical.js";
 import { createUnavailableAdapter } from "./adapter.js";
 import { gateCapsuleForActions, isActionAllowed } from "./capsule-gate.js";
-import { mintConfirmation } from "./confirmation.js";
+import {
+  mintConfirmation,
+  openConfirmationLedger,
+} from "./confirmation.js";
+import type { ConfirmationLedger } from "./confirmation.js";
 import {
   computeIdempotencyKey,
   incidentFingerprintDigest,
@@ -36,6 +40,10 @@ export interface ActionPreviewOptions {
   nowMs?: number;
   /** Deterministic nonce for tests. */
   nonce?: string;
+  /** Injectible confirmation ledger root (tests / controlled state). */
+  ledgerRoot?: string | null;
+  /** Pre-opened ledger (preferred when sharing across calls). */
+  ledger?: ConfirmationLedger | null;
 }
 
 function emptyPreview(
@@ -216,6 +224,9 @@ export function previewUpstreamAction(
       attachment_manifest,
     });
 
+    const ledger =
+      options.ledger ?? openConfirmationLedger(options.ledgerRoot);
+
     const { binding, token } = mintConfirmation({
       action,
       canonical_target,
@@ -227,6 +238,7 @@ export function previewUpstreamAction(
       capsule_id: gate.capsule.capsule_id,
       privacy,
       idempotency_key,
+      ledger,
       nowMs: options.nowMs,
       nonce: options.nonce,
     });

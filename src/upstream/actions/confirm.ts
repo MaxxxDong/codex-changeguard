@@ -4,7 +4,10 @@ import { createUnavailableAdapter } from "./adapter.js";
 import {
   ConfirmationError,
   consumeConfirmationNonce,
+  markConfirmationTerminalUncertain,
+  openConfirmationLedger,
   parseConfirmationToken,
+  ConfirmationLedger,
 } from "./confirmation.js";
 import { receiptHash } from "./idempotency.js";
 import type {
@@ -25,6 +28,10 @@ export interface ActionConfirmOptions {
   /** Injectable adapter; production passes null → unavailable. */
   adapter?: UpstreamActionAdapter | null;
   nowMs?: number;
+  /** Injectible confirmation ledger root (tests / controlled state). */
+  ledgerRoot?: string | null;
+  /** Pre-opened ledger (preferred when sharing across calls). */
+  ledger?: ConfirmationLedger | null;
 }
 
 function emptyConfirm(
@@ -78,15 +85,22 @@ function buildReceipt(input: {
   };
 }
 
+function resolveLedger(options: ActionConfirmOptions): ConfirmationLedger {
+  if (options.ledger) return options.ledger;
+  return openConfirmationLedger(options.ledgerRoot);
+}
+
 /**
  * Confirm or cancel a separately previewed upstream action.
  * Cancellation / auth unavailable remain pure draft — never simulate success.
  * Ambiguous timeout queries remote by idempotency key; never blind-retries.
+ * Cancel / success / uncertain permanently terminate the nonce in the durable ledger.
  */
 export function confirmUpstreamAction(
   options: ActionConfirmOptions,
 ): ActionConfirmResult {
   const adapter = options.adapter ?? createUnavailableAdapter();
+  const ledger = resolveLedger(options);
   let auth_capability: AuthCapabilityReport;
   try {
     auth_capability = adapter.getAuthCapability();
@@ -118,7 +132,10 @@ export function confirmUpstreamAction(
 
   let binding;
   try {
-    binding = parseConfirmationToken(options.confirmation_token, options.nowMs);
+    binding = parseConfirmationToken(options.confirmation_token, options.nowMs, {
+      ledger,
+      revalidateForConfirm: true,
+    });
   } catch (e) {
     let status: ActionConfirmStatus = "INVALID_CONFIRMATION";
     let code = "INVALID_CONFIRMATION";
@@ -128,6 +145,9 @@ export function confirmUpstreamAction(
         code = e.code;
       } else if (e.code === "REPLAYED_CONFIRMATION") {
         status = "REPLAYED_CONFIRMATION";
+        code = e.code;
+      } else if (e.code === "UNREGISTERED_CONFIRMATION") {
+        status = "INVALID_CONFIRMATION";
         code = e.code;
       } else {
         code = e.code;
@@ -146,7 +166,7 @@ export function confirmUpstreamAction(
 
   // Cancellation: pure draft; consume nonce so it cannot be confirmed later.
   if (decision === "cancel") {
-    consumeConfirmationNonce(binding.nonce);
+    consumeConfirmationNonce(binding.nonce, ledger, options.nowMs);
     return emptyConfirm({
       ok: true,
       status: "CANCELLED",
@@ -184,6 +204,7 @@ export function confirmUpstreamAction(
   }
 
   // Auth / adapter unavailable: pure draft, never simulate success.
+  // Nonce stays registered so a later confirm can proceed when capability exists.
   if (
     !auth_capability.authenticated ||
     auth_capability.kind === "unavailable"
@@ -258,7 +279,7 @@ export function confirmUpstreamAction(
   }
 
   if (exec.outcome === "duplicate_existing") {
-    consumeConfirmationNonce(binding.nonce);
+    consumeConfirmationNonce(binding.nonce, ledger, options.nowMs);
     const url = exec.canonical_url ?? binding.canonical_target;
     const ts = exec.timestamp ?? new Date(options.nowMs ?? Date.now()).toISOString();
     const receipt = buildReceipt({
@@ -289,6 +310,7 @@ export function confirmUpstreamAction(
     try {
       query = adapter.queryByIdempotencyKey(binding.idempotency_key);
     } catch {
+      markConfirmationTerminalUncertain(binding.nonce, ledger, options.nowMs);
       return emptyConfirm({
         ok: false,
         status: "UNCERTAIN_NO_RETRY",
@@ -307,7 +329,7 @@ export function confirmUpstreamAction(
     }
 
     if (query.outcome === "found" && query.receipt) {
-      consumeConfirmationNonce(binding.nonce);
+      consumeConfirmationNonce(binding.nonce, ledger, options.nowMs);
       return emptyConfirm({
         ok: true,
         status: "DUPLICATE_EXISTING",
@@ -324,6 +346,8 @@ export function confirmUpstreamAction(
     }
 
     // not_found or uncertain → stop UNCERTAIN_NO_RETRY (never blind retry)
+    // Persist terminal_uncertain so the same token cannot re-execute.
+    markConfirmationTerminalUncertain(binding.nonce, ledger, options.nowMs);
     return emptyConfirm({
       ok: false,
       status: "UNCERTAIN_NO_RETRY",
@@ -362,6 +386,7 @@ export function confirmUpstreamAction(
 
   // success
   if (!exec.canonical_url || !exec.timestamp) {
+    markConfirmationTerminalUncertain(binding.nonce, ledger, options.nowMs);
     return emptyConfirm({
       ok: false,
       status: "UNCERTAIN_NO_RETRY",
@@ -379,7 +404,7 @@ export function confirmUpstreamAction(
     });
   }
 
-  consumeConfirmationNonce(binding.nonce);
+  consumeConfirmationNonce(binding.nonce, ledger, options.nowMs);
   const receipt = buildReceipt({
     action: binding.action,
     canonical_url: exec.canonical_url,

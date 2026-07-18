@@ -245,7 +245,8 @@ Black-box and contract coverage in `tests/ticket11-upstream-actions.test.ts`:
 - auth unavailable / default unavailable adapter never simulate success
 - invalid / expired / replayed confirmation refused
 - idempotency: exact same diagnosis/action returns `DUPLICATE_EXISTING` with existing receipt
-- timeout found → existing receipt; timeout not-found/uncertain → `UNCERTAIN_NO_RETRY` (no blind retry)
+- timeout found → existing receipt; timeout not-found/uncertain/query-throw → `UNCERTAIN_NO_RETRY` + durable `terminal_uncertain` (no blind retry; second call `REPLAYED_CONFIRMATION`, `executeCalls` stays 1)
+- durable confirmation ledger (HMAC key + registered/consumed/terminal_uncertain, TTL, capacity, symlink-safe atomic replace); CLI cross-process preview/cancel/replay; offline forge / non-official target / tampered body or attachment refused
 - CLI/MCP `upstream-action-preview` / `changeguard_upstream_action_preview` equivalence; production path `network_used: false`, auth `unavailable`
 - target tree hash unchanged; no token/cookie leakage in JSON
 - package-smoke: packaged action-preview exit 0, confirm without adapter → `ADAPTER_UNAVAILABLE`, blocked capsule refused

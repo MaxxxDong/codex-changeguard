@@ -18,6 +18,15 @@ export const CONFIRMATION_TTL_MS = 15 * 60 * 1000;
 /** Prefix for one-shot confirmation tokens (not secrets / not auth tokens). */
 export const CONFIRMATION_TOKEN_PREFIX = "ua1.";
 
+/** Local confirmation ledger bounds (ChangeGuard-owned state; not target project). */
+export const CONFIRMATION_LEDGER_CAPACITY = 256;
+export const CONFIRMATION_LEDGER_MAX_BYTES = 512 * 1024;
+export const CONFIRMATION_LEDGER_KEY_BYTES = 32;
+export const CONFIRMATION_LEDGER_STATE_FILE = "confirmation-ledger.json";
+export const CONFIRMATION_LEDGER_KEY_FILE = "confirmation.hmac.key";
+export const CONFIRMATION_LEDGER_DIR_MODE = 0o700;
+export const CONFIRMATION_LEDGER_FILE_MODE = 0o600;
+
 /** Forbidden privacy keys on action/confirm envelopes (never accepted). */
 export const FORBIDDEN_ACTION_KEYS = Object.freeze([
   "cookie",

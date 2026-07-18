@@ -99,7 +99,11 @@ const STATE_WRITE_FS_METHODS = new Set([
 ]);
 
 /** Exact production files permitted to use atomic state-write methods. */
-const DEFAULT_STATE_WRITE_ALLOWLIST = new Set(["src/instances/state.ts"]);
+const DEFAULT_STATE_WRITE_ALLOWLIST = new Set([
+  "src/instances/state.ts",
+  // Ticket 11: durable one-shot confirmation ledger + install-local HMAC key.
+  "src/upstream/actions/ledger.ts",
+]);
 
 /**
  * @type {{
@@ -3632,14 +3636,18 @@ fs.closeSync(fd);
     failures.push("temp file scan of node:net should fail");
   }
 
-  // Ticket 03: state-write allowlist is exact-file scoped, not product-global.
+  // Ticket 03 / Ticket 11: state-write allowlist is exact-file scoped, not product-global.
   {
     const writeSrc = `import fs from "node:fs";\nfs.writeFileSync("x", "y");\nfs.mkdirSync("d");\nfs.renameSync("a", "b");\nfs.unlinkSync("c");\n`;
+    const stateAllow = new Set([
+      "src/instances/state.ts",
+      "src/upstream/actions/ledger.ts",
+    ]);
     const prevPolicy = scanPolicy;
     try {
       scanPolicy = {
         allowStateWrites: true,
-        stateWriteAllowlist: new Set(["src/instances/state.ts"]),
+        stateWriteAllowlist: stateAllow,
         currentRel: "src/instances/state.ts",
       };
       const okState = scanSourceSnippet(writeSrc, "src/instances/state.ts");
@@ -3650,7 +3658,21 @@ fs.closeSync(fd);
       }
       scanPolicy = {
         allowStateWrites: true,
-        stateWriteAllowlist: new Set(["src/instances/state.ts"]),
+        stateWriteAllowlist: stateAllow,
+        currentRel: "src/upstream/actions/ledger.ts",
+      };
+      const okLedger = scanSourceSnippet(
+        writeSrc,
+        "src/upstream/actions/ledger.ts",
+      );
+      if (okLedger.length > 0) {
+        failures.push(
+          `ledger.ts atomic writes should be allowed under allowlist: ${okLedger.join("; ")}`,
+        );
+      }
+      scanPolicy = {
+        allowStateWrites: true,
+        stateWriteAllowlist: stateAllow,
         currentRel: "src/cli/main.ts",
       };
       const badCli = scanSourceSnippet(writeSrc, "src/cli/main.ts");
@@ -3661,7 +3683,7 @@ fs.closeSync(fd);
       }
       scanPolicy = {
         allowStateWrites: true,
-        stateWriteAllowlist: new Set(["src/instances/state.ts"]),
+        stateWriteAllowlist: stateAllow,
         currentRel: "src/mcp/server.ts",
       };
       const badMcp = scanSourceSnippet(writeSrc, "src/mcp/server.ts");
@@ -3672,13 +3694,13 @@ fs.closeSync(fd);
       }
       scanPolicy = {
         allowStateWrites: true,
-        stateWriteAllowlist: new Set(["src/instances/state.ts"]),
+        stateWriteAllowlist: stateAllow,
         currentRel: "src/instances/scan.ts",
       };
       const badScan = scanSourceSnippet(writeSrc, "src/instances/scan.ts");
       if (badScan.length === 0) {
         failures.push(
-          "instances/scan.ts state writes must be rejected; only state.ts may write",
+          "instances/scan.ts state writes must be rejected; only allowlisted state modules may write",
         );
       }
     } finally {
@@ -3794,11 +3816,14 @@ function main() {
   });
   const diagnosisResult = scanFiles(diagnosisFiles, { allowStateWrites: false });
 
-  // Full product graph: atomic state writes only in src/instances/state.ts.
+  // Full product graph: atomic state writes only in allowlisted ChangeGuard state modules.
   const files = collectProductionFiles();
   const result = scanFiles(files, {
     allowStateWrites: true,
-    stateWriteAllowlist: ["src/instances/state.ts"],
+    stateWriteAllowlist: [
+      "src/instances/state.ts",
+      "src/upstream/actions/ledger.ts",
+    ],
   });
   const ok = diagnosisResult.ok && result.ok;
   const report = {
@@ -3811,7 +3836,7 @@ function main() {
     diagnosis_ok: diagnosisResult.ok,
     product_ok: result.ok,
     self_test_ok: true,
-    note: "Independent AST boundary evidence; diagnosis graph remains mutation-free; product graph allows ChangeGuard-owned atomic state writes only.",
+    note: "Independent AST boundary evidence; diagnosis graph remains mutation-free; product graph allows ChangeGuard-owned atomic state writes only (version fingerprint + confirmation ledger).",
   };
   console.log(JSON.stringify(report, null, 2));
   if (!ok) {
