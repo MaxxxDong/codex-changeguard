@@ -6,7 +6,7 @@
 
 **Status:** `LOCAL_COMPLETE` (locally verified on integrated commit `c20ddc5c3b36b373e3b2c5791aa1db2678a45a8e`)
 
-Broader ChangeGuard product remains `IN_PROGRESS`. Tickets 10–17 are not complete. Registration, external submission, and Gate C remain not authorized / `NOT_STARTED`. No public publication or upload has occurred.
+Broader ChangeGuard product remains `IN_PROGRESS`. Tickets 11–17 are not complete. Registration, external submission, and Gate C remain not authorized / `NOT_STARTED`. No public publication or upload has occurred.
 
 Exact operational evidence (root integrated verification, combined Wave 2 review, artifact hashes) is canonical in [HANDOFF.md](../../../HANDOFF.md).
 
@@ -30,5 +30,5 @@ Exact operational evidence (root integrated verification, combined Wave 2 review
 
 - Local status: `LOCAL_COMPLETE` on integrated commit `c20ddc5c3b36b373e3b2c5791aa1db2678a45a8e` (Ticket 02 reviewed implementation fast-forwarded through `e06e254`).
 - Root integrated verification and Wave 2 combined review (`NO_P0_P1`): see [HANDOFF.md](../../../HANDOFF.md) § Wave 2 closeout.
-- Product-wide status remains `IN_PROGRESS`; this ticket does not complete Tickets 10–17.
+- Product-wide status remains `IN_PROGRESS`; this ticket does not complete Tickets 11–17.
 - Registration `NOT_STARTED`; external submission `NOT_STARTED`; Gate C not authorized.

@@ -15,8 +15,10 @@ ChangeGuard is not a generic changelog summarizer, Issue chatbot, environment do
 - Gate B: approved, option A
 - Tickets 01–04: `LOCAL_COMPLETE` on integrated commit `c20ddc5` (Ticket 01 first closed on `d7d917b`; Wave 2 tip `c20ddc5`)
 - Tickets 05–09: `LOCAL_COMPLETE` on integrated HEAD `5aa12c6` (Wave 3 tip; Root full regression 212/212; final review `changeguard-wave3-final-review-r2` → `NO_P0_P1`)
-- Broader product: still `IN_PROGRESS` (Tickets 10–17 not complete)
+- Ticket 10: `LOCAL_COMPLETE` on integrated HEAD `3265acd` (commits `0829936` → `7ef87e6` → `26d58b4` → `3265acd`; Root full regression 260/260; final static review `changeguard-ticket10-regression-review-r7` → `NO_P0_P1`, empty patch)
+- Broader product: still `IN_PROGRESS` (Tickets 11–17 not complete)
 - Residual platform claims: real-machine Full/Preview/Limited matrix remains with Tickets 13–15; Ticket 06 CLI/Desktop **version** rollback stays `preview_only` / Desktop may be `limited`
+- Ticket 10 residual: upstream capsules stay `preview_only` / `local_only` / `external_write: false`; immutable form snapshot date/commit/blob provenance recorded in [HANDOFF.md](HANDOFF.md); Ticket 11 still required for confirmed external writes
 - Registration and external submission: `NOT_STARTED`; Gate C not authorized; no public publication, upload, or real external GitHub writes
 - Exact local-verification evidence: [HANDOFF.md](HANDOFF.md)
 
@@ -31,7 +33,7 @@ ChangeGuard is not a generic changelog summarizer, Issue chatbot, environment do
 - [Schemas](schemas/)
 - [Synthetic fixtures](fixtures/)
 
-## Public surfaces (Tickets 01–09)
+## Public surfaces (Tickets 01–10)
 
 Rescue CLI and MCP share the same cores. A clean source checkout is not runnable
 until dependencies are installed and the project is built (or packaged):
@@ -156,7 +158,7 @@ and require separate Ticket 11 confirmation before any real write.
 ## Plugin surfaces
 
 - Skill commands for update scanning, incident diagnosis, page analysis, Impact Card, and recovery preview
-- A local-facts MCP server with explicit tool approval (`changeguard_diagnose`, `changeguard_impact`, `changeguard_analyze_page`, `changeguard_lifecycle`, repair/scan tools)
+- A local-facts MCP server with explicit tool approval (`changeguard_diagnose`, `changeguard_impact`, `changeguard_analyze_page`, `changeguard_upstream_preview`, `changeguard_lifecycle`, repair/scan tools)
 - An optional trusted `SessionStart` hook that notices version-fingerprint changes (Ticket 03)
 - A manual scan path that always works when hooks are disabled or untrusted
 
