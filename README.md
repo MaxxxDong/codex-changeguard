@@ -18,7 +18,8 @@ ChangeGuard is not a generic changelog summarizer, Issue chatbot, environment do
 - Tickets 05–09: `LOCAL_COMPLETE` on integrated HEAD `5aa12c6` (Wave 3 tip; Root full regression 212/212; final review `changeguard-wave3-final-review-r2` → `NO_P0_P1`)
 - Ticket 10: `LOCAL_COMPLETE` on integrated HEAD `3265acd` (commits `0829936` → `7ef87e6` → `26d58b4` → `3265acd`; Root full regression 260/260; final static review `changeguard-ticket10-regression-review-r7` → `NO_P0_P1`, empty patch)
 - Tickets 11 / 13 / 14 / 15: Wave 4 integrated on `407789c` — see per-ticket rows below and [HANDOFF.md](HANDOFF.md) § Wave 4 closeout
-- Broader product: still `IN_PROGRESS` (Tickets **12, 16, 17** not complete; Ticket 14 platform Full and Ticket 15 real-host Full remain open)
+- Ticket 12: `LOCAL_COMPLETE` on clean commit `6083c6f` (Root: typecheck/build; Ticket 06+12 targeted 99/99; boundary + self-test 175/175; package + package:smoke; Ticket 13 rerun 35/35 after one recorded transient; full regression 474/474; final static reviews `changeguard-ticket12-final-spec-review-r5` + `changeguard-ticket12-final-security-review-r5` → `ACCEPT` / no P0/P1)
+- Broader product: still `IN_PROGRESS` (Tickets **16, 17** not complete; Ticket 14 platform Full and Ticket 15 real-host Full remain open)
 - Platform claims (canonical matrix: [docs/SUPPORT_MATRIX.md](docs/SUPPORT_MATRIX.md)):
   - **macOS:** receipt-scoped **Full** on this host after Ticket 13 real-machine Scenario Harness (`support_level=full`, live witness, all required scenarios pass). Full is **not** universal for every macOS/Codex version; external JSON alone is at most Preview
   - **Windows 11:** Ticket 14 framework integrated; platform remains **Preview** until a real Windows 11 host covers W11-S01…S11 **and** seals a process-local live witness (external JSON cannot Full)
@@ -44,7 +45,7 @@ ChangeGuard is not a generic changelog summarizer, Issue chatbot, environment do
 - [Schemas](schemas/)
 - [Synthetic fixtures](fixtures/)
 
-## Public surfaces (Tickets 01–11, 13–14)
+## Public surfaces (Tickets 01–15)
 
 Rescue CLI and MCP share the same cores. A clean source checkout is not runnable
 until dependencies are installed and the project is built (or packaged):
@@ -130,8 +131,9 @@ ChangeGuard never stores or redistributes OpenAI binaries. Desktop version rollb
 `limited` without signed history or lawful media. Canary and upstream supersession emit
 exact guidance enums. Platform Full/Preview/Limited claims are receipt-scoped (see Tickets 13–15 and [docs/SUPPORT_MATRIX.md](docs/SUPPORT_MATRIX.md)).
 
-### Maintainer follow-up / upstream fix (Ticket 12)
+### Maintainer follow-up / upstream fix (Ticket 12) — `LOCAL_COMPLETE`
 
+`LOCAL_COMPLETE` on clean `6083c6f` (see [HANDOFF.md](HANDOFF.md) § Ticket 12 closeout).
 Explicit local subscriptions only (canonical `openai/codex` issues). Manual or
 SessionStart low-frequency refresh-due hints never fetch the network. Maintainer
 `needs-info` events become privacy-safe Capsules and reply drafts (`preview_only`,
@@ -140,7 +142,7 @@ never auto-reopens, cross-posts, comments, or reacts. Candidate validation requi
 registered live measurement plus the bundled official snapshot (no caller
 `snapshot_path` / JSON witness); successful measured official fixes mark temporary
 recipes `SUPERSEDED_BY_UPSTREAM_FIX` and stop recommending them without binary
-install/uninstall.
+install/uninstall. No Gate C, external submission, or real GitHub write is authorized.
 
 ### Configuration / startup fault pack (Ticket 07)
 

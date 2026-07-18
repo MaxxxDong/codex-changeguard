@@ -12,8 +12,10 @@ import { removeProtectedProcessBlock } from "../src/core/recovery/protected-proc
 import * as followupPublic from "../src/upstream/followup/index.js";
 import {
   dispatchFollowup,
+  FOLLOWUP_LEDGER_STATE_FILE,
   REFRESH_DUE_HINT,
   REFRESH_MIN_INTERVAL_MS,
+  refreshFollowup,
   subscribeIssue,
 } from "../src/upstream/followup/index.js";
 import {
@@ -425,6 +427,158 @@ test("Ticket12 harness: packaged SessionStart due / not-due; no fetch", () => {
   // When version fingerprint also silent, stdout empty.
   if (notDue.result?.silent !== false) {
     assert.equal(notDue.stdout, "");
+  }
+});
+
+/**
+ * SessionStart four-combination matrix (Ticket 12 closeout):
+ * subscribed+due => path-free hint;
+ * subscribed+not-due => silent;
+ * unsubscribed => silent;
+ * untrusted/corrupt state => silent.
+ * Deterministic, offline, empty system caps (no version-change noise).
+ */
+test("Ticket12 harness: SessionStart four-combination matrix (due / not-due / unsubscribed / untrusted-corrupt)", () => {
+  const pluginRoot = makeTempDir("cg-t12h-mx-plug-");
+  const pluginData = makeTempDir("cg-t12h-mx-pdata-");
+  const emptyCaps = {
+    desktopPaths: [] as string[],
+    pathEntries: [] as string[],
+    packageRoots: [] as string[],
+  };
+  const baseEnv = {
+    PLUGIN_ROOT: pluginRoot,
+    PLUGIN_DATA: pluginData,
+  };
+
+  // 1) subscribed + due → path-free refresh-due hint (no fetch, no absolute paths)
+  {
+    const stateDir = path.join(pluginData, "upstream-followup-due");
+    fs.mkdirSync(stateDir, { recursive: true });
+    const target = makeIsolatedTarget("cg-t12h-mx-due-");
+    subscribeIssue({
+      targetPath: target,
+      issue: 9410,
+      nowMs: NOW,
+      stateDir,
+    });
+    const r = runPackagedSessionStart({
+      env: baseEnv,
+      followupStateDir: stateDir,
+      nowMs: NOW + REFRESH_MIN_INTERVAL_MS + 1,
+      systemCaps: emptyCaps,
+      hookTrust: "trusted",
+    });
+    assert.equal(r.exitCode, 0);
+    assert.equal(r.followupDue, true);
+    assert.ok(r.stdout.includes(REFRESH_DUE_HINT));
+    assert.ok(r.stdout.includes("No network fetch"));
+    assert.equal(/\/Users\//.test(r.stdout), false);
+    assert.equal(/\/etc\//.test(r.stdout), false);
+    assert.equal(r.stdout.includes(pluginData), false);
+    assert.equal(r.stdout.includes(stateDir), false);
+    assert.equal(r.stdout.includes(target), false);
+  }
+
+  // 2) subscribed + not-due → silent / no hint
+  {
+    const stateDir = path.join(pluginData, "upstream-followup-notdue");
+    fs.mkdirSync(stateDir, { recursive: true });
+    const target = makeIsolatedTarget("cg-t12h-mx-nd-");
+    subscribeIssue({
+      targetPath: target,
+      issue: 9411,
+      nowMs: NOW,
+      stateDir,
+    });
+    // Local refresh stamps last_refresh_at_ms so the interval is not due yet.
+    const refreshed = refreshFollowup({
+      targetPath: target,
+      nowMs: NOW + 1,
+      stateDir,
+    });
+    assert.equal(refreshed.ok, true);
+    assert.equal(refreshed.status, "NO_NEW_EVIDENCE");
+    const r = runPackagedSessionStart({
+      env: baseEnv,
+      followupStateDir: stateDir,
+      nowMs: NOW + 2,
+      systemCaps: emptyCaps,
+      hookTrust: "trusted",
+    });
+    assert.equal(r.exitCode, 0);
+    assert.equal(r.followupDue, false);
+    assert.equal(r.stdout.includes(REFRESH_DUE_HINT), false);
+    if (r.result?.silent !== false) {
+      assert.equal(r.stdout, "");
+    }
+  }
+
+  // 3) unsubscribed (empty / no active subscription) → silent
+  {
+    const stateDir = path.join(pluginData, "upstream-followup-unsub");
+    fs.mkdirSync(stateDir, { recursive: true });
+    const r = runPackagedSessionStart({
+      env: baseEnv,
+      followupStateDir: stateDir,
+      nowMs: NOW + REFRESH_MIN_INTERVAL_MS + 1,
+      systemCaps: emptyCaps,
+      hookTrust: "trusted",
+    });
+    assert.equal(r.exitCode, 0);
+    assert.equal(r.followupDue, false);
+    assert.equal(r.stdout.includes(REFRESH_DUE_HINT), false);
+    if (r.result?.silent !== false) {
+      assert.equal(r.stdout, "");
+    }
+  }
+
+  // 4a) untrusted hook with due subscription → silent (no follow-up bypass)
+  {
+    const stateDir = path.join(pluginData, "upstream-followup-untrusted");
+    fs.mkdirSync(stateDir, { recursive: true });
+    const target = makeIsolatedTarget("cg-t12h-mx-ut-");
+    subscribeIssue({
+      targetPath: target,
+      issue: 9412,
+      nowMs: NOW,
+      stateDir,
+    });
+    const r = runPackagedSessionStart({
+      env: baseEnv,
+      followupStateDir: stateDir,
+      nowMs: NOW + REFRESH_MIN_INTERVAL_MS + 1,
+      systemCaps: emptyCaps,
+      hookTrust: "untrusted",
+    });
+    assert.equal(r.exitCode, 0);
+    assert.equal(r.followupDue, false);
+    assert.equal(r.stdout, "");
+    assert.equal(r.stdout.includes(REFRESH_DUE_HINT), false);
+  }
+
+  // 4b) corrupt follow-up ledger → silent fail-closed (no hint, exit 0)
+  {
+    const stateDir = path.join(pluginData, "upstream-followup-corrupt");
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, FOLLOWUP_LEDGER_STATE_FILE),
+      "{not-valid-json-ledger\n",
+      "utf8",
+    );
+    const r = runPackagedSessionStart({
+      env: baseEnv,
+      followupStateDir: stateDir,
+      nowMs: NOW + REFRESH_MIN_INTERVAL_MS + 1,
+      systemCaps: emptyCaps,
+      hookTrust: "trusted",
+    });
+    assert.equal(r.exitCode, 0);
+    assert.equal(r.followupDue, false);
+    assert.equal(r.stdout.includes(REFRESH_DUE_HINT), false);
+    if (r.result?.silent !== false) {
+      assert.equal(r.stdout, "");
+    }
   }
 });
 
