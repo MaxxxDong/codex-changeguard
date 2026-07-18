@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "status_page_class": "operational",
+  "path_a_success": false,
+  "path_b_success": true,
+  "network_path_id_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "sso_method_class": null,
+  "surface_a": "web",
+  "surface_b": "web",
+  "proxy_or_filter_active": true,
+  "ssl_inspection_suspected": true
+}

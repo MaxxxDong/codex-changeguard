@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-changeguard/it-handoff.schema.json",
+  "title": "ITHandoff",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "policy_class",
+    "target_path_alias",
+    "config_key",
+    "requested_action",
+    "evidence_digests",
+    "admin_owned",
+    "signed",
+    "permission_bound",
+    "minimal_evidence",
+    "proposed_action",
+    "risk",
+    "rollback",
+    "official_reference",
+    "network_compare",
+    "secrets_present",
+    "absolute_paths_present"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "status": { "const": "ADMIN_ACTION_REQUIRED" },
+    "policy_class": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "target_path_alias": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "config_key": { "type": ["string", "null"], "maxLength": 256 },
+    "requested_action": { "type": "string", "minLength": 1, "maxLength": 1024 },
+    "evidence_digests": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+    },
+    "admin_owned": { "type": "boolean" },
+    "signed": { "type": "boolean" },
+    "permission_bound": { "type": "boolean" },
+    "minimal_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digests", "observed_flags", "adapter_status", "instance_id"],
+      "properties": {
+        "digests": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        },
+        "observed_flags": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "type": "string", "maxLength": 64 }
+        },
+        "adapter_status": {
+          "enum": ["READ_ONLY", "LIMITED", "PREVIEW", "FULL"]
+        },
+        "instance_id": { "type": ["string", "null"], "maxLength": 128 }
+      }
+    },
+    "proposed_action": { "type": "string", "minLength": 1, "maxLength": 1024 },
+    "risk": { "enum": ["low", "moderate", "high"] },
+    "rollback": { "type": "string", "minLength": 1, "maxLength": 1024 },
+    "official_reference": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["title", "url_allowlisted"],
+      "properties": {
+        "title": { "type": "string", "maxLength": 256 },
+        "url_allowlisted": {
+          "type": "string",
+          "maxLength": 512,
+          "pattern": "^https://(help\\.openai\\.com|status\\.openai\\.com|platform\\.openai\\.com)/"
+        }
+      }
+    },
+    "network_compare": { "type": ["object", "null"] },
+    "secrets_present": { "const": false },
+    "absolute_paths_present": { "const": false }
+  }
+}

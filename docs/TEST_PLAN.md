@@ -51,6 +51,24 @@ Black-box coverage in `tests/ticket07-config-startup.test.ts`:
 - valid `config_set` / `config_remove` repair → `RESOLVED_VERIFIED` with startup verification (original failure, config reload, registered command)
 - wrong candidate (negative control) refused
 - managed policy → `ADMIN_ACTION_REQUIRED` + IT handoff; no privilege-elevation ops
+
+## Ticket 15 Scenario Harness (Linux / WSL / enterprise)
+
+Synthetic fixtures and capability injection only — **no Full claim** without real-machine receipt.
+
+| ID | Scenario | Expected |
+| --- | --- | --- |
+| T15-S01 | unknown adapter | capability `READ_ONLY`; writes disabled |
+| T15-S02 | native linux PATH CLI | `LIMITED`; `install_source` path/package never `wsl`; RO discovery |
+| T15-S03 | WSL + Windows MSIX coexist | ≥2 instances; distinct platforms/domains; no identity collapse |
+| T15-S04 | managed.policy.json enterprise_mdm | `ADMIN_ACTION_REQUIRED` + IT Handoff (risk/rollback/official ref); no capsule/auth; no sudo/chmod language |
+| T15-S05 | admin/permission_bound block | mutation refused; handoff |
+| T15-S06 | symlink config root | refuse; no follow |
+| T15-S08 | `/mnt/c` host mount as linux root | refuse by default |
+| T15-S09 | network compare RO playbook | branch labels only; `network_used:false`; no settings mutation |
+| T15-S10 | capability upgrade without real-machine receipt | remains Limited; cannot claim Full |
+| T15-S11 | CLI/MCP `platform-status` equivalence | stable fields; path/secret redaction |
+| write-disabled | LIMITED/READ_ONLY capability on repair-preview/apply | `WRITE_DISABLED`; tree hash unchanged |
 - induced verification failure auto-rollbacks exact config bytes
 - invalid TOML diagnosed but not auto-repaired
 - no project-source read (sentinel file)
@@ -162,7 +180,7 @@ Mandatory cases (implemented in `tests/scenario-harness.test.ts`):
 
 Implemented in `tests/instance-scan.test.ts` (public CLI/MCP + shared core):
 
-- first baseline across Desktop / PATH / package-manager / MSIX / WSL identities
+- first baseline across Desktop / PATH / package-manager / MSIX / native Linux / WSL identities
 - unchanged SessionStart is silent and does not rewrite state
 - multi-instance upgrade does not auto-select highest version as affected
 - downgrade classification

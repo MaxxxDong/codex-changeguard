@@ -11,6 +11,7 @@ export type {
   RepairCapsule,
   RepairResult,
   ApplyOptions,
+  PreviewOptions,
   VerificationReport,
   BackupReceipt,
   AdminHandoff,

@@ -74,6 +74,10 @@
           "path_precedence": {
             "type": ["integer", "null"],
             "minimum": 0
+          },
+          "runtime_domain": {
+            "type": ["string", "null"],
+            "maxLength": 64
           }
         }
       }

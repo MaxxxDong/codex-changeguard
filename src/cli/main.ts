@@ -13,6 +13,7 @@
  *   changeguard scan-system                    (production registered system adapter)
  *   changeguard session-start <inventory-root> [--hook-trust=…]  (manual fixture path)
  *   changeguard lifecycle <operation> <isolated-target> [--key=value …]
+ *   changeguard platform-status [--adapter=<id>]  (Ticket 15 RO capability matrix)
  */
 import fs from "node:fs";
 import { diagnose } from "../core/diagnose.js";
@@ -22,6 +23,8 @@ import {
   rollbackRepair,
   verifyRepair,
 } from "../core/recovery/index.js";
+import { platformStatus } from "../platform/index.js";
+import type { AdapterId } from "../platform/types.js";
 import {
   dispatchLifecycle,
   type LifecycleDispatchArgs,
@@ -75,11 +78,25 @@ function usageDiagnosis(): DiagnosisResult {
     evidence: [],
     error_code: "USAGE",
     error_message:
-      "Usage: changeguard diagnose|impact|analyze-page|upstream-preview|repair-preview|repair-apply|verify|rollback|scan|scan-system|session-start|lifecycle …",
+      "Usage: changeguard diagnose|impact|analyze-page|upstream-preview|repair-preview|repair-apply|verify|rollback|scan|scan-system|session-start|lifecycle|platform-status …",
     network_used: false,
     target_mutated: false,
     repair_applied: false,
   };
+}
+
+const PLATFORM_ADAPTERS = new Set<AdapterId>([
+  "unknown",
+  "macos",
+  "windows",
+  "linux",
+  "wsl",
+  "enterprise_managed",
+]);
+
+function runPlatformStatus(adapter?: AdapterId): void {
+  const result = platformStatus(adapter ? { adapter } : undefined);
+  printJson(result, 0);
 }
 
 function upstreamUsageError(): never {
@@ -796,6 +813,21 @@ export function runCli(argv: string[]): void {
 
     if (cmd === "lifecycle") {
       runLifecycleCli(rest);
+      return;
+    }
+
+    if (cmd === "platform-status") {
+      const flags = rest.filter((a) => a.startsWith("-"));
+      const positional = rest.filter((a) => !a.startsWith("-"));
+      if (positional.length !== 0) printJson(usageDiagnosis(), 2);
+      let adapter: AdapterId | undefined;
+      for (const f of flags) {
+        if (!f.startsWith("--adapter=")) printJson(usageDiagnosis(), 2);
+        const v = f.slice("--adapter=".length) as AdapterId;
+        if (!PLATFORM_ADAPTERS.has(v)) printJson(usageDiagnosis(), 2);
+        adapter = v;
+      }
+      runPlatformStatus(adapter);
       return;
     }
 

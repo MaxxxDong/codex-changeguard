@@ -44,6 +44,8 @@ import type {
   UpstreamPreviewResult,
 } from "../upstream/types.js";
 import { MAX_UPSTREAM_REQUEST_BYTES } from "../upstream/limits.js";
+import { platformStatus } from "../platform/index.js";
+import type { AdapterId } from "../platform/types.js";
 
 const TOOL_DIAGNOSE = "changeguard_diagnose";
 const TOOL_IMPACT = "changeguard_impact";
@@ -57,6 +59,7 @@ const TOOL_SCAN = "changeguard_scan";
 const TOOL_SCAN_SYSTEM = "changeguard_scan_system";
 const TOOL_SESSION = "changeguard_session_start";
 const TOOL_LIFECYCLE = "changeguard_lifecycle";
+const TOOL_PLATFORM_STATUS = "changeguard_platform_status";
 
 const KNOWN_TOOLS = new Set([
   TOOL_DIAGNOSE,
@@ -71,6 +74,16 @@ const KNOWN_TOOLS = new Set([
   TOOL_SCAN_SYSTEM,
   TOOL_SESSION,
   TOOL_LIFECYCLE,
+  TOOL_PLATFORM_STATUS,
+]);
+
+const PLATFORM_ADAPTERS = new Set<AdapterId>([
+  "unknown",
+  "macos",
+  "windows",
+  "linux",
+  "wsl",
+  "enterprise_managed",
 ]);
 
 /** Extra top-level tools/call params beyond name/arguments are refused. */
@@ -351,6 +364,29 @@ function toolSchemas() {
         },
       },
     },
+    {
+      name: TOOL_PLATFORM_STATUS,
+      description:
+        "Ticket 15 read-only platform capability matrix (Linux/WSL/enterprise). Never mutates; never claims Full without real-machine receipt.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          adapter: {
+            type: "string",
+            enum: [
+              "unknown",
+              "macos",
+              "windows",
+              "linux",
+              "wsl",
+              "enterprise_managed",
+            ],
+            description: "Optional single adapter filter.",
+          },
+        },
+      },
+    },
   ];
 }
 
@@ -378,7 +414,8 @@ function handleToolsCall(params: unknown): {
     | UpstreamPreviewResult
     | RepairResult
     | ScanResult
-    | LifecycleResult;
+    | LifecycleResult
+    | ReturnType<typeof platformStatus>;
   ok: boolean;
 } {
   if (!params || typeof params !== "object" || Array.isArray(params)) {
@@ -767,6 +804,28 @@ function handleToolsCall(params: unknown): {
       dispatchArgs.upstream_verified = a.upstream_verified;
     }
     const payload = dispatchLifecycle(dispatchArgs);
+    return { payload, ok: payload.ok };
+  }
+
+  if (p.name === TOOL_PLATFORM_STATUS) {
+    const allowed = new Set(["adapter"]);
+    for (const k of Object.keys(a)) {
+      if (!allowed.has(k)) {
+        throw Object.assign(new Error("Unknown or extra arguments."), {
+          code: "EXTRA_ARGS",
+        });
+      }
+    }
+    let adapter: AdapterId | undefined;
+    if (a.adapter !== undefined) {
+      if (typeof a.adapter !== "string" || !PLATFORM_ADAPTERS.has(a.adapter as AdapterId)) {
+        throw Object.assign(new Error("Invalid adapter."), {
+          code: "INVALID_ARGS",
+        });
+      }
+      adapter = a.adapter as AdapterId;
+    }
+    const payload = platformStatus(adapter ? { adapter } : undefined);
     return { payload, ok: payload.ok };
   }
 

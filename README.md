@@ -17,7 +17,7 @@ ChangeGuard is not a generic changelog summarizer, Issue chatbot, environment do
 - Tickets 05–09: `LOCAL_COMPLETE` on integrated HEAD `5aa12c6` (Wave 3 tip; Root full regression 212/212; final review `changeguard-wave3-final-review-r2` → `NO_P0_P1`)
 - Ticket 10: `LOCAL_COMPLETE` on integrated HEAD `3265acd` (commits `0829936` → `7ef87e6` → `26d58b4` → `3265acd`; Root full regression 260/260; final static review `changeguard-ticket10-regression-review-r7` → `NO_P0_P1`, empty patch)
 - Broader product: still `IN_PROGRESS` (Tickets 11–17 not complete)
-- Residual platform claims: real-machine Full/Preview/Limited matrix remains with Tickets 13–15; Ticket 06 CLI/Desktop **version** rollback stays `preview_only` / Desktop may be `limited`
+- Residual platform claims: real-machine Full matrix remains Tickets 13–14; Ticket 15 ships Linux/WSL/enterprise **Limited / Read-only** capability adapters (no Full claim without real-machine receipt); Ticket 06 CLI/Desktop **version** rollback stays `preview_only` / Desktop may be `limited`
 - Ticket 10 residual: upstream capsules stay `preview_only` / `local_only` / `external_write: false`; immutable form snapshot date/commit/blob provenance recorded in [HANDOFF.md](HANDOFF.md); Ticket 11 still required for confirmed external writes
 - Registration and external submission: `NOT_STARTED`; Gate C not authorized; no public publication, upload, or real external GitHub writes
 - Exact local-verification evidence: [HANDOFF.md](HANDOFF.md)

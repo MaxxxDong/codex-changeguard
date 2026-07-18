@@ -55,6 +55,12 @@ export interface InstanceIdentity {
   version_provenance: VersionProvenance;
   /** PATH order among path-sourced candidates; null for non-PATH. */
   path_precedence: number | null;
+  /**
+   * Optional cross-OS domain (Ticket 15). When present, participates in
+   * instance_id material so WSL and Windows host identities never collapse.
+   * Omitted from older fixture inventory rows for backward compatibility.
+   */
+  runtime_domain?: string | null;
 }
 
 export interface InstanceTransition {
@@ -107,6 +113,18 @@ export interface ScanResult {
   repair_applied: false;
   error_code: string | null;
   error_message: string | null;
+  /**
+   * Ticket 15 optional platform capability block (additive).
+   * Present on scan-system / platform-aware paths; omitted on legacy fixtures.
+   */
+  platform_capability?: {
+    schema_version: 1;
+    adapter: string;
+    status: "READ_ONLY" | "LIMITED" | "PREVIEW" | "FULL";
+    writes_enabled: boolean;
+    full_support_claimed: false;
+    gaps: Array<{ id: string; summary: string; status: string }>;
+  } | null;
 }
 
 /** Internal discovery candidate (may hold absolute paths only in-memory). */
@@ -137,6 +155,13 @@ export interface DiscoveredCandidate {
    * (e.g. registered Contents/Info.plist). Still re-clamped at read time.
    */
   version_metadata_abs?: string[];
+  /**
+   * Ticket 15 runtime domain (native_linux | wsl_distro | windows_host | …).
+   * Used in instance_id v2 material when set.
+   */
+  runtime_domain?: string | null;
+  /** In-memory WSL distro token for domain hashing only — never exported raw. */
+  wsl_distro_token?: string | null;
 }
 
 export interface ObservedContext {
@@ -224,8 +249,16 @@ export interface SystemEnumerateCaps {
   packageRoots?: string[];
   /** Windows MSIX / App Execution Alias candidate absolute paths. */
   msixPaths?: string[];
-  /** WSL / Linux registered candidate absolute paths. */
+  /**
+   * WSL registered candidate absolute paths (platform=wsl only).
+   * Never used to label native Linux install_source as wsl.
+   */
   wslPaths?: string[];
+  /**
+   * Native Linux registered CLI absolute paths (platform=linux only).
+   * install_source will be path (never wsl).
+   */
+  linuxPaths?: string[];
   /** Cap on PATH directories inspected (default 64). */
   maxPathEntries?: number;
   /** Cap on total candidates (default MAX_INSTANCES). */

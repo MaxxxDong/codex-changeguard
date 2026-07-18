@@ -164,9 +164,24 @@ function parseIdentity(raw: unknown): InstanceIdentity {
     "build",
     "version_provenance",
     "path_precedence",
+    "runtime_domain",
   ]);
   for (const k of Object.keys(o)) {
     if (!allowed.has(k)) throw new StateError("SCHEMA", "Extra state field.");
+  }
+  let runtime_domain: string | null | undefined = undefined;
+  if (o.runtime_domain !== undefined) {
+    if (o.runtime_domain === null) {
+      runtime_domain = null;
+    } else if (
+      typeof o.runtime_domain === "string" &&
+      o.runtime_domain.length > 0 &&
+      o.runtime_domain.length <= MAX_STRING
+    ) {
+      runtime_domain = o.runtime_domain;
+    } else {
+      throw new StateError("SCHEMA", "Invalid runtime_domain.");
+    }
   }
   return {
     instance_id: str("instance_id"),
@@ -182,6 +197,7 @@ function parseIdentity(raw: unknown): InstanceIdentity {
     build: nullStr("build"),
     version_provenance: version_provenance as VersionProvenance,
     path_precedence,
+    ...(runtime_domain !== undefined ? { runtime_domain } : {}),
   };
 }
 
