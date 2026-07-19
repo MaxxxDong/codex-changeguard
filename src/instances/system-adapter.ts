@@ -76,6 +76,10 @@ function homeOf(caps: SystemEnumerateCaps): string | null {
 
 /**
  * Known Desktop-bundled install locations (exact paths, no directory crawl).
+ *
+ * macOS production ships the official Codex CLI inside ChatGPT.app
+ * (`…/ChatGPT.app/Contents/Resources/codex`). Legacy `Codex.app` layouts remain
+ * registered. Never broad-scan Applications; only these exact candidates.
  */
 function defaultDesktopPaths(
   platform: PlatformId,
@@ -85,9 +89,17 @@ function defaultDesktopPaths(
   const home = homeOf(caps);
   const out: string[] = [];
   if (platform === "macos") {
+    // Official Desktop (ChatGPT.app) — CLI lives under Contents/Resources.
+    out.push("/Applications/ChatGPT.app/Contents/Resources/codex");
+    // Legacy Desktop app bundle (still supported).
     out.push("/Applications/Codex.app/Contents/MacOS/Codex");
     if (home) {
-      out.push(path.join(home, "Applications/Codex.app/Contents/MacOS/Codex"));
+      out.push(
+        path.join(home, "Applications/ChatGPT.app/Contents/Resources/codex"),
+      );
+      out.push(
+        path.join(home, "Applications/Codex.app/Contents/MacOS/Codex"),
+      );
     }
   } else if (platform === "windows") {
     const env = caps.env ?? process.env;
@@ -334,6 +346,20 @@ export function enumerateSystemCandidates(
       const kind = pathKind(full);
       if (kind === "missing" || kind === "dir" || kind === "other") continue;
       if (!isCodexBasename(path.basename(full))) continue;
+      // The official macOS app exposes the same bundled binary on PATH. Keep
+      // the earlier high-confidence Desktop candidate, but do not broaden this
+      // dedupe to package-manager/Linux/WSL identities.
+      if (
+        platform === "macos" &&
+        out.some(
+          (candidate) =>
+            candidate.platform === "macos" &&
+            candidate.install_source === "desktop_bundled" &&
+            path.resolve(candidate.path) === path.resolve(full),
+        )
+      ) {
+        continue;
+      }
       // Trusted root is the PATH directory itself — adjacent metadata only.
       // No parent traversal for package.json. Host mounts never become trusted roots.
       let trusted: string[] = [];

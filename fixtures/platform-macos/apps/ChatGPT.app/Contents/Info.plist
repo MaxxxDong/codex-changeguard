@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleShortVersionString</key>
+  <string>26.715.31925</string>
+  <key>CFBundleVersion</key>
+  <string>5551</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.openai.codex</string>
+</dict>
+</plist>

@@ -133,7 +133,7 @@ Honest, receipt-scoped claims live in **[docs/SUPPORT_MATRIX.md](docs/SUPPORT_MA
 
 | Platform | Current product claim |
 | --- | --- |
-| **macOS** | Receipt-scoped **Full** on **this host only** after Ticket 13 real-machine harness (not universal for every macOS/Codex version; external JSON alone is at most Preview) |
+| **macOS** | Receipt-scoped **Full** on **this host only** after Ticket 13 real-machine harness (not universal for every macOS/Codex version; external JSON alone is at most Preview). Official Desktop discovery includes **ChatGPT.app** (`Contents/Resources/codex`) and legacy **Codex.app**; version from bundle `Info.plist` only |
 | **Windows 11** | **Preview** — framework integrated; remains Preview without a real Windows 11 receipt **and** process-local live witness |
 | **Linux / WSL** | **Limited / Read-only** — Ticket 15 framework; writes fail closed without a real host receipt |
 | **Enterprise managed** | **Read-only + IT Handoff** — no local elevation or policy bypass |

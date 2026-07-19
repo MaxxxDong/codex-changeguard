@@ -328,6 +328,15 @@ Two public enumeration modes share the same scan core:
 
 Production system defaults inspect only known Codex locations and PATH entries under hard caps. They never perform broad home traversal and never execute discovered binaries. Missing permissions or version metadata yield explicit `version_provenance: "unavailable"`.
 
+**macOS Desktop candidates (exact registered paths only):**
+
+| Layout | Binary candidate | Version metadata |
+| --- | --- | --- |
+| Official ChatGPT.app | `/Applications/ChatGPT.app/Contents/Resources/codex` (+ user `~/Applications/…`) | Bundle `Contents/Info.plist` → `version_provenance: "plist_metadata"` |
+| Legacy Codex.app | `/Applications/Codex.app/Contents/MacOS/Codex` (+ user `~/Applications/…`) | Bundle `Contents/Info.plist` → `plist_metadata` |
+
+When the same **normalized absolute path** is discovered both as `desktop_bundled` and via PATH, ChangeGuard keeps **one** logical instance and prefers `desktop_bundled` (higher-confidence App Bundle identity). Distinct binaries, paths, or platforms never merge.
+
 Platform / env / filesystem capability injection supports deterministic macOS / Windows / Linux / WSL tests.
 
 ### 9.1.1 Windows 11 adapter (Ticket 14)
@@ -364,7 +373,7 @@ Each public identity includes:
 - profile/config root **aliases** only
 - `version` / `build` with `version_provenance`
 
-Version/build evidence is read only from metadata/manifest files (`version.json`, `package.json`, `Info.plist`, `AppxManifest.xml`, or fixture-declared fields) and only under **explicit allowed roots** (inventory root and/or system-adapter trusted install roots). Implicit parent traversal (`../Info.plist`, npm parent paths) is not used; parent metadata requires a separately registered trusted root and remains bounded with Ticket 01-equivalent no-follow checks.
+Version/build evidence is read only from metadata/manifest files (`version.json`, `package.json`, `Info.plist`, `AppxManifest.xml`, or fixture-declared fields) and only under **explicit allowed roots** (inventory root and/or system-adapter trusted install roots). Implicit parent traversal (`../Info.plist`, npm parent paths) is not used; parent metadata requires a separately registered trusted root and remains bounded with Ticket 01-equivalent no-follow checks. Read size caps are provenance-specific: **16 KiB** for `version.json` / `package.json` / MSIX manifests, and a separate **64 KiB** cap for App Bundle `Info.plist` (real ChatGPT Desktop plists are often ~20 KiB). Oversized files fail closed as `version_provenance: "unavailable"` — no binary execution, no `plutil`/`PlistBuddy`.
 
 ### 9.1.3 macOS platform adapter and support receipts (Ticket 13)
 
@@ -382,7 +391,35 @@ macOS Full requires every required real-machine scenario to pass **and** a curre
 
 ### 9.2 Affected-instance resolution
 
-The actually affected instance is resolved from observed process, log, and launch-context evidence (path hash or sole-instance rules). ChangeGuard **never** selects the highest/newest version by default. When evidence does not identify exactly one instance, `affected_resolution` remains `ambiguous`.
+The actually affected instance is resolved from observed process, log, and launch-context evidence (path hash). ChangeGuard **never** selects the highest/newest version by default. When evidence does not identify exactly one instance, `affected_resolution` remains `ambiguous`.
+
+**Without usable observed runtime context** (no process/log/launch path or hash, and no process version), resolution is always `ambiguous` with machine-readable `affected_resolution_reason: "no_observed_context"` — **including the single-instance case**. ChangeGuard does not auto-select a sole install as “affected” merely because only one row was enumerated.
+
+Additive public field on `ScanResult` (stable, path-free):
+
+| `affected_resolution_reason` | When |
+| --- | --- |
+| `identified` | Path or unique version evidence pins exactly one instance |
+| `no_instances` | Enumeration found zero instances (`affected_resolution: none`) |
+| `no_observed_context` | No usable observation (including sole instance) |
+| `conflicting_observed_evidence` | Distinct path-backed hits disagree |
+| `observed_evidence_no_match` | A sole enumerated instance does not match the supplied observation |
+| `multi_instance_insufficient_evidence` | Observation present but does not uniquely identify |
+| `version_match_ambiguous` | Version-only match is non-unique |
+
+### 9.2.1 Read-only health classification
+
+SessionStart / manual-scan health keeps legacy `health_check.ok` (all structural checks pass). Additive fields separate incomplete metadata from host/identity faults:
+
+| `classification` | Meaning |
+| --- | --- |
+| `healthy` | All checks passed |
+| `evidence_incomplete` | Version metadata missing for one or more instances — **not** a Codex host crash |
+| `identity_integrity_failed` | Duplicate `instance_id` values |
+| `budget_exceeded` | Health budget overrun |
+| `check_failed` | Other structural check failure |
+
+Missing `version` alone yields `ok: false` with `classification: "evidence_incomplete"` so operators do not treat evidence gaps as host failure.
 
 ### 9.3 Transition classification
 

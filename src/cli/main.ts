@@ -454,6 +454,7 @@ function scanUsageError(
     instances: [],
     affected_instance_id: null,
     affected_resolution: "none",
+    affected_resolution_reason: "no_instances",
     hook_status: kind === "session-start" ? "failed" : null,
     health_check: null,
     silent: false,

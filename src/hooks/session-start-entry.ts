@@ -117,9 +117,14 @@ export function formatSessionStartContext(result: ScanResult): string {
   if (result.health_check) {
     lines.push(
       `health_check_ok=${result.health_check.ok}`,
+      `health_classification=${result.health_check.classification}`,
       `health_duration_ms=${result.health_check.duration_ms}`,
     );
   }
+  lines.push(
+    `affected_resolution=${result.affected_resolution}`,
+    `affected_resolution_reason=${result.affected_resolution_reason}`,
+  );
   for (const inst of result.instances.slice(0, 8)) {
     lines.push(
       `- ${inst.path_alias} source=${inst.install_source} version=${inst.version ?? "unavailable"} provenance=${inst.version_provenance}`,

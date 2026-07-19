@@ -59,6 +59,13 @@ const MACOS_OPERATIONS: RegisteredOperation[] = [
 const MACOS_PATH_ALIASES: PlatformPathAlias[] = [
   { alias: "DESKTOP_APP_BUNDLE", role: "install", registered: true },
   { alias: "DESKTOP_USER_APP_BUNDLE", role: "install", registered: true },
+  /** Official ChatGPT.app Desktop install (exact registered candidate only). */
+  { alias: "DESKTOP_CHATGPT_APP_BUNDLE", role: "install", registered: true },
+  {
+    alias: "DESKTOP_USER_CHATGPT_APP_BUNDLE",
+    role: "install",
+    registered: true,
+  },
   { alias: "PATH_CODEX", role: "install", registered: true },
   { alias: "PKG_CODEX", role: "install", registered: true },
   { alias: "DESKTOP_PROFILE", role: "profile", registered: true },

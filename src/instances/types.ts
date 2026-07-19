@@ -37,6 +37,40 @@ export type HookTrustState = "trusted" | "untrusted" | "skipped" | "failed";
 
 export type AffectedResolution = "identified" | "ambiguous" | "none";
 
+/**
+ * Machine-readable reason for `affected_resolution` (additive, stable).
+ * Never includes raw paths. Callers must not treat absence of this field
+ * on legacy fixtures as an error — new ScanResult always sets it.
+ */
+export type AffectedResolutionReason =
+  | "identified"
+  | "no_instances"
+  | "no_observed_context"
+  | "conflicting_observed_evidence"
+  | "observed_evidence_no_match"
+  | "multi_instance_insufficient_evidence"
+  | "version_match_ambiguous";
+
+/**
+ * Coarse health classification separate from legacy `ok`.
+ * `ok` remains the all-checks-pass boolean for backward compatibility.
+ * Missing version metadata alone is evidence_incomplete — not a host fault.
+ */
+export type HealthClassification =
+  | "healthy"
+  | "evidence_incomplete"
+  | "identity_integrity_failed"
+  | "budget_exceeded"
+  | "check_failed";
+
+export type HealthClassificationReason =
+  | "all_checks_passed"
+  | "version_evidence_missing"
+  | "duplicate_instance_ids"
+  | "health_check_budget_exceeded"
+  | "instance_enumeration_failed"
+  | "one_or_more_checks_failed";
+
 export type ScanMode = "manual_scan" | "session_start";
 
 /** Public, path-free instance identity. */
@@ -80,6 +114,13 @@ export interface HealthCheckResult {
   checks: Array<{ id: string; ok: boolean; detail: string }>;
   bounded: true;
   read_only: true;
+  /**
+   * Additive machine-readable class. Interprets check failures without
+   * collapsing version-evidence gaps into host/identity faults.
+   */
+  classification: HealthClassification;
+  /** Stable reason code for the classification (path-free). */
+  classification_reason: HealthClassificationReason;
 }
 
 export interface VersionFingerprintState {
@@ -102,6 +143,12 @@ export interface ScanResult {
   instances: InstanceIdentity[];
   affected_instance_id: string | null;
   affected_resolution: AffectedResolution;
+  /**
+   * Additive stable reason for affected_resolution. Always set on new results.
+   * Does not change resolution semantics: no observed context stays ambiguous
+   * (including the single-instance case).
+   */
+  affected_resolution_reason: AffectedResolutionReason;
   hook_status: HookTrustState | null;
   health_check: HealthCheckResult | null;
   /** SessionStart with no fingerprint change stays silent. */

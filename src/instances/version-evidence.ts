@@ -8,7 +8,10 @@
  * trusted install root that already contains that file.
  */
 import path from "node:path";
-import { MAX_VERSION_META_BYTES } from "./limits.js";
+import {
+  MAX_PLIST_VERSION_META_BYTES,
+  MAX_VERSION_META_BYTES,
+} from "./limits.js";
 import {
   findContainingRoot,
   isInsideRoot,
@@ -89,6 +92,12 @@ function provenanceForBasename(base: string): VersionProvenance {
   return "version_file";
 }
 
+/** Pick the size cap for a metadata provenance (plist gets a higher, still-bounded cap). */
+function maxBytesForProvenance(provenance: VersionProvenance): number {
+  if (provenance === "plist_metadata") return MAX_PLIST_VERSION_META_BYTES;
+  return MAX_VERSION_META_BYTES;
+}
+
 function tryMetaText(
   text: string | null,
   provenance: VersionProvenance,
@@ -161,7 +170,11 @@ export function readVersionEvidence(
     for (const root of tryRoots) {
       const base = path.basename(rel);
       const prov = provenanceForBasename(base);
-      const text = readRelativeUnderRoot(root, rel, MAX_VERSION_META_BYTES);
+      const text = readRelativeUnderRoot(
+        root,
+        rel,
+        maxBytesForProvenance(prov),
+      );
       const hit = tryMetaText(text, prov);
       if (hit) return hit;
     }
@@ -172,7 +185,11 @@ export function readVersionEvidence(
     for (const abs of candidate.version_metadata_abs) {
       if (typeof abs !== "string" || abs.length === 0) continue;
       const prov = provenanceForBasename(path.basename(abs));
-      const text = readFileUnderAllowedRoots(abs, roots, MAX_VERSION_META_BYTES);
+      const text = readFileUnderAllowedRoots(
+        abs,
+        roots,
+        maxBytesForProvenance(prov),
+      );
       const hit = tryMetaText(text, prov);
       if (hit) return hit;
     }
@@ -192,7 +209,11 @@ export function readVersionEvidence(
     ];
     for (const p of probes) {
       const abs = path.join(near, p.file);
-      const text = readFileUnderAllowedRoots(abs, roots, MAX_VERSION_META_BYTES);
+      const text = readFileUnderAllowedRoots(
+        abs,
+        roots,
+        maxBytesForProvenance(p.provenance),
+      );
       const hit = tryMetaText(text, p.provenance);
       if (hit) return hit;
     }

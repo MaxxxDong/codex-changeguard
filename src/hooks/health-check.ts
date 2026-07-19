@@ -1,8 +1,68 @@
 /**
  * Bounded read-only health check for SessionStart after fingerprint change.
  * Must complete under the configured budget (default 10s). No network, no mutation.
+ *
+ * `ok` stays the all-checks-pass boolean for backward compatibility.
+ * `classification` separates version-evidence gaps from identity/budget faults
+ * so operators do not misread missing metadata as a Codex host failure.
  */
-import type { HealthCheckResult, InstanceIdentity } from "../instances/types.js";
+import type {
+  HealthCheckResult,
+  HealthClassification,
+  HealthClassificationReason,
+  InstanceIdentity,
+} from "../instances/types.js";
+
+function classifyHealth(
+  checks: Array<{ id: string; ok: boolean }>,
+  withinBudget: boolean,
+): {
+  classification: HealthClassification;
+  classification_reason: HealthClassificationReason;
+} {
+  const byId = new Map(checks.map((c) => [c.id, c.ok]));
+  const identityOk = byId.get("identity_uniqueness") !== false;
+  const enumOk = byId.get("instance_enumeration") !== false;
+  const versionOk = byId.get("version_evidence_coverage") !== false;
+  const budgetOk = withinBudget && byId.get("budget") !== false;
+
+  if (!identityOk) {
+    return {
+      classification: "identity_integrity_failed",
+      classification_reason: "duplicate_instance_ids",
+    };
+  }
+  if (!enumOk) {
+    return {
+      classification: "check_failed",
+      classification_reason: "instance_enumeration_failed",
+    };
+  }
+  if (!budgetOk) {
+    return {
+      classification: "budget_exceeded",
+      classification_reason: "health_check_budget_exceeded",
+    };
+  }
+  if (!versionOk) {
+    // Version metadata missing is incomplete evidence — not a host fault.
+    return {
+      classification: "evidence_incomplete",
+      classification_reason: "version_evidence_missing",
+    };
+  }
+  const allOk = checks.every((c) => c.ok) && withinBudget;
+  if (allOk) {
+    return {
+      classification: "healthy",
+      classification_reason: "all_checks_passed",
+    };
+  }
+  return {
+    classification: "check_failed",
+    classification_reason: "one_or_more_checks_failed",
+  };
+}
 
 export function runReadOnlyHealthCheck(
   instances: InstanceIdentity[],
@@ -51,11 +111,18 @@ export function runReadOnlyHealthCheck(
     detail: `duration_ms=${duration_ms.toFixed(3)};budget_ms=${budget}`,
   });
 
+  const { classification, classification_reason } = classifyHealth(
+    checks,
+    withinBudget,
+  );
+
   return {
     ok: checks.every((c) => c.ok) && withinBudget,
     duration_ms,
     checks,
     bounded: true,
     read_only: true,
+    classification,
+    classification_reason,
   };
 }

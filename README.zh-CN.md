@@ -133,7 +133,7 @@ Skill 编排：`skills/changeguard/SKILL.md`（含 `/changeguard demo`）。
 
 | 平台 | 当前产品声明 |
 | --- | --- |
-| **macOS** | 仅在**本机**经 Ticket 13 真机 harness 后的收据范围 **Full**（非对每一 macOS/Codex 版本的通用保证；仅有外部 JSON 至多 Preview） |
+| **macOS** | 仅在**本机**经 Ticket 13 真机 harness 后的收据范围 **Full**（非对每一 macOS/Codex 版本的通用保证；仅有外部 JSON 至多 Preview）。官方 Desktop 发现含 **ChatGPT.app**（`Contents/Resources/codex`）与旧版 **Codex.app**；版本仅来自 Bundle `Info.plist` |
 | **Windows 11** | **Preview**——框架已集成；在缺少真实 Windows 11 收据 **且** 进程内 live witness 之前保持 Preview |
 | **Linux / WSL** | **Limited / Read-only**——Ticket 15 框架；无真实主机收据时写操作失败关闭 |
 | **企业托管** | **Read-only + IT Handoff**——无本地提权或策略绕过 |
