@@ -18,15 +18,24 @@
  *   changeguard followup <operation> <isolated-target> [--request=<request.json>] …
  *   changeguard platform-status [--probe-host=true|false] [--receipt=<path>] [--plan] [--adapter=<id>]
  *   changeguard platform-receipt-validate <receipt.json>
+ *   changeguard demo [--budget-ms=<positive-int>]
  *
  * Ticket 11 production seams inject no real gh/browser adapter (capability unavailable).
  * Ticket 12 follow-up is local-only (no network/daemon; external_write:false; no live witness serialization).
  * Ticket 13 platform seams are read-only (no harness spawn; Full only with real-machine receipt).
  * Ticket 14 Windows support remains PREVIEW without a real Windows 11 host receipt.
  * Ticket 15 Linux/WSL capability matrix is Limited/Read-only without a real-machine receipt.
+ * Ticket 17 demo is product-local: shared runDemo core only; disposable OS-temp; no network/live profile.
  */
 import fs from "node:fs";
 import { diagnose } from "../core/diagnose.js";
+import {
+  DEMO_DEFAULT_BUDGET_MS,
+  demoSkippedSteps,
+  runDemo,
+  surfaceSecurityEvidence,
+  type DemoReceipt,
+} from "../core/demo/index.js";
 import {
   applyRepair,
   previewRepair,
@@ -465,6 +474,92 @@ function scanUsageError(
 
 function isFlag(s: string): boolean {
   return s.startsWith("-");
+}
+
+/** Demo usage — never embeds paths, tokens, or live targets. Schema-valid. */
+function demoUsageError(): never {
+  const result: DemoReceipt = {
+    schema_version: 1,
+    ok: false,
+    status: "failed",
+    duration_ms: 0,
+    // Canonical 10 ordered steps (schema minItems=10), all skipped/refused.
+    steps: demoSkippedSteps("INVALID_ARGS", "refused"),
+    main: {
+      diagnose_state: null,
+      user_resolution_after_apply: null,
+      user_resolution_after_verify: null,
+      user_resolution_after_rollback: null,
+      resolved_verified: false,
+      repair_applied: false,
+      auto_rolled_back: false,
+      hash_proof: null,
+    },
+    model_refusal: {
+      refused: false,
+      reasons: [],
+      graph_unchanged: false,
+      graph_sha256: null,
+    },
+    crash_refusal: {
+      family_id: null,
+      diagnosis_state: null,
+      repair_authorization_eligible: false,
+      preview_refused: false,
+      refused_actions: [],
+      reason_codes: [],
+    },
+    network_used: false,
+    external_write: false,
+    live_profile_mutated: false,
+    // Unproven: no demo run occurred; never ok:true with empty evidence.
+    security_evidence: surfaceSecurityEvidence(),
+    cleanup: {
+      attempted: false,
+      completed: false,
+      temp_removed: false,
+    },
+    error_code: "INVALID_ARGS",
+    error_message:
+      "Usage: changeguard demo [--budget-ms=<positive-int>]. No positional targets; product-local disposable demo only.",
+  };
+  printJson(result, 2);
+}
+
+/**
+ * Parse demo CLI flags. No positionals. Optional --budget-ms=N only.
+ * Rejects unknown flags, bare --budget-ms, non-positive / non-integer budgets.
+ */
+function parseDemoArgs(
+  rest: string[],
+): { budget_ms?: number } | null {
+  let budget_ms: number | undefined;
+  for (const a of rest) {
+    if (a.startsWith("--budget-ms=")) {
+      const raw = a.slice("--budget-ms=".length);
+      if (!/^\d+$/.test(raw)) return null;
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n <= 0 || n > DEMO_DEFAULT_BUDGET_MS * 2) {
+        return null;
+      }
+      budget_ms = n;
+      continue;
+    }
+    // Reject unknown flags, bare --budget-ms, positionals, induce/target controls.
+    return null;
+  }
+  return budget_ms === undefined ? {} : { budget_ms };
+}
+
+function runDemoCli(rest: string[]): void {
+  const parsed = parseDemoArgs(rest);
+  if (!parsed) {
+    demoUsageError();
+  }
+  const receipt = runDemo(
+    parsed.budget_ms !== undefined ? { budget_ms: parsed.budget_ms } : {},
+  );
+  printJson(receipt, receipt.ok ? 0 : 1);
 }
 
 function parseHookTrust(args: string[]): HookTrustState {
@@ -1609,6 +1704,11 @@ export function runCli(argv: string[]): void {
 
     if (cmd === "platform-receipt-validate") {
       runPlatformReceiptValidate(rest);
+      return;
+    }
+
+    if (cmd === "demo") {
+      runDemoCli(rest);
       return;
     }
 

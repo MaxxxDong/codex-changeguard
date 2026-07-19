@@ -9,6 +9,11 @@
  *
  * Also enforces the public package surface: exact top-level allowlist, forbidden
  * repository-only paths, exact public docs set, and no broken local Markdown links.
+ *
+ * Ticket 17 S4: stages a self-contained install under an isolated temporary
+ * HOME/profile, runs the packaged demo from a non-repo cwd, parses DemoReceipt
+ * (10 ordered steps + security/rollback invariants), then uninstalls/removes
+ * the staged install.
  */
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -23,7 +28,9 @@ const packageDir = path.join(repoRoot, "release", "codex-changeguard-plugin");
 const ALLOWED_TOP_LEVEL = new Set([
   ".codex-plugin",
   ".mcp.json",
+  "LICENSE",
   "README.md",
+  "README.zh-CN.md",
   "bin",
   "dist",
   "docs",
@@ -43,6 +50,22 @@ const FORBIDDEN_PACKAGED_PATHS = [
   "src",
   "scripts",
   "node_modules",
+  ".git",
+  ".github",
+];
+
+/** Ordered demo steps (must match DemoReceipt / demo-receipt.schema.json). */
+const DEMO_STEP_ORDER = [
+  "isolate",
+  "diagnose_main",
+  "explain_main",
+  "preview_main",
+  "apply_main",
+  "verify_main",
+  "rollback_main",
+  "model_refuse",
+  "crash_refuse",
+  "cleanup",
 ];
 
 /** Exact public docs Markdown set for the package. */
@@ -90,11 +113,20 @@ if (JSON.stringify(top) !== JSON.stringify([...ALLOWED_TOP_LEVEL].sort())) {
 
 // Forbidden repository-only / build-only paths must not appear anywhere
 const packagedRels = [];
-walkPackageRel(packageDir, "", (rel) => {
+walkPackageRel(packageDir, "", (rel, abs, ent) => {
   packagedRels.push(rel);
   for (const forbidden of FORBIDDEN_PACKAGED_PATHS) {
     if (rel === forbidden || rel.startsWith(`${forbidden}/`)) {
       fail(`Package must not contain ${forbidden} (found ${rel})`);
+    }
+  }
+  if (ent.isFile() && (ent.name.endsWith(".map") || /\.js\.map$/.test(ent.name))) {
+    fail(`Package must not contain source maps (found ${rel})`);
+  }
+  if (ent.isFile() && (ent.name.endsWith(".js") || ent.name.endsWith(".mjs"))) {
+    const head = fs.readFileSync(abs, "utf8").slice(-400);
+    if (/sourceMappingURL\s*=/.test(head) || /sourceMappingURL\s*=/.test(fs.readFileSync(abs, "utf8"))) {
+      fail(`Package JS must not retain sourceMappingURL (found ${rel})`);
     }
   }
 });
@@ -102,6 +134,15 @@ for (const forbidden of FORBIDDEN_PACKAGED_PATHS) {
   if (fs.existsSync(path.join(packageDir, forbidden))) {
     fail(`Package must not contain ${forbidden}.`);
   }
+}
+if (!fs.existsSync(path.join(packageDir, "LICENSE"))) {
+  fail("Package missing LICENSE (MIT).");
+}
+if (!fs.existsSync(path.join(packageDir, "schemas", "demo-receipt.schema.json"))) {
+  fail("Package missing schemas/demo-receipt.schema.json");
+}
+if (!fs.existsSync(path.join(packageDir, "dist", "core", "demo", "run-demo.js"))) {
+  fail("Package missing dist/core/demo/run-demo.js (judge demo core).");
 }
 
 // Exact public docs tree (five Markdown files only; no docs/agents)
@@ -123,18 +164,53 @@ for (const name of docsEntries) {
   }
 }
 
-// Packaged README must not keep a local relative link to repository-only HANDOFF.md.
+// Packaged bilingual READMEs must not keep a local relative link to repository-only HANDOFF.md.
 // Prose may mention the name as an excluded surface; broken/missing link targets are
 // caught by the general Markdown link walk below.
 const packagedReadme = fs.readFileSync(path.join(packageDir, "README.md"), "utf8");
-if (/\[[^\]]*\]\(\s*HANDOFF\.md(?:#[^)\s]*)?\s*\)/i.test(packagedReadme)) {
-  fail("Packaged README must not contain a local link to HANDOFF.md.");
+const packagedReadmeZh = fs.readFileSync(
+  path.join(packageDir, "README.zh-CN.md"),
+  "utf8",
+);
+for (const [label, text] of [
+  ["README.md", packagedReadme],
+  ["README.zh-CN.md", packagedReadmeZh],
+]) {
+  if (/\[[^\]]*\]\(\s*HANDOFF\.md(?:#[^)\s]*)?\s*\)/i.test(text)) {
+    fail(`Packaged ${label} must not contain a local link to HANDOFF.md.`);
+  }
+}
+// Default English entry must visibly link the Chinese surface (and vice versa).
+if (!/\[README\.zh-CN\.md\]\(README\.zh-CN\.md\)/.test(packagedReadme)) {
+  fail("Packaged README.md must link to README.zh-CN.md.");
+}
+if (!/\[README\.md\]\(README\.md\)/.test(packagedReadmeZh)) {
+  fail("Packaged README.zh-CN.md must link to README.md.");
+}
+// Packaged EN/ZH key themes remain equivalent (same judge-path surface).
+for (const [label, text] of [
+  ["README.md", packagedReadme],
+  ["README.zh-CN.md", packagedReadmeZh],
+]) {
+  if (!/node bin\/changeguard\.js demo/.test(text)) {
+    fail(`Packaged ${label} must document node bin/changeguard.js demo.`);
+  }
+  if (!/Node\.js >= 20/.test(text)) {
+    fail(`Packaged ${label} must document Node.js >= 20.`);
+  }
 }
 
 // Source repo README must still keep the handoff link (package transform only).
 const sourceReadme = fs.readFileSync(path.join(repoRoot, "README.md"), "utf8");
 if (!/\[Current handoff\]\(HANDOFF\.md\)/.test(sourceReadme)) {
   fail("Source README must retain the Current handoff -> HANDOFF.md link.");
+}
+const sourceReadmeZh = fs.readFileSync(
+  path.join(repoRoot, "README.zh-CN.md"),
+  "utf8",
+);
+if (!/\[当前交接\]\(HANDOFF\.md\)/.test(sourceReadmeZh)) {
+  fail("Source README.zh-CN.md must retain the 当前交接 -> HANDOFF.md link.");
 }
 
 // Local relative Markdown links in packaged .md files must resolve to existing targets.
@@ -1157,6 +1233,328 @@ if ((hook3.stdout || "").includes(pluginData) || (hook3.stdout || "").includes(p
   fail("SessionStart must not leak plugin paths when follow-up integrated.");
 }
 
+// ---------------------------------------------------------------------------
+// Ticket 17 S4: staged clean-profile install → packaged demo → uninstall
+// ---------------------------------------------------------------------------
+// Uses only temp roots controlled by this smoke. Never mutates the real HOME,
+// real ~/.codex, LaunchAgents, or global Codex config.
+
+const stageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cg-pkg-stage-"));
+const fakeHome = path.join(stageRoot, "home");
+const installDir = path.join(
+  fakeHome,
+  ".codex",
+  "plugins",
+  "codex-changeguard-plugin",
+);
+const outsideDemoCwd = path.join(stageRoot, "outside-cwd");
+fs.mkdirSync(fakeHome, { recursive: true });
+fs.mkdirSync(outsideDemoCwd, { recursive: true });
+// Stage install: copy package tree into isolated profile-owned path.
+fs.cpSync(packageDir, installDir, { recursive: true });
+if (!fs.existsSync(path.join(installDir, "bin", "changeguard.js"))) {
+  fail("Staged install missing bin/changeguard.js");
+}
+
+// Run packaged demo from non-repo cwd against the staged install (not release/).
+const stagedDemo = spawnSync(
+  process.execPath,
+  [path.join(installDir, "bin/changeguard.js"), "demo"],
+  {
+    cwd: outsideDemoCwd,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      NO_COLOR: "1",
+      HOME: fakeHome,
+      USERPROFILE: fakeHome,
+      // Keep OS temp for demo isolation; do not point TMPDIR at live profile.
+    },
+    maxBuffer: 8 * 1024 * 1024,
+  },
+);
+if (stagedDemo.status !== 0) {
+  fail(
+    `Staged packaged demo must exit 0; status=${stagedDemo.status}\n${stagedDemo.stdout}\n${stagedDemo.stderr}`,
+  );
+}
+let demoReceipt;
+try {
+  demoReceipt = JSON.parse(stagedDemo.stdout);
+} catch {
+  fail("Staged packaged demo stdout is not JSON DemoReceipt.");
+}
+
+function assertDemoReceipt(r, label) {
+  if (!r || typeof r !== "object") fail(`${label}: receipt missing`);
+  if (r.schema_version !== 1) fail(`${label}: schema_version must be 1`);
+  if (r.ok !== true || r.status !== "completed") {
+    fail(`${label}: expected ok completed; got ok=${r.ok} status=${r.status}`);
+  }
+  if (r.network_used !== false) fail(`${label}: network_used must be false`);
+  if (r.external_write !== false) fail(`${label}: external_write must be false`);
+  if (r.live_profile_mutated !== false) {
+    fail(`${label}: live_profile_mutated must be false`);
+  }
+  // Runtime security-evidence contract (not bare constants alone).
+  if (!r.security_evidence || typeof r.security_evidence !== "object") {
+    fail(`${label}: security_evidence required`);
+  }
+  if (r.security_evidence.proven !== true) {
+    fail(`${label}: security_evidence.proven must be true on completed demo`);
+  }
+  if (r.security_evidence.network_all_false !== true) {
+    fail(`${label}: security_evidence.network_all_false must be true`);
+  }
+  if (
+    !Array.isArray(r.security_evidence.network_observations) ||
+    r.security_evidence.network_observations.length < 1
+  ) {
+    fail(`${label}: security_evidence.network_observations required`);
+  }
+  if (
+    !r.security_evidence.disposable_root ||
+    !(r.security_evidence.disposable_root.proof_count >= 1)
+  ) {
+    fail(`${label}: disposable_root.proof_count must be >= 1`);
+  }
+  if (
+    !r.security_evidence.local_only ||
+    r.security_evidence.local_only.mode !== "local_only_no_adapter" ||
+    r.security_evidence.local_only.no_external_adapter !== true ||
+    r.security_evidence.local_only.mutations_local_only !== true
+  ) {
+    fail(`${label}: local_only execution proof incomplete`);
+  }
+  if (!Array.isArray(r.steps) || r.steps.length !== 10) {
+    fail(`${label}: steps must be length 10`);
+  }
+  for (let i = 0; i < DEMO_STEP_ORDER.length; i++) {
+    const step = r.steps[i];
+    if (!step || step.id !== DEMO_STEP_ORDER[i]) {
+      fail(
+        `${label}: step[${i}] must be ${DEMO_STEP_ORDER[i]}; got ${step?.id}`,
+      );
+    }
+    if (step.status !== "pass") {
+      fail(`${label}: step ${step.id} must pass; got ${step.status}`);
+    }
+  }
+  if (!r.main || r.main.repair_applied !== true) {
+    fail(`${label}: main.repair_applied must be true on happy path`);
+  }
+  // After explicit rollback, resolved is not claimed as current state.
+  if (r.main.resolved_verified !== false) {
+    fail(`${label}: after rollback resolved_verified must be false`);
+  }
+  if (!r.main.hash_proof || r.main.hash_proof.restored !== true) {
+    fail(`${label}: hash_proof.restored must be true after rollback`);
+  }
+  if (
+    !r.main.hash_proof.original_sha256 ||
+    r.main.hash_proof.after_rollback_sha256 !== r.main.hash_proof.original_sha256
+  ) {
+    fail(`${label}: rollback must restore original_sha256`);
+  }
+  if (!r.model_refusal || r.model_refusal.refused !== true || r.model_refusal.graph_unchanged !== true) {
+    fail(`${label}: model_refusal must refuse with graph_unchanged`);
+  }
+  if (
+    !r.crash_refusal ||
+    r.crash_refusal.repair_authorization_eligible !== false ||
+    r.crash_refusal.preview_refused !== true
+  ) {
+    fail(`${label}: crash_refusal must refuse repair authorization`);
+  }
+  // Classification-bound honesty: family + refused actions must be nonempty
+  // (cannot false-green from a constant eligibility=false alone).
+  if (
+    typeof r.crash_refusal.family_id !== "string" ||
+    r.crash_refusal.family_id.length === 0
+  ) {
+    fail(`${label}: crash_refusal.family_id must be nonempty`);
+  }
+  if (
+    !Array.isArray(r.crash_refusal.refused_actions) ||
+    r.crash_refusal.refused_actions.length === 0
+  ) {
+    fail(`${label}: crash_refusal.refused_actions must be nonempty`);
+  }
+  if (
+    !Array.isArray(r.crash_refusal.reason_codes) ||
+    r.crash_refusal.reason_codes.length === 0
+  ) {
+    fail(`${label}: crash_refusal.reason_codes must be nonempty`);
+  }
+  if (
+    !r.crash_refusal.refused_actions.includes("symptom_level_patch_authorization") &&
+    !r.crash_refusal.refused_actions.includes(
+      "unverified_community_browser_crash_fix",
+    )
+  ) {
+    fail(
+      `${label}: crash_refusal.refused_actions must include a dangerous-action refusal`,
+    );
+  }
+  if (!r.cleanup || r.cleanup.completed !== true || r.cleanup.temp_removed !== true) {
+    fail(`${label}: cleanup must complete with temp_removed`);
+  }
+  // Receipt must not embed absolute paths / tokens / env dumps.
+  const ser = JSON.stringify(r);
+  if (/\/Users\/|\/home\/|\.grok-disposable|grok-worker-/.test(ser)) {
+    fail(`${label}: receipt must not leak absolute home/clone paths`);
+  }
+  if (/\bcg1\.[A-Za-z0-9_-]+/.test(ser)) {
+    fail(`${label}: receipt must not leak authorization tokens`);
+  }
+  if (ser.includes(fakeHome) || ser.includes(installDir) || ser.includes(packageDir)) {
+    fail(`${label}: receipt must not embed install/package paths`);
+  }
+}
+
+assertDemoReceipt(demoReceipt, "staged-demo");
+
+// MCP changeguard_demo from staged install package root (non-repo caller cwd).
+const stagedMcpCwd = path.resolve(installDir);
+const stagedMcpDemo = await new Promise((resolve, reject) => {
+  const child = spawn(process.execPath, ["./dist/mcp/server.js"], {
+    cwd: stagedMcpCwd,
+    stdio: ["pipe", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      NO_COLOR: "1",
+      HOME: fakeHome,
+      USERPROFILE: fakeHome,
+    },
+  });
+  let buf = "";
+  const timer = setTimeout(() => {
+    child.kill();
+    reject(new Error("Staged MCP demo timeout"));
+  }, 120000);
+  timer.unref?.();
+  child.stdout.on("data", (chunk) => {
+    buf += chunk.toString("utf8");
+    let idx;
+    while ((idx = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+      if (!line.trim()) continue;
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (msg.id === 1 && msg.result) {
+        child.stdin.write(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 2,
+            method: "tools/call",
+            params: { name: "changeguard_demo", arguments: {} },
+          }) + "\n",
+        );
+      }
+      if (msg.id === 2) {
+        clearTimeout(timer);
+        child.kill();
+        if (msg.error) {
+          reject(new Error(JSON.stringify(msg.error)));
+          return;
+        }
+        resolve(
+          msg.result?.structuredContent ??
+            JSON.parse(msg.result?.content?.[0]?.text ?? "null"),
+        );
+      }
+    }
+  });
+  child.on("error", reject);
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "package-smoke-demo", version: "0.1.0" },
+      },
+    }) + "\n",
+  );
+  child.stdin.write(
+    JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) +
+      "\n",
+  );
+});
+assertDemoReceipt(stagedMcpDemo, "staged-mcp-demo");
+
+// Uninstall: remove staged plugin tree under controlled temp home only.
+fs.rmSync(installDir, { recursive: true, force: true });
+if (fs.existsSync(installDir)) {
+  fail("Uninstall failed: staged install dir still present.");
+}
+// Residual product-owned paths under fake home must not remain.
+const residualOwned = [
+  path.join(fakeHome, ".codex", "plugins", "codex-changeguard-plugin"),
+  path.join(fakeHome, ".changeguard"),
+  path.join(fakeHome, "Library", "LaunchAgents", "com.changeguard.plist"),
+];
+for (const p of residualOwned) {
+  if (fs.existsSync(p)) {
+    fail(`After uninstall residual product path remains: ${p}`);
+  }
+}
+// Fake home must not have been used as a daemon/service staging ground.
+const launchAgents = path.join(fakeHome, "Library", "LaunchAgents");
+if (fs.existsSync(launchAgents)) {
+  const agents = fs.readdirSync(launchAgents);
+  if (agents.some((n) => /changeguard/i.test(n))) {
+    fail("Uninstall left LaunchAgent residue under isolated home.");
+  }
+}
+// Shell profile files must not have been created/edited for ChangeGuard.
+for (const name of [".bashrc", ".zshrc", ".profile", ".bash_profile"]) {
+  const p = path.join(fakeHome, name);
+  if (fs.existsSync(p)) {
+    const text = fs.readFileSync(p, "utf8");
+    if (/changeguard/i.test(text)) {
+      fail(`Shell profile under isolated home was edited: ${name}`);
+    }
+  }
+}
+// Global Codex config under isolated home must not exist or must not be
+// product-mutated (install path never writes config.toml for demo).
+const codexConfig = path.join(fakeHome, ".codex", "config.toml");
+if (fs.existsSync(codexConfig)) {
+  fail("Staged demo install must not write isolated ~/.codex/config.toml");
+}
+
+// Cleanup stage root (temp only)
+fs.rmSync(stageRoot, { recursive: true, force: true });
+// Prior outside/pluginData temps from earlier smoke sections
+try {
+  fs.rmSync(outside, { recursive: true, force: true });
+} catch {
+  /* best-effort */
+}
+try {
+  fs.rmSync(pluginData, { recursive: true, force: true });
+} catch {
+  /* best-effort */
+}
+try {
+  fs.rmSync(hookCwd, { recursive: true, force: true });
+} catch {
+  /* best-effort */
+}
+try {
+  fs.rmSync(followupStateSmoke, { recursive: true, force: true });
+} catch {
+  /* best-effort */
+}
+
 console.log(
   JSON.stringify(
     {
@@ -1175,6 +1573,8 @@ console.log(
       no_agents_md: true,
       no_handoff_md: true,
       no_docs_agents: true,
+      no_source_maps: true,
+      has_license: true,
       local_markdown_links_ok: true,
       forbidden_paths_absent: FORBIDDEN_PACKAGED_PATHS,
       session_start_entrypoint: entryRel,
@@ -1195,6 +1595,14 @@ console.log(
       ticket12_followup_cli_status: true,
       ticket12_followup_mcp_listed: true,
       ticket12_session_start_no_path_leak: true,
+      ticket17_staged_install: true,
+      ticket17_demo_from_non_repo_cwd: true,
+      ticket17_demo_receipt_ok: true,
+      ticket17_demo_steps_ordered: DEMO_STEP_ORDER,
+      ticket17_demo_security_invariants: true,
+      ticket17_demo_rollback_restored: true,
+      ticket17_mcp_demo_ok: true,
+      ticket17_uninstall_no_residual: true,
     },
     null,
     2,

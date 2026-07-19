@@ -47,9 +47,9 @@ Evidence-locked verdict + Recovery Capsule preview
 
 ### 2.1 Plugin surfaces
 
-- `skills/changeguard/`: user-facing orchestration instructions
-- `.mcp.json`: MCP server (`changeguard_diagnose`, `changeguard_impact`, `changeguard_analyze_page`, recovery tools, `changeguard_scan`, `changeguard_scan_system`, `changeguard_session_start`, `changeguard_lifecycle`, `changeguard_followup` → shared core)
-- `bin/changeguard.js` / `dist/cli/main.js`: Rescue CLI (`diagnose|impact|analyze-page|repair-*|verify|rollback|scan|scan-system|session-start|lifecycle|followup|…`)
+- `skills/changeguard/`: user-facing orchestration instructions (includes `/changeguard demo` via the shared Ticket 17 demo core)
+- `.mcp.json`: MCP server (`changeguard_diagnose`, `changeguard_impact`, `changeguard_analyze_page`, recovery tools, `changeguard_scan`, `changeguard_scan_system`, `changeguard_session_start`, `changeguard_lifecycle`, `changeguard_followup`, `changeguard_demo` → shared core)
+- `bin/changeguard.js` / `dist/cli/main.js`: Rescue CLI (`diagnose|impact|analyze-page|repair-*|verify|rollback|scan|scan-system|session-start|lifecycle|followup|demo|…`)
 - `src/core/diagnose.ts`: single shared diagnosis core used by CLI and MCP
 - `src/core/crash-family.ts`: Ticket 09 Desktop Browser crash-family classifier (deterministic gates; Fixture E)
 - `src/core/recovery/`: Ticket 02 isolated protected-process repair + Ticket 07 config set/remove + Ticket 08 plugin-cache recovery (preview/apply/verify/rollback; one engine)
@@ -64,6 +64,26 @@ Evidence-locked verdict + Recovery Capsule preview
 - `hooks/hooks.json`: optional `SessionStart` registration with `$PLUGIN_ROOT` / `%PLUGIN_ROOT%` (host must explicitly trust)
 - `schemas/`: portable contracts for fingerprints, claims, probes, recovery, and version-fingerprint state
 - lightweight inspector UI: planned only after the CLI/fixture path is verified
+
+### 2.1.1 Ticket 17 shared demo core and judge package
+
+Ticket 17 defines the competition demo and release-readiness **surface**. Shared demo core (CLI/MCP/Skill) and S4 package/profile smoke are implemented; **full product closeout** still requires independent review (do not mark Ticket 17/HANDOFF closed from package smoke alone).
+
+| Requirement | Contract |
+| --- | --- |
+| Shared demo core | One `runDemo` path used by Rescue CLI, MCP, and Skill (`node bin/changeguard.js demo` / `/changeguard demo` / `changeguard_demo`) — same cores as product diagnose/repair, not a parallel mock UI |
+| Disposable temp only | Demo targets are strict disposable temp descendants; refuse active primary Codex/Profile and protected roots; disposable proofs never hash live home/profile |
+| No network | Default production demo seams open no sockets; offline snapshot / synthetic fixtures only |
+| Security evidence | DemoReceipt includes `security_evidence`: aggregated `network_used` observations (diagnose/apply/impact/crash), disposable-root proofs at isolation/mutation boundaries, and `local_only_no_adapter` execution proof. Schema-const `network_used` / `external_write` / `live_profile_mutated` are false only after fail-closed checks; unproven evidence never yields `ok: true` |
+| Fixture copy integrity | Allowlisted fixture copy recursively refuses nested symlinks and non-regular objects before copy and verifies the destination tree |
+| Schema-valid public receipts | Every public demo response (including CLI `INVALID_ARGS`) has the canonical 10 ordered steps and validates against `schemas/demo-receipt.schema.json` |
+| Rollback + cleanup | Authorized isolated repair demos must verify and roll back; temp state cleaned without leaving a daemon |
+| CLI/MCP equivalence | Demo-visible stable fields match across CLI and MCP for the same core outcomes |
+| Clean-profile uninstall smoke | `npm run package:clean-profile` — isolated temp HOME only; no daemon, LaunchAgent/service, shell-profile edit, global Codex config edit, credential requirement, or product-owned residue |
+| Packaged judge path | `npm run package` → self-contained tree (+ portable `.tgz`); Node >= 20; no on-host product rebuild, GitHub login, API key, or network; no source maps / `node_modules` / repo-only surfaces |
+| Local readiness | `npm run ready:local` aggregates package structure, package demo smoke, clean-profile smoke, docs/legal/parity, boundary, tests, `verify:release`, and `git diff --check` — **local only** |
+
+Local gate `npm run verify:release` / `ready:local` measures automated readiness only; Gate C external actions remain separate (repository `docs/RELEASE_CHECKLIST.md`, not part of the five packaged public docs).
 
 ### 2.2 Ticket 01 read-only diagnosis spine
 
@@ -89,7 +109,7 @@ Core I/O rules:
 - surface / error class / failure phase remain applicability gates after independent measurements
 - MCP stdio uses a bounded byte-oriented NDJSON frame accumulator; frames with byte length `<= MAX_MCP_REQUEST_BYTES` are accepted, only `>` the limit is rejected, before `JSON.parse`
 - Scenario Harness owns whole-target before/after hashing, not the diagnosis core
-- Packaging: `npm run package` builds `release/codex-changeguard-plugin/` with exact public top-level surface (`.codex-plugin`, `.mcp.json`, `README.md`, `bin`, `dist`, `docs`, `fixtures`, `hooks`, `package.json`, `schemas`, `skills`); public `docs/` is only `ARCHITECTURE.md`, `SECURITY.md`, `SUPPORT_MATRIX.md`, `TEST_PLAN.md`, and `CASE_STUDIES.md` (no `docs/agents`); packaged `README.md` omits the repository-only `HANDOFF.md` link; no `node_modules`, `AGENTS.md`, `HANDOFF.md`, `src`, or `scripts`. Package smoke launches MCP via packaged `.mcp.json` and fails on broken local Markdown links or forbidden packaged paths. A clean source checkout is not claimed runnable before `npm ci && npm run build` (or package).
+- Packaging: `npm run package` builds `release/codex-changeguard-plugin/` (+ portable `release/codex-changeguard-plugin.tgz`) with exact public top-level surface (`.codex-plugin`, `.mcp.json`, `LICENSE`, `README.md`, `README.zh-CN.md`, `bin`, `dist`, `docs`, `fixtures`, `hooks`, `package.json`, `schemas`, `skills`); public `docs/` is only `ARCHITECTURE.md`, `SECURITY.md`, `SUPPORT_MATRIX.md`, `TEST_PLAN.md`, and `CASE_STUDIES.md` (no `docs/agents`); packaged `README.md` / `README.zh-CN.md` omit repository-only `HANDOFF.md` links and keep mutual language links; no `node_modules`, source maps, `AGENTS.md`, `HANDOFF.md`, `src`, or `scripts`. Package smoke stages an isolated install, runs packaged `demo` from a non-repo cwd, checks DemoReceipt invariants, uninstalls, and launches MCP via packaged `.mcp.json`. Clean-profile residual smoke: `npm run package:clean-profile`. Local readiness: `npm run ready:local`. A clean source checkout is not claimed runnable before `npm ci && npm run build` (or package).
 
 ### 2.3 Ticket 02 protected-process verified repair (isolated target)
 
@@ -655,7 +675,8 @@ Schema: `schemas/followup-result.schema.json`. Capsule/reply draft remain `previ
 - Fixtures A and D, including negative control
 - Fixture E crash-family classifier, Fixture F plugin-cache mechanisms, and Fixture G evidence-boundary case
 - disclosure manifest and repro-pack export
-- English README, install/platform/judge instructions, live fixture path, tests
+- English + Chinese README parity, install/platform/judge instructions, live fixture path, tests
+- Ticket 17 shared demo core, disposable-temp demo, no-network default, rollback/cleanup, CLI/MCP equivalence, clean-profile uninstall smoke, packaged judge path, and `ready:local` aggregator (S4 local evidence; full closeout needs independent review — see §2.1.1)
 
 ### Should
 

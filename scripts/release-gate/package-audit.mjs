@@ -22,7 +22,9 @@ import path from "node:path";
 export const PACKAGE_TOP_LEVEL_ALLOWLIST = Object.freeze([
   ".codex-plugin",
   ".mcp.json",
+  "LICENSE",
   "README.md",
+  "README.zh-CN.md",
   "bin",
   "dist",
   "docs",
@@ -41,6 +43,8 @@ export const PACKAGE_FORBIDDEN_PATHS = Object.freeze([
   "src",
   "scripts",
   "node_modules",
+  ".git",
+  ".github",
 ]);
 
 /** Executable-ish extensions under the package (capability scan). */
@@ -173,10 +177,19 @@ export function checkPackageAudit(repoRoot, opts = {}) {
           errors.push(`forbidden_path:${rel}`);
         }
       }
+      // Source maps leak local source paths — never ship in the judge package.
+      if (ent.isFile() && (ent.name.endsWith(".map") || /\.js\.map$/.test(ent.name))) {
+        errors.push(`source_map:${rel}`);
+      }
       if (ent.isFile()) {
         auditFile(rel, abs, errors, readFileUtf8);
       }
     });
+
+    // LICENSE must be present for MIT distribution readiness of the package tree.
+    if (!fs.existsSync(path.join(packageDir, "LICENSE"))) {
+      errors.push("license_missing");
+    }
 
     if (fs.existsSync(path.join(packageDir, "node_modules"))) {
       errors.push("node_modules_present");

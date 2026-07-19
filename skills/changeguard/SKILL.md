@@ -285,6 +285,46 @@ Closed operations: `subscribe` | `unsubscribe` | `status` | `session_hint` | `re
 4. For candidate fixes: isolated baseline + candidate roots, closed profile, official digest/ref; measure before any upgrade guidance.
 5. Never claim supersession from booleans/JSON alone.
 
+## Ticket 17 — deterministic product-local demo (judge path)
+
+### Public seams (same shared demo core)
+
+1. Rescue CLI: `changeguard demo [--budget-ms=<positive-int>]`
+   - repository wrapper: `node bin/changeguard.js demo`
+   - default: no arguments; deterministic run
+2. MCP tool: `changeguard_demo` with optional `{ "budget_ms"?: <positive-int> }` only (`additionalProperties: false`)
+3. Skill surface: `/changeguard demo`
+
+Both CLI and MCP call the **exact same** product-local `runDemo()` orchestrator (no duplicated diagnosis/repair logic, no shell workaround, no second heuristic). Output is one structured `DemoReceipt` JSON. CLI exit code is **0 iff `receipt.ok`** (`ok === (status === "completed")`); MCP sets `isError: !receipt.ok` with the same structured content conventions as other tools.
+
+### Orchestration steps for `/changeguard demo` (judge flow)
+
+1. Invoke CLI `demo` or MCP `changeguard_demo` — do **not** reimplement the story in the Skill, shell, or ad-hoc scripts.
+2. The shared core (deterministic, **no model**, **no network**):
+   - isolates a **disposable-only** OS-temp child (strict proven temp; never live `~/.codex` / live profile / global config)
+   - copies allowlisted synthetic fixtures only
+   - diagnose → structured explain → repair preview → apply (one-shot authorization held in memory only) → verify → explicit rollback of the main protected-process path
+   - proves model-edge graph mutation is **refused** (graph unchanged)
+   - proves crash-family path is **repair-authorization ineligible** and preview **refused**
+   - always attempts cleanup; owned demo temp is removed (`cleanup.temp_removed`)
+3. Present the receipt fields a judge needs:
+   - `ok` / `status` and ordered `steps` outcomes (always 10 canonical steps; surface errors mark steps skipped/refused)
+   - security booleans: `network_used`, `external_write`, `live_profile_mutated` (const false only after fail-closed runtime checks)
+   - `security_evidence` (network observations, disposable-root proofs, `local_only_no_adapter`; `proven` required for `ok: true`)
+   - main lifecycle + hash proof aliases (no absolute paths)
+   - `model_refusal` and `crash_refusal`
+   - `cleanup`
+4. Optional bounded `--budget-ms` / `budget_ms` only; reject unknown or invalid args without running side-effecting demo work when parse fails closed at the surface.
+5. Never expose live target path controls, induce-verify toggles, raw tokens, env values, source bytes, or session text on this surface.
+
+### Forbidden in Ticket 17 demo Skill path
+
+- shell workarounds or a second diagnosis/repair implementation outside CLI/MCP `runDemo`
+- caller-supplied live install paths, profile roots, or global config mutation
+- network, GitHub login, API keys, or external write on the default judge path
+- claiming publication, registration, competition submission, or Gate C completion from a local demo receipt
+- treating induced internal-test failure seams as public surface controls
+
 ## Planned commands
 
 - `/changeguard scan`: compare installed and last-seen Codex fingerprints via the shared instance core (Ticket 03)
@@ -294,8 +334,9 @@ Closed operations: `subscribe` | `unsubscribe` | `status` | `session_hint` | `re
 - `/changeguard upstream-preview`: local-only Upstream Submission Capsule (Ticket 10)
 - `/changeguard upstream-action-preview` / `upstream-action-confirm`: Ticket 11 confirmed actions (adapter-gated; production default unavailable)
 - `/changeguard followup`: Ticket 12 maintainer follow-up / candidate validation (local-only)
+- `/changeguard demo`: Ticket 17 deterministic product-local judge demo (shared `runDemo`; disposable-only)
 - `/changeguard repro-pack`: show the disclosure manifest and export a redacted evidence package after confirmation
 - `/changeguard recovery-preview` / repair-preview: build a Repair Capsule (Ticket 02 protected-process; Ticket 07 config set/remove; Ticket 08 plugin-cache)
 - `/changeguard verify` / `/changeguard rollback`: recovery seams (Tickets 02 / 07 / 08)
 
-This Skill freezes the safety contract and routes diagnosis/repair/scan/impact/page/upstream-preview/upstream-action through the shared core only.
+This Skill freezes the safety contract and routes diagnosis/repair/scan/impact/page/upstream-preview/upstream-action/demo through the shared core only.

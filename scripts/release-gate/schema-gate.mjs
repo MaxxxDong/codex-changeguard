@@ -18,6 +18,7 @@ export const REQUIRED_SCHEMAS = Object.freeze([
   "platform-support-receipt.schema.json",
   "platform-capability.schema.json",
   "it-handoff.schema.json",
+  "demo-receipt.schema.json",
 ]);
 
 /** Fixture files that must exist as binding evidence for schema surface. */

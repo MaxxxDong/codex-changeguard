@@ -19,6 +19,7 @@ This document owns the ChangeGuard verification matrix. Passing a model-generate
 | Hooks / instances (Ticket 03) | first baseline, unchanged silent SessionStart, multi-instance upgrade, downgrade, PATH precedence drift, actual-instance evidence, ambiguous repair refusal, hook untrusted/skipped/failed, manual scan fallback, CLI/MCP scan equivalence, SessionStart changed/no-change duration &lt;10s, raw-path non-disclosure, symlink state refusal |
 | Platform macOS (Ticket 13) | adapter alias/operation/constraint contracts; isolation refuses active `~/.codex` and protected roots; receipt validator Full-only-with-proof + leak refusal; CLI/MCP `platform-status` / `platform-receipt-validate`; real-machine harness on darwin covers core diagnose, multi-instance, config repair, auto-rollback, explicit rollback, plugin-cache repair/rollback, KNOWN_GOOD/canary, privacy refuse, upstream zero-network, package smoke; support matrix docs |
 | Judge path | clean install; no judge API key; live matcher/probe; offline snapshot; visible evidence state; under 90 seconds |
+| Demo / Ticket 17 (S4 package/profile) | shared demo core (CLI/MCP/Skill); disposable temp only; no network default; rollback + cleanup; CLI/MCP equivalence; clean-profile install/uninstall residual smoke (`npm run package:clean-profile`); packaged prebuilt path Node >= 20 without on-host rebuild; package smoke stages install and runs `demo` from non-repo cwd; local readiness aggregator `npm run ready:local` — **S4 evidence local; full Ticket 17 closeout still needs independent review** |
 
 ## Fixture expectations
 
@@ -214,7 +215,7 @@ Mandatory cases (implemented in `tests/scenario-harness.test.ts`):
 - fixture metadata: artifact bytes, `.hash.txt`, incident declared hash, recovery original hash agree; incident `local_facts_digest` equals core recomputation
 - no absolute disposable path or raw exception leak on public stdout
 - production-boundary guard self-tests on synthetic snippets (default/fs.promises non-read-only methods under a read-only allowlist policy, descriptor write/truncate/createWriteStream, mkdtemp/lchown/lchmod and unknown-future-API fail-closed, require/dynamic-import/`node:module`/`createRequire` loader prohibition, static `process`/`node:process` import and re-export prohibition at the module-policy layer (default/namespace/named import forms plus bare `process` and re-export controls) with opposite safe global-`process` control (`process.argv`/`process.cwd`/`process.env.NODE_ENV`/`globalThis.process.argv` without any `node:process` import), receiver wrappers `as`/non-null/comma-sequence, proven `node:fs` namespace **value-escape** closure — namespace may not escape via simple/chained alias (including former “safe” read-only alias open forms), Proxy, object spread, `Object.create`, `Object.assign`, container/shorthand store, return, pass, or nested `fs.promises` escape while direct `fs.promises.readFile` and named static read-only method imports remain allowed — plus destructured mutation/`open`/object-rest capability extracts including chained/renamed forms, capability-reference bypasses — value pass, `Reflect.apply`, comma-sequence call, `.bind`, callback supply, array/object storage, and bare `open`/`openSync` references or named imports — conditional open flags with proven `fs.constants` provenance including fake-object / unknown-parameter / object-literal `O_RDONLY` bypasses, parameter and nested-local shadowing of imported `fs` / `constants` aliases, and real unshadowed `fsConstants.O_RDONLY | O_NOFOLLOW` / `fs.constants.O_RDONLY` direct-namespace read-only open allowances with direct calls only, indirect eval/Function acquisition and sequence use, network globals `fetch`/`WebSocket`/`XMLHttpRequest` as capability references including alias/pass/`Reflect.apply`/sequence/construct-through-alias and `globalThis`/`global`/`window` member plus static-string element forms, process native-loader surfaces `dlopen`/`binding`/`getBuiltinModule`/`_linkedBinding`/`mainModule` as property references or calls on proven `process`/alias/`globalThis.process` roots with dynamic-key fail-closed, process object value-escape closure — whole-`process` must not escape via destructure (including `getBuiltinModule` extract and rest), `Proxy`, object spread, `Object.create`, simple/chained alias, return, pass, or array/object container forms — opposite safe controls for direct `process.argv`/`process.cwd`/`process.env`/`process.env.NODE_ENV`/`process.stdout.write`/`globalThis.process.argv` and static ESM read-only `fs.openSync`, CommonJS `module` and global `Reflect` host/meta capability prohibition, computed/reflective require loaders (`module["require"]`, `process["mainModule"]["require"]`, mainModule alias + computed require, `Reflect.get(module|process.mainModule, "require")`, any-receiver static terminal `require` property/element access) with opposite safe `frame.module` property-name control, and existing `require` alias/`module.require`/`process.mainModule.require`/`require.main.require` controls) plus production graph scan that follows relative static ESM re-exports (graph-closure self-test for a hidden mutator reached only via `export … from`)
-- package smoke: `npm run package` then `npm run package:smoke` from a non-repo cwd; smoke reads packaged `.mcp.json`, enforces exact top-level allowlist, exact public docs set (`ARCHITECTURE.md`/`SECURITY.md`/`SUPPORT_MATRIX.md`/`TEST_PLAN.md`/`CASE_STUDIES.md` only), no broken local Markdown links, and no repository-only paths (`AGENTS.md`/`HANDOFF.md`/`docs/agents`/`src`/`scripts`/`node_modules`/`.scratch`)
+- package smoke: `npm run package` then `npm run package:smoke` from a non-repo cwd; smoke reads packaged `.mcp.json`, enforces exact top-level allowlist (includes bilingual `README.md` + `README.zh-CN.md`), exact public docs set (`ARCHITECTURE.md`/`SECURITY.md`/`SUPPORT_MATRIX.md`/`TEST_PLAN.md`/`CASE_STUDIES.md` only), no broken local Markdown links, and no repository-only paths (`AGENTS.md`/`HANDOFF.md`/`docs/agents`/`src`/`scripts`/`node_modules`/`.scratch`)
 
 ## Ticket 03 Scenario Harness
 
@@ -432,6 +433,27 @@ Additional static checks remain:
 - fixture validation against schemas
 - Markdown link/path verification
 - clean Git status after a verified checkpoint
+
+## Ticket 17 — competition demo and release-readiness surface
+
+Ticket 17 is **not** claimed product-complete by the S4 package/profile slice alone (independent review still owns closeout). Local verification themes:
+
+| Theme | Required evidence |
+| --- | --- |
+| Shared demo core | `/changeguard demo` and `node bin/changeguard.js demo` exercise real fixture/probe path via the same cores as product CLI/MCP — not a static page (`tests/ticket17-demo-*.test.ts`) |
+| Disposable temp | Demo targets refuse active `~/.codex` / primary profile; only strict temp descendants mutate; proofs never hash live home/profile |
+| No network | Default demo/diagnose production seams: `network_used: false` derived from aggregated seam observations in `security_evidence`; no sockets; no judge API key; no GitHub login |
+| Security evidence | Completed demos require `security_evidence.proven`; network observations from diagnose/apply/impact/crash; disposable-root proofs; `local_only_no_adapter`; unproven evidence ⇒ `ok: false` |
+| Nested symlink refuse | Allowlisted fixture copy recursively refuses nested symlinks / non-regular objects (source + dest); synthetic nested-symlink tests (`tests/ticket17-demo-core.test.ts`) |
+| Schema-valid errors | CLI `INVALID_ARGS` and all public demo receipts satisfy `schemas/demo-receipt.schema.json` including `steps.minItems=10` (schema-level test, not length-only) |
+| Rollback + cleanup | Isolated repair demo path: backup → apply → verify → rollback/cleanup; failed verify cannot claim `RESOLVED_VERIFIED` |
+| CLI/MCP equivalence | Stable-field match for demo-visible diagnose/repair outcomes |
+| Clean-profile uninstall | `npm run package:clean-profile`: isolated temp HOME only; after uninstall no daemon, LaunchAgent/service, shell-profile edit, global Codex config edit, credential requirement, background process, or product-owned residue |
+| Packaged judge path | `npm run package` → self-contained tree (+ `.tgz`); `npm run package:smoke` stages install, runs packaged `demo` from non-repo cwd, checks 10 ordered steps + security_evidence + rollback invariants, uninstalls |
+| Local readiness aggregator | `npm run ready:local` — package structure, package smoke, clean-profile smoke, docs/legal/parity, boundary, tests, `verify:release`, `git diff --check`; **local only** (no remote/Gate C) |
+| Local vs Gate C | `npm run verify:release` / `ready:local` = local automated readiness only; public remote / Release / registration / upload / submission remain Gate C / `NOT_STARTED` |
+
+Do not mark Ticket 17 / HANDOFF closed from package smoke alone.
 
 ## Ticket 12 — maintainer follow-up / upstream fix
 

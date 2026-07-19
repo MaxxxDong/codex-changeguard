@@ -1,0 +1,316 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://changeguard.local/schemas/demo-receipt.schema.json",
+  "title": "DemoReceipt",
+  "description": "Ticket 17 deterministic demo receipt. Path aliases and digests only; no absolute paths, raw authorization tokens, environment values, source code, or session text. Product-local security booleans (network_used, external_write, live_profile_mutated) are const false only after fail-closed runtime security_evidence is proven; missing evidence never yields ok:true.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "ok",
+    "status",
+    "duration_ms",
+    "steps",
+    "main",
+    "model_refusal",
+    "crash_refusal",
+    "network_used",
+    "external_write",
+    "live_profile_mutated",
+    "security_evidence",
+    "cleanup",
+    "error_code",
+    "error_message"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "ok": {
+      "type": "boolean",
+      "description": "Surface success contract: true iff status === completed; fail/refuse/partial/budget receipts are false."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["completed", "failed", "refused", "partial", "budget_exceeded"]
+    },
+    "duration_ms": { "type": "integer", "minimum": 0, "maximum": 600000 },
+    "steps": {
+      "type": "array",
+      "minItems": 10,
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "reason_code", "duration_ms"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": [
+              "isolate",
+              "diagnose_main",
+              "explain_main",
+              "preview_main",
+              "apply_main",
+              "verify_main",
+              "rollback_main",
+              "model_refuse",
+              "crash_refuse",
+              "cleanup"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pass", "fail", "skip", "refused"]
+          },
+          "reason_code": {
+            "oneOf": [
+              { "type": "null" },
+              { "type": "string", "minLength": 1, "maxLength": 128 }
+            ]
+          },
+          "duration_ms": { "type": "integer", "minimum": 0, "maximum": 600000 }
+        }
+      }
+    },
+    "main": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "diagnose_state",
+        "user_resolution_after_apply",
+        "user_resolution_after_verify",
+        "user_resolution_after_rollback",
+        "resolved_verified",
+        "repair_applied",
+        "auto_rolled_back",
+        "hash_proof"
+      ],
+      "properties": {
+        "diagnose_state": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "minLength": 1, "maxLength": 64 }
+          ]
+        },
+        "user_resolution_after_apply": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "minLength": 1, "maxLength": 64 }
+          ]
+        },
+        "user_resolution_after_verify": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "minLength": 1, "maxLength": 64 }
+          ]
+        },
+        "user_resolution_after_rollback": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "minLength": 1, "maxLength": 64 }
+          ]
+        },
+        "resolved_verified": { "type": "boolean" },
+        "repair_applied": { "type": "boolean" },
+        "auto_rolled_back": { "type": "boolean" },
+        "hash_proof": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path_alias",
+                "original_sha256",
+                "after_apply_sha256",
+                "after_rollback_sha256",
+                "restored"
+              ],
+              "properties": {
+                "path_alias": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "original_sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "after_apply_sha256": {
+                  "oneOf": [
+                    { "type": "null" },
+                    { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+                  ]
+                },
+                "after_rollback_sha256": {
+                  "oneOf": [
+                    { "type": "null" },
+                    { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+                  ]
+                },
+                "restored": { "type": "boolean" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "model_refusal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["refused", "reasons", "graph_unchanged", "graph_sha256"],
+      "properties": {
+        "refused": { "type": "boolean" },
+        "reasons": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+        },
+        "graph_unchanged": { "type": "boolean" },
+        "graph_sha256": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+          ]
+        }
+      }
+    },
+    "crash_refusal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family_id",
+        "diagnosis_state",
+        "repair_authorization_eligible",
+        "preview_refused",
+        "refused_actions",
+        "reason_codes"
+      ],
+      "properties": {
+        "family_id": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "minLength": 1, "maxLength": 128 }
+          ]
+        },
+        "diagnosis_state": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "minLength": 1, "maxLength": 64 }
+          ]
+        },
+        "repair_authorization_eligible": { "type": "boolean" },
+        "preview_refused": { "type": "boolean" },
+        "refused_actions": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+        },
+        "reason_codes": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+        }
+      }
+    },
+    "network_used": { "const": false },
+    "external_write": { "const": false },
+    "live_profile_mutated": { "const": false },
+    "security_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Runtime measurements and proofs establishing the three public security booleans. proven must be true for ok:true.",
+      "required": [
+        "schema_version",
+        "network_observations",
+        "network_all_false",
+        "disposable_root",
+        "local_only",
+        "proven"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "network_observations": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["seam", "network_used", "value_valid"],
+            "properties": {
+              "seam": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9_]{0,63}$"
+              },
+              "network_used": { "type": "boolean" },
+              "value_valid": {
+                "type": "boolean",
+                "description": "True only when the runtime observation was strictly boolean true or false. Malformed/missing values set false and force network_all_false/proven closed."
+              }
+            }
+          }
+        },
+        "network_all_false": { "type": "boolean" },
+        "disposable_root": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["proof_count", "reason_codes"],
+          "properties": {
+            "proof_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 64
+            },
+            "reason_codes": {
+              "type": "array",
+              "maxItems": 32,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              }
+            }
+          }
+        },
+        "local_only": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "no_external_adapter",
+            "mutations_local_only"
+          ],
+          "properties": {
+            "mode": { "const": "local_only_no_adapter" },
+            "no_external_adapter": { "const": true },
+            "mutations_local_only": { "type": "boolean" }
+          }
+        },
+        "proven": { "type": "boolean" }
+      }
+    },
+    "cleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempted", "completed", "temp_removed"],
+      "properties": {
+        "attempted": { "type": "boolean" },
+        "completed": { "type": "boolean" },
+        "temp_removed": { "type": "boolean" }
+      }
+    },
+    "error_code": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "minLength": 1, "maxLength": 128 }
+      ]
+    },
+    "error_message": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "minLength": 1, "maxLength": 512 }
+      ]
+    }
+  }
+}

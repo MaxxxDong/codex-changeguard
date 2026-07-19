@@ -1,54 +1,89 @@
 # Codex ChangeGuard
 
-Codex ChangeGuard is an evidence-bound Codex Plugin for update impact analysis, incident localization, and reversible recovery planning.
-
-It is designed around one rule:
+Evidence-bound Codex Plugin for update impact analysis, incident localization, and reversible recovery planning. **Unofficial community project — not an OpenAI product, official support channel, or certification.**
 
 > Models may propose hypotheses; deterministic probes adjudicate facts.
 
-ChangeGuard is not a generic changelog summarizer, Issue chatbot, environment doctor, or automatic community-patch installer. It maps official Codex changes to redacted local facts, assigns explicit evidence levels, and refuses false precision when an Issue cannot be confirmed locally.
+| Language | Entry |
+| --- | --- |
+| English | this file (`README.md`) — default package entry |
+| 中文 | [README.zh-CN.md](README.zh-CN.md) — packaged bilingual surface (same public themes) |
 
-## Current status
+## 1. Product and disclaimer
 
-- Competition: OpenAI Build Week 2026
-- Track: `track-openai-build-week-codex-changeguard-20260717`
-- Gate B: approved, option A
-- Integrated HEAD (Wave 4 closeout tip): `407789c` — Root evidence: `npm test` 390/390; typecheck; production boundary; boundary self-test 175/175; package + package:smoke; real macOS Full harness on this host (details in [HANDOFF.md](HANDOFF.md))
-- Tickets 01–04: `LOCAL_COMPLETE` on integrated commit `c20ddc5` (Ticket 01 first closed on `d7d917b`; Wave 2 tip `c20ddc5`)
-- Tickets 05–09: `LOCAL_COMPLETE` on integrated HEAD `5aa12c6` (Wave 3 tip; Root full regression 212/212; final review `changeguard-wave3-final-review-r2` → `NO_P0_P1`)
-- Ticket 10: `LOCAL_COMPLETE` on integrated HEAD `3265acd` (commits `0829936` → `7ef87e6` → `26d58b4` → `3265acd`; Root full regression 260/260; final static review `changeguard-ticket10-regression-review-r7` → `NO_P0_P1`, empty patch)
-- Tickets 11 / 13 / 14 / 15: Wave 4 integrated on `407789c` — see per-ticket rows below and [HANDOFF.md](HANDOFF.md) § Wave 4 closeout
-- Ticket 12: `LOCAL_COMPLETE` on clean commit `6083c6f` (Root: typecheck/build; Ticket 06+12 targeted 99/99; boundary + self-test 175/175; package + package:smoke; Ticket 13 rerun 35/35 after one recorded transient; full regression 474/474; final static reviews `changeguard-ticket12-final-spec-review-r5` + `changeguard-ticket12-final-security-review-r5` → `ACCEPT` / no P0/P1)
-- Broader product: still `IN_PROGRESS` (Ticket **16** is a **review-ready candidate** only — not `LOCAL_COMPLETE`; Ticket **17** not complete; Ticket 14 platform Full and Ticket 15 real-host Full remain open). Canonical release gate: `npm run verify:release` (see [docs/TEST_PLAN.md](docs/TEST_PLAN.md) Ticket 16 section).
-- Platform claims (canonical matrix: [docs/SUPPORT_MATRIX.md](docs/SUPPORT_MATRIX.md)):
-  - **macOS:** receipt-scoped **Full** on this host after Ticket 13 real-machine Scenario Harness (`support_level=full`, live witness, all required scenarios pass). Full is **not** universal for every macOS/Codex version; external JSON alone is at most Preview
-  - **Windows 11:** Ticket 14 framework integrated; platform remains **Preview** until a real Windows 11 host covers W11-S01…S11 **and** seals a process-local live witness (external JSON cannot Full)
-  - **Linux / WSL:** Ticket 15 framework integrated; platform remains **Limited / Read-only** without a real host receipt (writes fail closed; synthetic capability cannot Full)
-  - Ticket 06 CLI/Desktop **version** rollback stays `preview_only` / Desktop may be `limited`
-- Ticket 10 residual: upstream capsules stay `preview_only` / `local_only` / `external_write: false`; immutable form snapshot date/commit/blob provenance recorded in [HANDOFF.md](HANDOFF.md)
-- Ticket 11: local confirmation/action engine `LOCAL_COMPLETE`; separate `upstream-action-preview` / `upstream-action-confirm` (CLI + MCP) with capability-injected adapter; **production default is `ADAPTER_UNAVAILABLE`** and never simulates success or real GitHub/browser writes. No external submission claimed.
-- Ticket 13: `LOCAL_COMPLETE` with macOS adapter/harness/receipt schema and current real-machine Full evidence on this host (receipt-scoped).
-- Ticket 14: Windows adapter + receipt evaluation integrated under `src/instances/windows/` + `src/platform/windows/`. **Windows support remains PREVIEW**; no real Windows 11 receipt; no Full / published / submitted claim.
-- Ticket 15: Linux/WSL/enterprise matrix integrated; **Limited / Read-only** without real host receipt.
-- Registration and external submission: `NOT_STARTED`; Gate C not authorized; no public publication, upload, or real external GitHub writes
-- Exact local-verification evidence: [HANDOFF.md](HANDOFF.md)
+ChangeGuard maps official Codex changes to redacted local facts, assigns explicit evidence levels, and refuses false precision when an Issue cannot be confirmed locally. It is not a generic changelog summarizer, Issue chatbot, environment doctor, or automatic community-patch installer.
 
-## Start here
+ChangeGuard is independent of OpenAI. Names, branding, and docs must not imply official ownership or endorsement.
 
-- [Architecture and evidence contracts](docs/ARCHITECTURE.md)
-- [Security and privacy boundary](docs/SECURITY.md)
-- [Verification and adversarial test plan](docs/TEST_PLAN.md)
-- [Real-world diagnosis case studies](docs/CASE_STUDIES.md)
-- [Platform support matrix](docs/SUPPORT_MATRIX.md)
-- [Current handoff](HANDOFF.md)
-- [Plugin manifest](.codex-plugin/plugin.json)
-- [Schemas](schemas/)
-- [Synthetic fixtures](fixtures/)
+## 2. Five-minute judge path (prebuilt package)
 
-## Public surfaces (Tickets 01–15)
+**Packaged judge path (Ticket 17):** from a prebuilt plugin package and **Node.js >= 20**, a judge can run a live demo without building the repository, signing into GitHub, or supplying an API key. No network is required on the default path.
 
-Rescue CLI and MCP share the same cores. A clean source checkout is not runnable
-until dependencies are installed and the project is built (or packaged):
+| Step | Expectation |
+| --- | --- |
+| Runtime | Node.js >= 20 only |
+| Artifact | Prebuilt / packaged plugin tree (not a bare source checkout) |
+| Build | **Not** required for the packaged judge path |
+| GitHub login | **Not** required |
+| API key | **Not** required |
+| Network | **Not** required on the default demo path |
+
+**How to obtain the package (maintainer / candidate builder)**
+
+```bash
+# Inside a developer checkout (build once to produce the artifact):
+npm ci
+npm run package
+# → release/codex-changeguard-plugin/  (self-contained tree)
+# → release/codex-changeguard-plugin.tgz  (portable archive)
+```
+
+**How a judge runs it (no repo, no TypeScript, no GitHub, no API key)**
+
+```bash
+# Unpack the prebuilt tree (or the .tgz) to any directory, then:
+cd /path/to/codex-changeguard-plugin
+node bin/changeguard.js demo
+# Skill surface (when the host Skill is installed): /changeguard demo
+# MCP: changeguard_demo (optional budget_ms only)
+```
+
+**Important — source checkout vs package**
+
+- The **packaged** tree is no-build runnable for `demo` with Node.js >= 20 only.
+- A **source checkout** still needs `npm ci` and `npm run build` (or `npm run package`) before CLI/MCP work.
+- The package includes compiled JS, fixtures, schemas, Skill, public docs, and MIT `LICENSE` only — no `src/`, no `node_modules`, no source maps, no Git metadata.
+
+## 3. `/changeguard demo` story and boundaries
+
+The demo story (flagship protected-process fixture path; shared `runDemo` core):
+
+1. Isolate allowlisted synthetic fixtures under a **disposable** OS-temp child (never live `~/.codex`).
+2. Diagnose → explain structured evidence → repair preview → apply → verify → explicit rollback.
+3. Prove a model-edge graph mutation is **refused** (graph unchanged).
+4. Prove a crash-family path is **repair-authorization ineligible** and preview **refused**.
+5. Cleanup removes demo-owned temp; receipt is path-alias / digest only.
+
+Hard boundaries for the demo and product judge path:
+
+| Boundary | Rule |
+| --- | --- |
+| Deterministic adjudication | Models may propose; registered probes and fixtures decide facts |
+| Non-model core | Public CLI and MCP share the same non-model diagnosis/recovery cores |
+| No network | Production demo / diagnose seams do not open sockets; offline snapshot evidence only unless a separate disclosure + injected transport exists (not on the default judge path) |
+| No live Codex install mutation | Never patch the judge’s active primary Codex/Profile; disposable temp targets only |
+| no daemon | No background agent, continuous logger, or install-time service |
+
+## 4. Developer install vs packaged judge install
+
+### Packaged judge install (evaluation)
+
+1. Obtain a **prebuilt** plugin package (`npm run package` → `release/codex-changeguard-plugin/` or the portable `.tgz`, or an authorized distribution artifact when Gate C allows).
+2. Ensure Node.js >= 20.
+3. From the package directory (any non-repo cwd): `node bin/changeguard.js demo` (Skill: `/changeguard demo`; MCP: `changeguard_demo`).
+4. Do not require repository clone, TypeScript build, GitHub auth, model API keys, or network for that path.
+
+### Developer source install
 
 ```bash
 npm ci
@@ -57,213 +92,128 @@ npm test
 npm run check:boundary
 npm run package
 npm run package:smoke
+npm run package:clean-profile
+npm run ready:local
 npm run verify:release
+node bin/changeguard.js demo
 node bin/changeguard.js diagnose fixtures/protected-process
 node bin/changeguard.js diagnose fixtures/negative-control
-node bin/changeguard.js diagnose fixtures/crash-family/access-violation-crbrowser
-node bin/changeguard.js analyze-page fixtures/protected-process --envelope=fixtures/page-evidence/valid-protected-process.json --disclose-refused
-node bin/changeguard.js upstream-preview fixtures/protected-process --request=fixtures/upstream/request-new-incident-cli.json --disclose-refused
 ```
+
+A clean source checkout is **not** claimed runnable before `npm ci && npm run build` (or `npm run package`).
 
 Implemented public commands (repository wrapper: `node bin/changeguard.js …`):
 
 | Area | CLI | MCP |
 | --- | --- | --- |
-| Diagnose (Ticket 01) | `changeguard diagnose <target>` | `changeguard_diagnose` |
-| Impact Card (Ticket 04) | `changeguard impact <target> [--disclose-approved\|--disclose-refused]` | `changeguard_impact` |
-| Page analysis (Ticket 05) | `changeguard analyze-page <target> --envelope=<page.json> [--disclose-…]` | `changeguard_analyze_page` |
-| Upstream preview (Ticket 10) | `changeguard upstream-preview <target> --request=<request.json> [--disclose-…]` | `changeguard_upstream_preview` |
-| Lifecycle (Ticket 06) | `changeguard lifecycle <operation> <target>` | `changeguard_lifecycle` |
-| Follow-up (Ticket 12) | `changeguard followup <operation> <target> [--request=…]` | `changeguard_followup` |
-| Repair (Ticket 02) | `repair-preview` / `repair-apply` / `verify` / `rollback` | `changeguard_repair_*` / `changeguard_verify` / `changeguard_rollback` |
-| Instances (Ticket 03) | `scan` / `scan-system` / `session-start` | `changeguard_scan` / `changeguard_scan_system` / `changeguard_session_start` |
-| Upstream actions (Ticket 11) | `upstream-action-preview` / `upstream-action-confirm` | `changeguard_upstream_action_preview` / `changeguard_upstream_action_confirm` |
-| Platform status (Tickets 13–15) | `platform-status` / `platform-receipt-validate` | `changeguard_platform_status` / `changeguard_platform_receipt_validate` |
+| **Demo (judge)** | `changeguard demo [--budget-ms=N]` | `changeguard_demo` |
+| Diagnose | `changeguard diagnose <target>` | `changeguard_diagnose` |
+| Impact Card | `changeguard impact <target> [--disclose-…]` | `changeguard_impact` |
+| Page analysis | `changeguard analyze-page <target> --envelope=…` | `changeguard_analyze_page` |
+| Upstream preview | `changeguard upstream-preview <target> --request=…` | `changeguard_upstream_preview` |
+| Lifecycle | `changeguard lifecycle <operation> <target>` | `changeguard_lifecycle` |
+| Follow-up | `changeguard followup <operation> <target>` | `changeguard_followup` |
+| Repair | `repair-preview` / `repair-apply` / `verify` / `rollback` | `changeguard_repair_*` / `changeguard_verify` / `changeguard_rollback` |
+| Instances | `scan` / `scan-system` / `session-start` | `changeguard_scan` / `changeguard_scan_system` / `changeguard_session_start` |
+| Upstream actions | `upstream-action-preview` / `upstream-action-confirm` | `changeguard_upstream_action_*` |
+| Platform status | `platform-status` / `platform-receipt-validate` | `changeguard_platform_status` / `changeguard_platform_receipt_validate` |
 
-- Skill: `/changeguard diagnose`, `/changeguard diagnose <URL>` (analyze-page), `/changeguard impact`, `/changeguard scan`, and repair-preview orchestration use the same seams (`skills/changeguard/SKILL.md`)
-- Package: `npm run package` writes `release/codex-changeguard-plugin/` with the exact public top-level surface (compiled JS + manifest + MCP + Skill + hooks + fixtures + public docs + schemas; no `node_modules`, `AGENTS.md`, `HANDOFF.md`, or `docs/agents`); packaged README drops the repository-only handoff link; `package:smoke` launches MCP via packaged `.mcp.json` and checks local Markdown links
+Skill orchestration: `skills/changeguard/SKILL.md` (includes `/changeguard demo`).
 
-### Read-only diagnosis (Ticket 01)
+### Uninstall and clean profile
 
-The flow is read-only: no network, no target mutation, and never claims repair from
-diagnose. Positive protected-process fixture may reach `SOURCE_COMPONENT_LOCATED`
-only when artifact bytes are independently hashed and the structural signature is
-measured locally. The negative control stays `INCONCLUSIVE`. User-resolution and
-upstream-contribution receipts are always separate.
+- Uninstall removes the plugin package / Skill registration used for evaluation (delete the staged package tree and any host Skill registration pointing at it).
+- Clean-profile smoke: `npm run package:clean-profile` installs under an **isolated temporary HOME only**, runs the packaged demo, uninstalls, and asserts no daemon, LaunchAgent/service/scheduled-task residue, shell-profile edit, global Codex config edit, credential requirement, background process, or leftover product-owned path. It never mutates the real home/profile/global config.
+- This product does **not** install a system daemon and does **not** claim global OS configuration mutation as part of install or uninstall.
+- Manual residual cleanup, if any host-side Skill cache remains, is limited to removing the packaged plugin tree and any explicit ChangeGuard state directories created during the session — never a broad home crawl.
 
-### Isolated verified repair (Ticket 02)
+## 5. Platform support matrix
 
-Experimental repair is limited to isolated targets after an exact scope-bound
-one-shot authorization token. `RESOLVED_VERIFIED` requires original-failure absence
-plus core health; verification failure auto-rollbacks; live Codex/Profile installs
-are out of scope.
+Honest, receipt-scoped claims live in **[docs/SUPPORT_MATRIX.md](docs/SUPPORT_MATRIX.md)**. Summary:
 
-### Instance scan and SessionStart (Ticket 03)
+| Platform | Current product claim |
+| --- | --- |
+| **macOS** | Receipt-scoped **Full** on **this host only** after Ticket 13 real-machine harness (not universal for every macOS/Codex version; external JSON alone is at most Preview) |
+| **Windows 11** | **Preview** — framework integrated; remains Preview without a real Windows 11 receipt **and** process-local live witness |
+| **Linux / WSL** | **Limited / Read-only** — Ticket 15 framework; writes fail closed without a real host receipt |
+| **Enterprise managed** | **Read-only + IT Handoff** — no local elevation or policy bypass |
 
-Multi-instance enumeration keeps independent identities (path hashes/aliases only).
-An optional trusted `SessionStart` hook notices version-fingerprint changes and runs
-a bounded read-only health check under ten seconds; unchanged fingerprints stay silent.
-Untrusted, skipped, or failed hooks are explicit; manual `scan` / `scan-system` always
-remain available.
+Ticket 06 CLI/Desktop **version** rollback stays `preview_only` / Desktop may be `limited`.
 
-### Official evidence and Impact Card (Ticket 04)
+## 6. Architecture, security, verification, and release readiness
 
-Disclosure manifest is shown before any external refresh. Refusing disclosure still
-allows local snapshot Impact Cards. Production CLI/MCP do not open network sockets by
-default; Change-to-Local Graph edges are deterministic only; unmapped changes are
-labeled `UNMAPPED_CHANGE` without declaring an entire version unsupported.
+| Doc | Role |
+| --- | --- |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Evidence contracts, surfaces, demo-core requirements |
+| [docs/SECURITY.md](docs/SECURITY.md) | Trust, disclosure, privacy, recovery boundaries |
+| [docs/TEST_PLAN.md](docs/TEST_PLAN.md) | Verification layers and adversarial plan |
+| [docs/CASE_STUDIES.md](docs/CASE_STUDIES.md) | Real-world diagnosis narratives |
+| [docs/SUPPORT_MATRIX.md](docs/SUPPORT_MATRIX.md) | Platform Full / Preview / Limited rules |
+| `docs/RELEASE_CHECKLIST.md` | Local readiness vs Gate C external actions (repository surface; not in the five packaged public docs) |
+| [Current handoff](HANDOFF.md) | Repository-only operational evidence (not packaged) |
 
-### Untrusted page / URL diagnosis (Ticket 05)
-
-Orchestrator-supplied page envelopes (URL + sanitized visible content) are analyzed
-against the local incident fingerprint. Page text is quarantined untrusted data;
-commands become candidate-only Repair DSL and never authorize apply. Logged-page mode
-never reads cookies, storage, tokens, or full browser requests. Generic ChatGPT or
-account/session pages are hard-gated away from Codex component defects.
-
-### KNOWN_GOOD / rollback lifecycle (Ticket 06)
-
-Isolated lifecycle ledger retains repair backups (age + successful starts) and the last
-three healthy control-surface checkpoints as `KNOWN_GOOD`. Update-regression claims
-require controlled A/B evidence (timestamps alone refuse). Exact-instance control-surface
-rollback returns `MITIGATED_VERIFIED_BY_ROLLBACK` only. CLI and Desktop **version**
-rollback seams are registered `preview_only` guidance (official pin / signed media);
-ChangeGuard never stores or redistributes OpenAI binaries. Desktop version rollback is
-`limited` without signed history or lawful media. Canary and upstream supersession emit
-exact guidance enums. Platform Full/Preview/Limited claims are receipt-scoped (see Tickets 13–15 and [docs/SUPPORT_MATRIX.md](docs/SUPPORT_MATRIX.md)).
-
-### Maintainer follow-up / upstream fix (Ticket 12) — `LOCAL_COMPLETE`
-
-`LOCAL_COMPLETE` on clean `6083c6f` (see [HANDOFF.md](HANDOFF.md) § Ticket 12 closeout).
-Explicit local subscriptions only (canonical `openai/codex` issues). Manual or
-SessionStart low-frequency refresh-due hints never fetch the network. Maintainer
-`needs-info` events become privacy-safe Capsules and reply drafts (`preview_only`,
-`external_write: false`; Ticket 11 confirmation still required). Disposition policy
-never auto-reopens, cross-posts, comments, or reacts. Candidate validation requires
-registered live measurement plus the bundled official snapshot (no caller
-`snapshot_path` / JSON witness); successful measured official fixes mark temporary
-recipes `SUPERSEDED_BY_UPSTREAM_FIX` and stop recommending them without binary
-install/uninstall. No Gate C, external submission, or real GitHub write is authorized.
-
-### Configuration / startup fault pack (Ticket 07)
-
-Isolated control-root fixtures classify invalid TOML, wrong types, obsolete keys, and
-source conflicts with distinct fingerprints. Registered `config_set` / `config_remove`
-repairs run through the Ticket 02 engine with startup verification and automatic
-rollback; managed policy targets return `ADMIN_ACTION_REQUIRED` without bypass guidance.
-
-### Plugin cache / skew / reconciliation (Ticket 08)
-
-Isolated `fixtures/plugin-cache/*` targets distinguish bundled corruption, stale
-shared cache, dependency/version skew, and reconciliation overwrite (never generic
-dependency-install failure). Repair reuses Ticket 02 authorization with verified
-resource copy / atomic replace / rename-to-quarantine only; verification crosses one
-reconciliation cycle and a restart/health check. Immediate recurrence cannot claim
-`RESOLVED_VERIFIED`.
-
-### Desktop Browser crash-family classifier (Ticket 09)
-
-Sanitized Windows crash fixtures under `fixtures/crash-family/` fork distinct
-exception / GPU / interaction / concurrency families via deterministic gates.
-Compatible fixtures rank the correct `openai/codex#…` Issue in the Top 3;
-title similarity alone cannot create high confidence. Without a verified fix,
-diagnosis returns `UPSTREAM_BLOCKED` (or `INCONCLUSIVE`) and never authorizes a
-symptom-level Repair Capsule. Active crash probes require disposable isolation.
-
-### Windows 11 adapter + platform status (Ticket 14) — PREVIEW
-
-Namespaced Windows adapter (`src/instances/windows/`) distinguishes MSIX, Desktop
-app, Desktop-bundled CLI, PATH CLI, WSL, and multi-profile identities under
-injected env/fs capabilities. User-owned cache/control repair binds an exact
-instance and reuses the Ticket 02 engine; managed/admin/MSIX package targets
-return `ADMIN_ACTION_REQUIRED` with IT handoff only.
-
-Platform support is evaluated from auditable receipts
-(`schemas/platform-support-receipt.schema.json`):
+**Local readiness aggregator (Ticket 17; product-local only):**
 
 ```bash
-node bin/changeguard.js platform-status
-node bin/changeguard.js platform-status --plan
-node bin/changeguard.js platform-status --receipt=fixtures/windows11/receipts/synthetic-preview.json
+npm run ready:local
 ```
 
-**Status remains PREVIEW** until a real Windows 11 host Scenario Harness covers
-every critical scenario (W11-S01…S11) **and** seals a process-local live
-witness. Synthetic / cross-platform / forged / external JSON receipts never
-authorize FULL (including complete self-reported `real_machine` objects). Local
-framework integration is complete; this ticket does **not** claim real-machine
-Full support.
+Runs package structure checks, package demo smoke, clean-profile install/uninstall residual smoke, docs/link/parity/legal checks, production boundary, tests, `npm run verify:release`, and `git diff --check`. **Local only** — does not create a remote, Release, account, upload, registration, competition submission, or real GitHub write.
 
-### Upstream draft routing (Ticket 10) — preview only
+**Canonical local automated release gate:**
 
-`changeguard upstream-preview` / `changeguard_upstream_preview` builds a local-only
-Upstream Submission Capsule: routes among GitHub Issue, Discussions, Bugcrowd, and
-OpenAI Support; maps Issue surfaces to APP/CLI/EXTENSION/OTHER forms; classifies
-duplicates as `EXACT_DUPLICATE` / `RELATED_NOT_SAME` / `NEW_INCIDENT`; zero Evidence
-Delta exact duplicates recommend subscribe/upvote only (no body); material deltas
-may preview a structured comment. Validated security never becomes a public Issue
-draft. Optional `codex doctor --json` is orchestrator-supplied, sanitized, and shown
-via an inclusion manifest — ChangeGuard never executes codex or opens production
-network sockets. Capsules are `preview_only` / `local_only` with `external_write: false`
-and require separate Ticket 11 confirmation before any real write.
+```bash
+npm run verify:release
+```
 
-### Confirmed upstream actions (Ticket 11) — adapter-gated
+That command is the product-local release gate (typecheck, tests, boundary, package, smoke, privacy/write-path audits, `git diff --check`, and related steps). Passing it means **local automated readiness only**.
 
-`changeguard upstream-action-preview` / `changeguard_upstream_action_preview` binds one
-action (`create_issue`, `comment_with_delta`, `react_upvote`, `subscribe`,
-`attachment_upload`) to a valid Ticket 10 `PREVIEW_READY` capsule (integrity,
-privacy, recommendation, content hash). Blocked/gate-failed capsules never become
-actions. Preview emits a one-shot confirmation (`ua1.…`) binding canonical target,
-body/attachment manifest, incident fingerprint digest, evidence delta hash,
-capsule content hash, privacy result, nonce, and expiry. Tokens are HMAC-authenticated
-with an install-local key held only in ChangeGuard confirmation state (not a
-GitHub/API token; never in logs/receipts) and registered in a durable one-shot ledger
-before return.
+| Ready locally | Still Gate C / `NOT_STARTED` until separate authorization |
+| --- | --- |
+| `npm run ready:local` / `npm run verify:release` and related local checks | Creating a public remote |
+| Product docs, MIT text, support matrix honesty | Publishing a GitHub Release |
+| Synthetic fixture demos on disposable targets | Registration, upload, or competition submission |
+| Clean-profile install/uninstall smoke (`npm run package:clean-profile`) | Real GitHub write / external publication |
 
-`changeguard upstream-action-confirm` / `changeguard_upstream_action_confirm` accepts
-`decision=confirm|cancel`. Cancel remains pure draft. Production injects no real
-`gh`/browser adapter (auth capability `unavailable`); confirm returns
-`ADAPTER_UNAVAILABLE` and never simulates success. Host integration may inject an
-adapter that reports only `gh_authenticated` or `visible_browser_authenticated`
-(never request/store/display tokens, cookies, or sessions). Idempotency keys prevent
-duplicate same-diagnosis actions; ambiguous timeout queries remote by the same key
-and stops with `UNCERTAIN_NO_RETRY` (ledger `terminal_uncertain`) rather than blind
-retry. Cancel/success/uncertain permanently terminate the nonce. Success yields a
-minimal Upstream Contribution Receipt (action, canonical URL, timestamp,
-receipt/idempotency hashes only).
+See repository `docs/RELEASE_CHECKLIST.md` for the full local vs Gate C checklist.
 
+## 7. Synthetic and redacted fixtures
 
-### macOS platform support (Ticket 13) — receipt-scoped Full
+Fixtures under [`fixtures/`](fixtures/) are **synthetic and redacted**:
 
-`changeguard platform-status` / `changeguard_platform_status` reports read-only
-macOS adapter capabilities (registered install sources, path-role aliases, operations,
-and closed safety constraints). Optional receipt objects surface a validated
-`verified_support_level`. Production never executes discovered binaries, never mutates
-the host, and never opens the network.
+- They model Codex-like layouts and failure signatures without shipping private user logs, full configs, crash dump bodies, cookies, tokens, or session rollouts.
+- Positive and negative controls (for example `fixtures/protected-process` and `fixtures/negative-control`) exist so deterministic probes can separate real mechanism matches from look-alikes.
+- Hashes, AST/schema signatures, and path **aliases** are used instead of raw home paths or secrets.
+- Fixture data is for local diagnosis, packaging smoke, and Scenario Harness — not a claim about any specific end-user install.
 
-`changeguard platform-receipt-validate` / `changeguard_platform_receipt_validate`
-validates a Scenario Harness receipt (schema, leak checks, Full-only-with-live-witness).
-**Full** is declared only when every required real-machine scenario passes **and** a
-process-local live harness witness validates; a hand-authored external JSON receipt
-alone never upgrades a platform to Full. Current product claim: **receipt-scoped Full
-on this host** after a real macOS Scenario Harness (all required scenarios pass;
-`network_used=false`). This is **not** a universal claim for every macOS release,
-architecture, or Codex version. See [docs/SUPPORT_MATRIX.md](docs/SUPPORT_MATRIX.md).
-Repository harness: `npm run harness:macos` (darwin real-machine path).
+## 8. Contributing
 
-## Plugin surfaces
+Contribution rules, review expectations, and safety boundaries: repository root `CONTRIBUTING.md` (bilingual one-file; source tree).
 
-- Skill commands for update scanning, incident diagnosis, page analysis, Impact Card, recovery preview, upstream action preview/confirm, and platform status
-- A local-facts MCP server with explicit tool approval (`changeguard_diagnose`, `changeguard_impact`, `changeguard_analyze_page`, `changeguard_upstream_preview`, `changeguard_upstream_action_preview`, `changeguard_upstream_action_confirm`, `changeguard_platform_status`, `changeguard_platform_receipt_validate`, `changeguard_lifecycle`, `changeguard_followup`, repair/scan tools)
-- An optional trusted `SessionStart` hook that notices version-fingerprint changes (Ticket 03)
-- A manual scan path that always works when hooks are disabled or untrusted
+High-level rules:
 
-Official Codex documentation currently demonstrates lifecycle hooks such as `SessionStart`, but does not establish a dedicated software-update event. ChangeGuard therefore compares version fingerprints at session start and never claims native update-event coverage.
+- Prefer deterministic evidence over model prose.
+- Do not add network, daemon, or secret-exporting paths in production surfaces.
+- Experimental repair stays isolated, authorized, verified, and roll-backable.
+- Do not treat documentation status as Gate C publication authority.
 
-## Development boundary
+## 9. License and publication non-claim
 
-This repository owns the ChangeGuard product only. Portfolio research, Gate approvals, and competition status remain canonical in the separate `xfyun-competition-portfolio` repository. Existing orchestration or competition projects may contribute general engineering principles, but their product code and submitted artifacts are not copied into this repository.
+- License text: repository root `LICENSE` (MIT).
+- `package.json` declares `"license": "MIT"`. The package remains `"private": true` in this repository slice.
+- MIT on disk means the **intended** open-source license for an authorized future release.
+- **This repository does not claim that a public release, remote, upload, or competition submission has already occurred.** External publication remains Gate C / `NOT_STARTED` until separately authorized.
 
-## License
+---
 
-License and public-release terms will be frozen before Gate C. No public publication or submission has occurred.
+### Plugin surfaces (reference)
+
+- Skill, MCP (`changeguard_*` tools), Rescue CLI, optional trusted `SessionStart` hook
+- Packaging: `npm run package` → `release/codex-changeguard-plugin/` (+ portable `.tgz`; exact public surface including `LICENSE`, `README.md`, and `README.zh-CN.md`; no `node_modules`, source maps, `AGENTS.md`, `HANDOFF.md`, or `docs/agents`)
+- Package smoke: `npm run package:smoke` (stages install under temp profile, runs packaged demo from non-repo cwd, uninstalls)
+- Clean-profile residual: `npm run package:clean-profile`
+- Local readiness: `npm run ready:local`
+
+### Development boundary
+
+This repository owns the ChangeGuard product only. Portfolio research, Gate approvals, and competition status remain canonical outside this tree when applicable.

@@ -245,6 +245,31 @@ const RECOVERY_WRITE_FS_METHODS = new Set([
   "unlinkSync",
 ]);
 
+/**
+ * Ticket 17 demo isolation temp APIs — exact file `src/core/demo/isolation.ts`
+ * only. Strict disposable OS-temp child: mkdtemp + allowlisted fixture copy +
+ * recursive remove of owned demo roots. Never live profile, never recovery
+ * open+write, never induce sentinel writes (those live only in run-demo.ts).
+ * index.ts / types.ts receive no mutation exemptions.
+ */
+const DEMO_ISOLATION_TEMP_FS_METHODS = new Set([
+  "mkdtempSync",
+  "rmSync",
+  "cpSync",
+]);
+
+/**
+ * Ticket 17 demo induce-sentinel APIs — exact file `src/core/demo/run-demo.ts`
+ * only. Core-only test hook: mkdir parent + writeFileSync of the recovery
+ * induce-verify sentinel under a proven disposable demo child. Public CLI/MCP
+ * never expose induce/target controls. No mkdtemp/cp/rm here (isolation owns
+ * those). Arbitrary mutation APIs remain refused.
+ */
+const DEMO_INDUCE_SENTINEL_FS_METHODS = new Set([
+  "mkdirSync",
+  "writeFileSync",
+]);
+
 /** String modes allowed for recovery open (exclusive create / write). */
 const RECOVERY_WRITE_STRING_MODES = new Set([
   "w",
@@ -499,6 +524,52 @@ function isRecoveryModulePath(rel) {
     n === "src/core/recovery/atomic-write.ts" ||
     n === "core/recovery/atomic-write.ts"
   );
+}
+
+/**
+ * True when scanned path is the Ticket 17 demo isolation temp module
+ * (`src/core/demo/isolation.ts` only — exact repository-relative equality).
+ * Self-tests may label snippets with the exact prefix
+ * `self-test:demo-isolation-temp-…` (starts at character 0 only; never
+ * substring match) to receive DEMO_ISOLATION_TEMP_FS_METHODS.
+ * Nested suffix spoofs (e.g. src/evil/core/demo/isolation.ts) and real repo
+ * paths that merely embed the self-test marker remain refused.
+ * CLI/MCP / run-demo / index / types must not host these methods.
+ * @param {string} rel
+ * @returns {boolean}
+ */
+function isDemoIsolationTempModulePath(rel) {
+  if (typeof rel !== "string" || rel.length === 0) return false;
+  const n = rel.replace(/\\/g, "/");
+  // Synthetic self-test labels only: exact prefix at char 0, never includes().
+  if (n.startsWith("self-test:demo-isolation-temp-")) {
+    return true;
+  }
+  // Production: exact repository-relative path only (no endsWith / nested alias).
+  return n === "src/core/demo/isolation.ts";
+}
+
+/**
+ * True when scanned path is the Ticket 17 demo induce-sentinel module
+ * (`src/core/demo/run-demo.ts` only — exact repository-relative equality).
+ * Self-tests may label snippets with the exact prefix
+ * `self-test:demo-induce-sentinel-…` (starts at character 0 only; never
+ * substring match) to receive DEMO_INDUCE_SENTINEL_FS_METHODS.
+ * Nested suffix spoofs (e.g. src/evil/core/demo/run-demo.ts) and real repo
+ * paths that merely embed the self-test marker remain refused.
+ * isolation/index/types and public surfaces must not host these methods.
+ * @param {string} rel
+ * @returns {boolean}
+ */
+function isDemoInduceSentinelModulePath(rel) {
+  if (typeof rel !== "string" || rel.length === 0) return false;
+  const n = rel.replace(/\\/g, "/");
+  // Synthetic self-test labels only: exact prefix at char 0, never includes().
+  if (n.startsWith("self-test:demo-induce-sentinel-")) {
+    return true;
+  }
+  // Production: exact repository-relative path only (no endsWith / nested alias).
+  return n === "src/core/demo/run-demo.ts";
 }
 
 /**
@@ -1936,6 +2007,8 @@ function scanSourceText(file, text, rel) {
   /** @type {string[]} */
   const violations = [];
   const recoveryModule = isRecoveryModulePath(rel);
+  const demoIsolationTempModule = isDemoIsolationTempModulePath(rel);
+  const demoInduceSentinelModule = isDemoInduceSentinelModulePath(rel);
   const sf = ts.createSourceFile(file, text, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
   // Import-level provenance for open-flag property roots (fs.constants only).
   const flagProvenance = collectFsFlagProvenance(sf);
@@ -2061,6 +2134,22 @@ function scanSourceText(file, text, rel) {
       recoveryModule &&
       nsKind === "fs" &&
       RECOVERY_WRITE_FS_METHODS.has(method)
+    ) {
+      return;
+    }
+    // Ticket 17: isolation.ts may mkdtemp/cp/rm only (exact temp APIs).
+    if (
+      demoIsolationTempModule &&
+      nsKind === "fs" &&
+      DEMO_ISOLATION_TEMP_FS_METHODS.has(method)
+    ) {
+      return;
+    }
+    // Ticket 17: run-demo.ts may mkdir+writeFile only for induce sentinel.
+    if (
+      demoInduceSentinelModule &&
+      nsKind === "fs" &&
+      DEMO_INDUCE_SENTINEL_FS_METHODS.has(method)
     ) {
       return;
     }
@@ -2704,9 +2793,13 @@ function resolveRelative(fromFile, spec) {
   return null;
 }
 
-/** Self-test cases: each forbidden snippet must produce >=1 violation; safe must produce 0. */
+/** Self-test cases: each forbidden snippet must produce >=1 violation; safe must produce 0.
+ * Optional `rel` is the scanned repository-relative path (or synthetic label) passed to
+ * scanSourceSnippet; when omitted, the label is `self-test:${name}` (legacy default).
+ * Use explicit `rel` to exercise exact production-path and spoof-path decisions.
+ */
 function runSelfTests() {
-  /** @type {{ name: string, source: string, expectViolation: boolean }[]} */
+  /** @type {{ name: string, source: string, expectViolation: boolean, rel?: string }[]} */
   const cases = [
     {
       name: "default fs import + writeFileSync",
@@ -3111,6 +3204,109 @@ fs.closeSync(fd);
       name: "mkdtempSync not on read-only allowlist",
       expectViolation: true,
       source: `import fs from "node:fs";\nfs.mkdtempSync("/tmp/cg-");\n`,
+    },
+    // Label becomes self-test:demo-isolation-temp-apis → isolation temp allowlist only.
+    {
+      name: "demo-isolation-temp-apis",
+      expectViolation: false,
+      source: `import fs from "node:fs";\nfs.mkdtempSync("/tmp/cg-demo-");\nfs.cpSync("a","b",{recursive:true});\nfs.rmSync("x",{recursive:true,force:true});\n`,
+    },
+    // writeFileSync is not needed in isolation.ts — refuse even under temp label.
+    {
+      name: "demo-isolation-temp-forbidden-writeFileSync",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfs.writeFileSync("x", "y");\n`,
+    },
+    {
+      name: "demo-isolation-temp-forbidden-mkdirSync",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfs.mkdirSync("d");\n`,
+    },
+    // run-demo induce sentinel: exact mkdir + writeFile only.
+    {
+      name: "demo-induce-sentinel-allowed-mkdir-write",
+      expectViolation: false,
+      source: `import fs from "node:fs";\nfs.mkdirSync("d", { recursive: true });\nfs.writeFileSync("x", "induce\\n", "utf8");\n`,
+    },
+    {
+      name: "demo-induce-sentinel-forbidden-cpSync",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfs.cpSync("a","b",{recursive:true});\n`,
+    },
+    {
+      name: "demo-induce-sentinel-forbidden-rmSync",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfs.rmSync("x",{recursive:true,force:true});\n`,
+    },
+    {
+      name: "demo-induce-sentinel-forbidden-mkdtempSync",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfs.mkdtempSync("/tmp/cg-demo-");\n`,
+    },
+    {
+      name: "demo-induce-sentinel-forbidden-renameSync",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfs.renameSync("a","b");\n`,
+    },
+    // index/types-style labels get no demo mutation exemption (ordinary label).
+    {
+      name: "demo-index-forbidden-cpSync",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfs.cpSync("a","b",{recursive:true});\n`,
+    },
+    {
+      name: "demo-types-forbidden-writeFileSync",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfs.writeFileSync("x", "y");\n`,
+    },
+    // --- Ticket 17 S2 path exactness: nested suffix spoof + embedded self-test marker ---
+    // Nested production-looking path must NOT inherit isolation temp mutation APIs.
+    {
+      name: "demo-isolation-temp-nested-suffix-spoof-refused",
+      expectViolation: true,
+      rel: "src/evil/core/demo/isolation.ts",
+      source: `import fs from "node:fs";\nfs.mkdtempSync("/tmp/cg-demo-");\n`,
+    },
+    // Exact repository-relative path is the only production allowlist entry (GREEN).
+    {
+      name: "demo-isolation-temp-exact-path-allowed",
+      expectViolation: false,
+      rel: "src/core/demo/isolation.ts",
+      source: `import fs from "node:fs";\nfs.mkdtempSync("/tmp/cg-demo-");\nfs.cpSync("a","b",{recursive:true});\nfs.rmSync("x",{recursive:true,force:true});\n`,
+    },
+    // Real repo path containing the self-test marker mid-string must remain refused.
+    {
+      name: "demo-isolation-temp-embedded-self-test-marker-refused",
+      expectViolation: true,
+      rel: "src/core/demo/self-test:demo-isolation-temp-spoof.ts",
+      source: `import fs from "node:fs";\nfs.mkdtempSync("/tmp/cg-demo-");\n`,
+    },
+    // Nested production-looking path must NOT inherit induce-sentinel mutation APIs.
+    {
+      name: "demo-induce-sentinel-nested-suffix-spoof-refused",
+      expectViolation: true,
+      rel: "src/evil/core/demo/run-demo.ts",
+      source: `import fs from "node:fs";\nfs.mkdirSync("d", { recursive: true });\nfs.writeFileSync("x", "induce\\n", "utf8");\n`,
+    },
+    // Exact repository-relative path is the only production allowlist entry (GREEN).
+    {
+      name: "demo-induce-sentinel-exact-path-allowed",
+      expectViolation: false,
+      rel: "src/core/demo/run-demo.ts",
+      source: `import fs from "node:fs";\nfs.mkdirSync("d", { recursive: true });\nfs.writeFileSync("x", "induce\\n", "utf8");\n`,
+    },
+    // Real repo path containing the self-test marker mid-string must remain refused.
+    {
+      name: "demo-induce-sentinel-embedded-self-test-marker-refused",
+      expectViolation: true,
+      rel: "src/core/demo/self-test:demo-induce-sentinel-spoof.ts",
+      source: `import fs from "node:fs";\nfs.mkdirSync("d", { recursive: true });\nfs.writeFileSync("x", "induce\\n", "utf8");\n`,
+    },
+    // cpSync outside demo isolation module remains forbidden (ordinary label).
+    {
+      name: "cpSync not on read-only allowlist outside demo",
+      expectViolation: true,
+      source: `import fs from "node:fs";\nfs.cpSync("a","b",{recursive:true});\n`,
     },
     {
       name: "lchownSync not on read-only allowlist",
@@ -3619,7 +3815,11 @@ fs.closeSync(fd);
   /** @type {string[]} */
   const failures = [];
   for (const c of cases) {
-    const v = scanSourceSnippet(c.source, `self-test:${c.name}`);
+    const label =
+      typeof c.rel === "string" && c.rel.length > 0
+        ? c.rel
+        : `self-test:${c.name}`;
+    const v = scanSourceSnippet(c.source, label);
     const has = v.length > 0;
     if (c.expectViolation && !has) {
       failures.push(`EXPECTED violation missing: ${c.name}`);

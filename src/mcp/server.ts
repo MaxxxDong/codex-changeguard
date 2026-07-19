@@ -11,11 +11,17 @@
  * + Ticket 13 platform status / receipt validation (macOS capabilities; no harness spawn)
  * + Ticket 14 Windows 11 support status (PREVIEW without real-machine host receipt)
  * + Ticket 15 Linux/WSL/enterprise capability matrix (Limited/Read-only without real-machine receipt).
+ * + Ticket 17 deterministic product-local demo (shared runDemo; disposable OS-temp only).
  *
  * Wire protocol: newline-delimited JSON-RPC 2.0 over stdio.
  * Request frames are accumulated as bounded bytes (not unbounded readline).
  */
 import { diagnose } from "../core/diagnose.js";
+import {
+  DEMO_DEFAULT_BUDGET_MS,
+  runDemo,
+  type DemoReceipt,
+} from "../core/demo/index.js";
 import { MAX_MCP_REQUEST_BYTES } from "../core/limits.js";
 import {
   applyRepair,
@@ -102,6 +108,7 @@ const TOOL_LIFECYCLE = "changeguard_lifecycle";
 const TOOL_FOLLOWUP = "changeguard_followup";
 const TOOL_PLATFORM_STATUS = "changeguard_platform_status";
 const TOOL_PLATFORM_RECEIPT = "changeguard_platform_receipt_validate";
+const TOOL_DEMO = "changeguard_demo";
 
 const KNOWN_TOOLS = new Set([
   TOOL_DIAGNOSE,
@@ -121,6 +128,7 @@ const KNOWN_TOOLS = new Set([
   TOOL_FOLLOWUP,
   TOOL_PLATFORM_STATUS,
   TOOL_PLATFORM_RECEIPT,
+  TOOL_DEMO,
 ]);
 
 /** Extra top-level tools/call params beyond name/arguments are refused. */
@@ -586,6 +594,24 @@ function toolSchemas() {
         },
       },
     },
+    {
+      name: TOOL_DEMO,
+      description:
+        "Ticket 17 deterministic product-local demo. Shared runDemo core only: isolate disposable OS-temp fixtures, diagnose/preview/apply/verify/rollback protected-process, model-edge refusal, crash-family refusal, cleanup. No network, no live profile, no external write, no caller target path, no induce controls. Returns DemoReceipt (ok true iff status completed).",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          budget_ms: {
+            type: "integer",
+            minimum: 1,
+            maximum: DEMO_DEFAULT_BUDGET_MS * 2,
+            description:
+              "Optional wall-clock budget in milliseconds (positive integer; capped). Default product budget when omitted.",
+          },
+        },
+      },
+    },
   ];
 }
 
@@ -619,6 +645,7 @@ function handleToolsCall(params: unknown): {
     | FollowupResult
     | PlatformStatusResult
     | ReceiptValidationResult
+    | DemoReceipt
     | (PlatformStatusResult & {
         status: unknown;
         plan: unknown;
@@ -1247,6 +1274,37 @@ function handleToolsCall(params: unknown): {
       });
     }
     const payload = validatePlatformSupportReceipt(a.receipt);
+    return { payload, ok: payload.ok };
+  }
+
+  if (p.name === TOOL_DEMO) {
+    // Strict schema: only optional budget_ms. No target/path/induce surface.
+    const allowed = new Set(["budget_ms"]);
+    for (const k of Object.keys(a)) {
+      if (!allowed.has(k)) {
+        throw Object.assign(new Error("Unknown or extra arguments."), {
+          code: "EXTRA_ARGS",
+        });
+      }
+    }
+    let budget_ms: number | undefined;
+    if (a.budget_ms !== undefined) {
+      if (
+        typeof a.budget_ms !== "number" ||
+        !Number.isInteger(a.budget_ms) ||
+        a.budget_ms <= 0 ||
+        a.budget_ms > DEMO_DEFAULT_BUDGET_MS * 2
+      ) {
+        throw Object.assign(new Error("Invalid budget_ms."), {
+          code: "INVALID_ARGS",
+        });
+      }
+      budget_ms = a.budget_ms;
+    }
+    // Same shared core as CLI demo — no duplicated orchestration.
+    const payload: DemoReceipt = runDemo(
+      budget_ms !== undefined ? { budget_ms } : {},
+    );
     return { payload, ok: payload.ok };
   }
 

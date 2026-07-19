@@ -2,6 +2,7 @@
   "name": "codex-changeguard",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "Evidence-bound Codex ChangeGuard Plugin — read-only diagnosis spine",
   "type": "module",
   "engines": {
@@ -17,6 +18,8 @@
     "check:boundary": "node scripts/check-production-boundary.mjs",
     "package": "node scripts/package-plugin.mjs",
     "package:smoke": "node scripts/package-smoke.mjs",
+    "package:clean-profile": "node scripts/clean-profile-smoke.mjs",
+    "ready:local": "node scripts/local-readiness.mjs",
     "verify:release": "node scripts/verify-release.mjs",
     "harness:macos": "node scripts/run-macos-harness.mjs",
     "cli": "node bin/changeguard.js"

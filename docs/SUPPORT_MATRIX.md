@@ -13,7 +13,7 @@ architecture, or Codex version.
 | Linux | Limited CLI | **Limited** / read-only (Ticket 15 framework; no real host receipt) | Writes disabled by default; synthetic capability cannot Full | Namespaced adapter in `src/platform/linux-adapter.ts` + capability matrix | Registered PATH / package roots only; no Desktop full repair claim; `/mnt/<drive>` refused |
 | WSL | Limited CLI + IT handoff | **Limited** (Ticket 15 framework; no real host receipt) | Windows host + WSL identities never collapse; writes fail closed without disposable isolation proof | Namespaced adapter in `src/platform/wsl-adapter.ts` | Enterprise policy → IT Handoff; host mounts refused; no sudo/chmod/UAC bypass |
 | Unknown / unverified | Read-only | **Read-only**; mutation refused | Fail closed until a trusted adapter is identified | Generic discovery only | — |
-| Enterprise managed | Limited + IT Handoff | **Limited**; local mutation refused | Policy recognition only; no elevation | Policy recognition only | `ADMIN_ACTION_REQUIRED` + path/secret-cleaned IT Handoff |
+| Enterprise managed | Read-only + IT Handoff | **Read-only + IT Handoff**; local mutation refused | Policy recognition only; no elevation | Policy recognition only | `ADMIN_ACTION_REQUIRED` + path/secret-cleaned IT Handoff |
 
 ## macOS Full required scenarios
 
@@ -102,10 +102,14 @@ IT Handoff wire shape: `schemas/it-handoff.schema.json`.
 - Ticket 06 CLI/Desktop **version** rollback remains `preview_only` / Desktop may be `limited`.
 - Ticket 10 upstream capsules remain `preview_only` / `local_only` / `external_write: false`.
 - Ticket 11 local confirmation engine is integrated; production default adapter remains unavailable — no real external GitHub write is authorized by documentation status alone.
-- Gate C / registration / publication / upload / external submission remain unauthorized / `NOT_STARTED` until separate approval.
-- Ticket 13 macOS Full is **receipt-scoped** (current real-machine harness on this host); it does not upgrade Windows or Linux claims.
-- Ticket 14 remains **Preview** without a real Windows 11 host receipt + live witness.
-- Ticket 15 framework is integrated; Linux/WSL remain **Limited / Read-only** without real-machine host receipts.
-- This does **not** mark the whole product complete; Tickets **12, 16, 17** remain open. Broader product status stays `IN_PROGRESS`.
+- Ticket 12 (maintainer follow-up / upstream fix) is `LOCAL_COMPLETE` on clean commit `6083c6f`; follow-up remains preview-only / local-only / no external write.
+- Ticket 16 (security / privacy / release gate) is `LOCAL_COMPLETE`; canonical local gate is `npm run verify:release`. That is product-local automated readiness only.
+- Gate C / registration / publication / upload / external submission remain unauthorized / `NOT_STARTED` until separate approval. Creating a public remote, Release, or real GitHub write is **not** implied by Ticket 16 local complete.
+- Ticket 13 macOS Full is **receipt-scoped** (current real-machine harness on this host only); it does not upgrade Windows or Linux claims and is not a universal macOS/Codex guarantee.
+- Ticket 14 remains **Preview** without a real Windows 11 host receipt + live witness. Do not inflate T14 to Full from framework integration alone.
+- Ticket 15 framework is integrated; Linux/WSL remain **Limited / Read-only** without real-machine host receipts. Enterprise managed remains **Read-only + IT Handoff**. Do not inflate T15 to Full from synthetic capability alone.
+- Ticket 17 (competition demo + release-readiness surface) has **local implementation and local proof** in-tree: shared demo core via `node bin/changeguard.js demo` / `/changeguard demo` / `changeguard_demo`, packaged no-build judge path (`npm run package` + `package:smoke`), and clean-profile uninstall smoke (`package:clean-profile`). **Ticket 17 closeout / HANDOFF status update and Gate C remain separate** until final independent review — local automated gates alone do not authorize publication or mark the ticket closed.
+- This does **not** mark the whole product complete. Broader product status stays `IN_PROGRESS`.
 - Public CLI/MCP write paths are gated by trusted host capability; unknown/Linux/WSL/managed policies fail closed. External JSON/CLI/MCP arguments cannot downgrade the host or enable writes.
-- Repository-only operational closeout evidence (Wave 4 tip, harness counts, Gate C state) lives in the repo `HANDOFF.md` Wave 4 section — not packaged with the plugin.
+- Repository-only operational closeout evidence (Wave tip, harness counts, Gate C state) lives in the repo `HANDOFF.md` — not packaged with the plugin.
+- Release checklist (local vs Gate C): repository `docs/RELEASE_CHECKLIST.md` (not part of the five packaged public docs).

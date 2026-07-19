@@ -220,6 +220,124 @@ export const WRITE_PATH_INVENTORY = Object.freeze([
       },
     ]),
   },
+  /**
+   * Ticket 17 demo isolation: mkdtemp/cp/rm only under proven disposable
+   * OS-temp children; always cleanup. Classed as state/demo-only (not repair).
+   * Does not invent a production repair writer.
+   */
+  {
+    id: "demo-isolation-temp",
+    class: "state",
+    rel: "src/core/demo/isolation.ts",
+    required_markers: ["mkdtempSync", "rmSync", "cpSync", "proveIsolatedFixtureTarget"],
+    forbid_false_repair_claim: true,
+    boundary_bind: "demo_isolation",
+    behavioral_tests: Object.freeze([
+      {
+        id: "demo_temp_cleanup",
+        test_file: "tests/ticket17-demo-core.test.ts",
+        test_name_substr: "default run uses disposable temp and removes it",
+        require_evidence: Object.freeze([
+          {
+            kind: "field_assert",
+            field: "temp_removed",
+            equals: true,
+            roots: Object.freeze(["receipt", "cleanup", "result", "r"]),
+          },
+        ]),
+      },
+      {
+        id: "demo_live_path_refuse",
+        test_file: "tests/ticket17-demo-core.test.ts",
+        test_name_substr: "refuse caller live ~/.codex and non-disposable paths",
+        require_evidence: Object.freeze([
+          {
+            kind: "one_of_field_codes",
+            fields: Object.freeze(["error_code", "status"]),
+            codes: Object.freeze([
+              "LIVE_PROFILE_REFUSED",
+              "CALLER_TARGET_NOT_DISPOSABLE",
+              "refused",
+              "failed",
+            ]),
+            roots: Object.freeze([
+              "liveReceipt",
+              "repoReceipt",
+              "receipt",
+              "result",
+              "r",
+            ]),
+          },
+        ]),
+      },
+    ]),
+  },
+  /**
+   * Ticket 17 demo induce-verify sentinel (core-only test hook in run-demo.ts).
+   * Single writeFileSync (+ mkdir parent) under a proven disposable demo child;
+   * public CLI/MCP never expose induce/target. Classed as state/demo-only.
+   */
+  {
+    id: "demo-induce-sentinel",
+    class: "state",
+    rel: "src/core/demo/run-demo.ts",
+    required_markers: [
+      "writeFileSync",
+      "mkdirSync",
+      "INDUCE_VERIFY_FAIL_REL",
+      "induce_verify_failure",
+    ],
+    forbid_false_repair_claim: true,
+    boundary_bind: "demo_induce_sentinel",
+    behavioral_tests: Object.freeze([
+      {
+        id: "demo_induce_never_resolved",
+        test_file: "tests/ticket17-demo-core.test.ts",
+        test_name_substr:
+          "induced verify failure rolls back and never claims resolved",
+        require_evidence: Object.freeze([
+          {
+            kind: "field_assert",
+            field: "auto_rolled_back",
+            equals: true,
+            roots: Object.freeze(["receipt", "result", "r"]),
+          },
+          {
+            kind: "field_assert",
+            field: "resolved_verified",
+            equals: false,
+            roots: Object.freeze(["receipt", "result", "r", "main"]),
+          },
+          {
+            kind: "field_assert",
+            field: "temp_removed",
+            equals: true,
+            roots: Object.freeze(["receipt", "cleanup", "result", "r"]),
+          },
+        ]),
+      },
+      {
+        id: "demo_induce_not_public_surface",
+        test_file: "tests/ticket17-demo-surfaces.test.ts",
+        test_name_substr:
+          "induce_verify_failure is internal-only (not CLI/MCP args)",
+        require_evidence: Object.freeze([
+          {
+            kind: "field_assert",
+            field: "resolved_verified",
+            equals: false,
+            roots: Object.freeze(["induced", "receipt", "result", "r"]),
+          },
+          {
+            kind: "field_assert",
+            field: "auto_rolled_back",
+            equals: true,
+            roots: Object.freeze(["induced", "receipt", "result", "r"]),
+          },
+        ]),
+      },
+    ]),
+  },
 ]);
 
 /** Mirrors scripts/check-production-boundary.mjs DEFAULT_STATE_WRITE_ALLOWLIST. */
@@ -1081,6 +1199,7 @@ export function checkWritePathInventory(repoRoot, opts = {}) {
     "src/upstream/actions",
     "src/upstream/followup",
     "src/core/lifecycle",
+    "src/core/demo",
   ];
   for (const root of scanRoots) {
     const absRoot = path.join(repoRoot, root);
@@ -1095,10 +1214,33 @@ export function checkWritePathInventory(repoRoot, opts = {}) {
       if (relFromRepo === "src/core/lifecycle/engine.ts") return;
       if (relFromRepo === "src/core/lifecycle/dispatch.ts") return;
       if (relFromRepo === "src/core/lifecycle/live-measurement.ts") return;
+      // Every production writer under scan roots must be inventoried explicitly
+      // (including demo induce sentinel in run-demo.ts — no wholesale skip).
       if (/fs\.(writeFileSync|writeSync|renameSync)/.test(text)) {
         errors.push(`unregistered_writer:${relFromRepo}`);
       }
     });
+  }
+
+  // Ticket 17 invariant: demo isolation / induce-sentinel binds are state/demo-only
+  // (never repair), exact-path, and must not reuse recovery/state_allowlist binds.
+  for (const entry of inventory) {
+    if (entry.boundary_bind === "demo_isolation") {
+      if (entry.rel !== "src/core/demo/isolation.ts") {
+        errors.push(`demo_isolation_path_mismatch:${entry.id}`);
+      }
+      if (entry.class === "repair") {
+        errors.push(`demo_isolation_must_not_be_repair:${entry.id}`);
+      }
+    }
+    if (entry.boundary_bind === "demo_induce_sentinel") {
+      if (entry.rel !== "src/core/demo/run-demo.ts") {
+        errors.push(`demo_induce_sentinel_path_mismatch:${entry.id}`);
+      }
+      if (entry.class === "repair") {
+        errors.push(`demo_induce_sentinel_must_not_be_repair:${entry.id}`);
+      }
+    }
   }
 
   if (errors.length > 0) {

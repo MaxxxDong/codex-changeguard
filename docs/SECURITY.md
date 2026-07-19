@@ -180,3 +180,19 @@ Never:
 - Capsule and reply draft are local preview only (`external_write: false`); Ticket 11 owns any real write after confirmation
 - Disposition policy never auto-reopens, cross-posts, comments, or reacts against upstream decisions
 - SessionStart follow-up hints never print raw cwd, plugin paths, state paths, secrets, or issue-session content
+
+## Ticket 17 demo / uninstall security requirements
+
+These are **Ticket 17** contracts for the competition demo and clean-profile surface. S4 package/profile smoke exercises them locally; whole-ticket closeout still needs independent review.
+
+- **Shared demo core:** CLI, MCP, and Skill must invoke the same non-model cores; demo must not be a pre-rendered mock that bypasses probes.
+- **Disposable temp only:** demo and repair paths mutate only proven disposable temp targets; active primary Codex/Profile and protected roots fail closed. Disposable-root proofs use product isolation APIs only — never by reading or hashing the user's live home/profile.
+- **No network on default demo/judge seams:** production demo and default diagnose do not open sockets; no GitHub login or API key on the five-minute packaged path.
+- **Security-evidence honesty:** public DemoReceipt booleans `network_used`, `external_write`, and `live_profile_mutated` remain schema-const `false`, but only after fail-closed runtime checks. Receipts include `security_evidence` that aggregates every observable `network_used` from diagnose/apply/impact/crash paths, records disposable-root proofs at isolation/mutation boundaries, and carries an explicit `local_only_no_adapter` execution proof (no external write adapter). Missing or unproven evidence fails the demo and never yields `ok: true`.
+- **Allowlisted fixture copy fail-closed:** nested symlinks and non-regular filesystem objects under allowlisted fixtures are refused before copy (no follow) and re-checked on the destination tree; outside bytes must not be read or copied.
+- **Schema-valid public errors:** every public demo response (including CLI `INVALID_ARGS`) carries the canonical 10 ordered steps (skipped/refused as appropriate) so `schemas/demo-receipt.schema.json` remains satisfied.
+- **Rollback + cleanup:** authorized isolated repair demos must restore original bytes on failure or explicit rollback; session temp state is cleaned without a leftover daemon.
+- **No daemon / no global config claims:** install and uninstall must not start a background agent or claim mutation of global OS configuration. Prove with `npm run package:clean-profile` (isolated temp HOME only; never mutates real home/profile/global config).
+- **CLI/MCP equivalence:** demo-visible outcomes share stable fields; neither surface may export secrets, raw home paths, or disposable clone paths.
+- **Package surface:** judge package ships MIT `LICENSE` and compiled JS without source maps that leak local paths; no `node_modules`, secrets, or Git metadata.
+- **Publication non-claim:** MIT license text and local `npm run verify:release` / `ready:local` readiness do not authorize public remote, Release, registration, upload, submission, or real external GitHub writes (Gate C / `NOT_STARTED` until separate authorization).
