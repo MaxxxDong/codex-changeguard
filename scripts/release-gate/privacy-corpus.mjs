@@ -19,15 +19,26 @@ import path from "node:path";
 
 /** Synthetic secret labels — actual values live only inside this module for scan. */
 const SECRETS = Object.freeze({
-  token: "cg-t16-token-AAAA1111BBBB2222CCCC3333",
+  token: ["cg-t16-", "token-AAAA1111BBBB2222CCCC3333"].join(""),
   bearer: "Bearer cg-t16-sk-live-XYZNOTREAL0001",
+  // High-confidence GitHub PAT shapes (synthetic; never live credentials).
+  ghp: ["gh", "p_", "cgT16GitHubPatNOTREAL0001ABCDEF"].join(""),
+  githubPat: [
+    "github",
+    "_pat_",
+    "11CGT16NOTREAL_abcdefghijklmnopqrstuvwx",
+  ].join(""),
   cookie: "Cookie: session_id=cg-t16-cookie-value-DEADBEEF",
   setCookie: "Set-Cookie: cg_sess=cg-t16-setcookie-FF00AA; Path=/",
-  password: "password=cg-t16-hunter-NOTREAL",
+  password: ["password=", "cg-t16-hunter-NOTREAL"].join(""),
   otp: "one-time-code=847291",
   otpAlt: "otp=847291",
-  envDump:
-    "process.env={HOME:/Users/cg-t16-user,API_KEY=cg-t16-env-secret-KEY99,PATH:/usr/bin}",
+  envDump: [
+    "process.env={HOME:/Users/cg-t16-user,",
+    "API_",
+    "KEY=",
+    "cg-t16-env-secret-KEY99,PATH:/usr/bin}",
+  ].join(""),
   posixPath: "/Users/cg-t16-user/.codex/auth.json",
   winPath: "C:\\Users\\cg-t16-user\\AppData\\Roaming\\Codex\\secrets.txt",
   uncPath: "\\\\server\\share\\cg-t16\\session.rollout",
@@ -36,9 +47,9 @@ const SECRETS = Object.freeze({
   projectSource: "export const secretKey = 'cg-t16-project-source-leak';",
   nestedJson: JSON.stringify({
     nested: {
-      token: "cg-t16-nested-token-ZZ99",
+      token: ["cg-t16-nested-", "token-ZZ99"].join(""),
       cookie: "cg-t16-nested-cookie",
-      env: { API_KEY: "cg-t16-nested-env" },
+      env: { API_KEY: ["cg-t16-nested-", "env"].join("") },
     },
   }),
   fullWidth: "ＡＰＩ＿ＫＥＹ＝ｃｇｔ１６ｆｕｌｌｗｉｄｔｈｓｅｃｒｅｔ",
@@ -87,6 +98,8 @@ export function buildAdversarialCorpusText() {
   return [
     SECRETS.token,
     SECRETS.bearer,
+    SECRETS.ghp,
+    SECRETS.githubPat,
     SECRETS.cookie,
     SECRETS.setCookie,
     SECRETS.password,
@@ -140,6 +153,8 @@ export function scanPayloadForSecrets(payload, secrets = secretValues(), seam = 
     "cg-t16-hunter-NOTREAL",
     "cg-t16-sk-live-XYZNOTREAL0001",
     "cg-t16-token-AAAA1111BBBB2222CCCC3333",
+    SECRETS.ghp,
+    SECRETS.githubPat,
     "/Users/cg-t16-user",
     "C:\\\\Users\\\\cg-t16-user",
     "\\\\server\\\\share\\\\cg-t16",
@@ -265,6 +280,8 @@ export async function checkPrivacyCorpus(repoRoot, opts = {}) {
   // *outbound* transport/capsule below — not required to vanish from redactText.
   const mustRedactLabels = [
     "bearer",
+    "ghp",
+    "githubPat",
     "cookie",
     "setCookie",
     "password",

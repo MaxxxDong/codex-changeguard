@@ -180,7 +180,15 @@ const SENDABLE_SECRET_SHAPE_RE =
 
 /** High-confidence credential prefixes (never legitimate version/surface labels). */
 const SENDABLE_CREDENTIAL_PREFIX_RE =
-  /^(?:sk|pk|rk|ak|xox[baprs])[-_]/i;
+  /^(?:sk|pk|rk|ak|xox[baprs]|ghp|gho|ghu|ghs|ghr)[-_]/i;
+
+/**
+ * High-confidence GitHub PAT / fine-grained PAT shapes.
+ * Kept separate so `github_pat_…` (underscore, not only hyphen) is covered
+ * without rejecting normal identifiers that merely contain `github`.
+ */
+const SENDABLE_GITHUB_PAT_RE =
+  /^(?:ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})$/i;
 
 /**
  * Return true when `value` is a genuinely bounded sendable disclosure token.
@@ -202,6 +210,10 @@ export function isSendableDisclosureToken(value: string): boolean {
   if (/=|;|,|\s|"|'|`|\{|\}|\[|\]/.test(t)) return false;
   if (SENDABLE_SECRET_SHAPE_RE.test(t)) return false;
   if (SENDABLE_CREDENTIAL_PREFIX_RE.test(t)) return false;
+  if (SENDABLE_GITHUB_PAT_RE.test(t)) return false;
+  // Embedded GitHub PAT shapes inside an otherwise token-like string.
+  if (/\bghp_[A-Za-z0-9]{20,}\b/i.test(t)) return false;
+  if (/\bgithub_pat_[A-Za-z0-9_]{20,}\b/i.test(t)) return false;
   return true;
 }
 

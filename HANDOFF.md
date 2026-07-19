@@ -5,7 +5,7 @@
 - Date: 2026-07-18 Asia/Shanghai
 - Track ID: `track-openai-build-week-codex-changeguard-20260717`
 - Gate B: `APPROVED`, option A
-- Current scope status: `IN_PROGRESS` (broader product; Ticket 16 is a **review-ready candidate** only — not `LOCAL_COMPLETE`; Ticket 17 not complete; T14 platform Full and T15 real-host Full remain open)
+- Current scope status: `IN_PROGRESS` (broader product; Ticket 16 is `LOCAL_COMPLETE` with Root 49/525 + R25 double-review evidence; Ticket 17 not complete; T14 platform Full and T15 real-host Full remain open)
 - Integrated HEAD (Wave 4 closeout tip): `407789ca847b984dbd935e26edf8ad58ad0cf688`
 - Ticket 12 verification tip: `6083c6f3ce75acddd982c151e5c6831a79ad7b2c`
 - Ticket 01 (read-only diagnosis spine): `LOCAL_COMPLETE` / locally verified on commit `d7d917b03fc8b2ddd6b9b42b961cf58b4af4e5b2`
@@ -23,7 +23,7 @@
 - Ticket 13 (macOS Full support): `LOCAL_COMPLETE` with receipt-scoped real-machine macOS Full harness evidence on this host (not universal macOS/Codex coverage)
 - Ticket 14 (Windows 11 validation): framework integrated; platform remains **PREVIEW** (no real Windows 11 W11-S01…S11 receipt; external JSON cannot Full; Full also requires process-local live witness)
 - Ticket 15 (Linux/WSL/enterprise): framework integrated; platform remains **Limited / Read-only** (no real host receipt; public writes disabled by default)
-- Ticket 16 (security / privacy / release gate): **review-ready candidate** (Worker implementation + gate-of-gate tests + local `verify:release` proof in disposable clone; **not** `LOCAL_COMPLETE`; Root dynamic re-verification and independent double-review still required). Canonical command: `npm run verify:release` → `scripts/verify-release.mjs` (never `scripts/run-verification.sh`). Does **not** complete Ticket 17 or product closeout.
+- Ticket 16 (security / privacy / release gate): `LOCAL_COMPLETE` (implementation candidate **R24**; Root independently reproduced all R24 RED/GREEN probes — Ticket16 focused **49/49**, full suite **525/525**, `npm run typecheck` pass, `npm run build` pass, `npm run verify:release` `ok=true` / no failed step / `diff_check=ok`, `git diff --check` pass; R25 independent double review both PASS / `NO_P0_P1:true` — standards `worker.log` SHA256 `da262901325a2fd6bcb509b96fb58a367fd7f20dd33cb384ab48d2ad6b626a21`, spec/security `worker.log` SHA256 `70e7dca729b0c23e7d94f8b68884b0edbbb0266e089d5feb4df1211a24bac40c`; injection matrix **15** rows including official-bind absence refusal and binary-install absence). Canonical command: `npm run verify:release` → `scripts/verify-release.mjs` (never `scripts/run-verification.sh`). Does **not** complete Ticket 17 or product closeout.
 - Ticket 17: not complete
 - Registration: `NOT_STARTED`
 - External submission: `NOT_STARTED`

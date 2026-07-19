@@ -50,8 +50,9 @@ const EXEC_EXT = new Set([".js", ".mjs", ".cjs", ".json"]);
 const DOC_EXT = new Set([".md"]);
 
 /**
- * Exact shipped surfaces that may import child_process and spawn node only.
+ * Exact shipped surfaces that may import child_process.
  * Prefix exemption for dist/harness/ is intentionally NOT used.
+ * Spawned executables are restricted to CHILD_PROCESS_EXECUTABLE_ALLOWLIST.
  * Shell-interpreter execution is still rejected even on these files.
  */
 const CHILD_PROCESS_ALLOWLIST = Object.freeze([
@@ -60,19 +61,38 @@ const CHILD_PROCESS_ALLOWLIST = Object.freeze([
   "dist/mcp/client.js",
 ]);
 
+/**
+ * Fixed executable allowlist for spawn/execFile first-argument string literals
+ * on child_process surfaces currently shipped by the harness/MCP package.
+ * process.execPath is also accepted (Node binary for in-process CLI/MCP).
+ * Shell interpreters and arbitrary binaries are rejected.
+ */
+const CHILD_PROCESS_EXECUTABLE_ALLOWLIST = Object.freeze([
+  "node",
+  "npm",
+  "git",
+]);
+
 /** Network module names (bare and node: prefixed). */
 const NETWORK_MODULES =
   "http|https|http2|net|tls|dns|dgram|undici|websocket|ws";
 
 /**
  * @param {string} repoRoot
- * @param {{ packageDir?: string, plant?: { rel: string, content: string } | null }} [opts]
+ * @param {{
+ *   packageDir?: string,
+ *   plant?: { rel: string, content: string } | null,
+ *   readFileUtf8?: (abs: string) => string,
+ * }} [opts]
  */
 export function checkPackageAudit(repoRoot, opts = {}) {
   const canonicalPackageDir =
     opts.packageDir ?? path.join(repoRoot, "release", "codex-changeguard-plugin");
   /** @type {string[]} */
   const errors = [];
+  /** Optional read override for fail-closed unreadable self-tests only. */
+  const readFileUtf8 =
+    opts.readFileUtf8 ?? ((abs) => fs.readFileSync(abs, "utf8"));
 
   if (!fs.existsSync(canonicalPackageDir) || !fs.statSync(canonicalPackageDir).isDirectory()) {
     return {
@@ -154,7 +174,7 @@ export function checkPackageAudit(repoRoot, opts = {}) {
         }
       }
       if (ent.isFile()) {
-        auditFile(rel, abs, errors);
+        auditFile(rel, abs, errors, readFileUtf8);
       }
     });
 
@@ -225,8 +245,9 @@ export function checkPackageAudit(repoRoot, opts = {}) {
  * @param {string} rel
  * @param {string} abs
  * @param {string[]} errors
+ * @param {(abs: string) => string} [readFileUtf8]
  */
-function auditFile(rel, abs, errors) {
+function auditFile(rel, abs, errors, readFileUtf8 = (p) => fs.readFileSync(p, "utf8")) {
   const ext = path.extname(rel).toLowerCase();
   const base = path.basename(rel).toLowerCase();
 
@@ -275,7 +296,13 @@ function auditFile(rel, abs, errors) {
 
   if (DOC_EXT.has(ext)) {
     // Docs: only flag obvious embedded private key blocks / env dumps — not words like "network"
-    const text = fs.readFileSync(abs, "utf8");
+    let text;
+    try {
+      text = readFileUtf8(abs);
+    } catch {
+      errors.push(`unreadable_package_file:${rel}`);
+      return;
+    }
     if (/-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----/.test(text)) {
       errors.push(`secret_material_doc:${rel}`);
     }
@@ -297,8 +324,10 @@ function auditFile(rel, abs, errors) {
 
   let text;
   try {
-    text = fs.readFileSync(abs, "utf8");
+    text = readFileUtf8(abs);
   } catch {
+    // Fail closed: unreadable package files cannot be silently skipped.
+    errors.push(`unreadable_package_file:${rel}`);
     return;
   }
 
@@ -374,11 +403,17 @@ function auditFile(rel, abs, errors) {
     if (hasChildProcessImport) {
       if (!isAllowlistedChildProcessSurface(rel)) {
         errors.push(`shell_child_process:${rel}`);
+      } else {
+        // Allowlisted surfaces: still reject non-allowlisted executables / shells.
+        if (hasArbitraryShellInvocation(text)) {
+          errors.push(`arbitrary_shell:${rel}`);
+        }
+        // process.execPath is the preferred Node spawn target; string "node" also ok.
+        // Reject spawn of clearly arbitrary tools (curl, python, etc.) already
+        // handled by hasArbitraryShellInvocation allowlist.
       }
-    }
-
-    // Shell-interpreter execution forms — rejected even on allowlisted files.
-    if (hasArbitraryShellInvocation(text)) {
+    } else if (hasArbitraryShellInvocation(text)) {
+      // Shell-interpreter / non-allowlisted exec forms without import still fail.
       errors.push(`arbitrary_shell:${rel}`);
     }
 
@@ -426,7 +461,10 @@ function auditFile(rel, abs, errors) {
 
 /**
  * Detect global network API capability without flagging transport method names
- * like `fetch(request)` on OfficialTransport or object methods.
+ * like `transport.fetch(request)`, `this.fetch(...)`, or object-method
+ * shorthand `fetch(request) { ... }` on OfficialTransport.
+ * Bare global `fetch(...)` *calls* are refused — including variable /
+ * computed first arguments (not only URL string literals).
  * @param {string} text
  */
 function hasGlobalNetworkCapability(text) {
@@ -442,21 +480,139 @@ function hasGlobalNetworkCapability(text) {
   if (/\bnew\s+(?:WebSocket|XMLHttpRequest|EventSource)\s*\(/.test(text)) {
     return true;
   }
-  // Bare global fetch("http...") / fetch(`http...`) — URL-shaped first arg
-  if (/\bfetch\s*\(\s*["'`]https?:\/\//.test(text)) {
+  // Bare global fetch(...) *calls* (any argument form). Method shorthand
+  // definitions `fetch(req) {` / `async fetch(req) {` are not calls.
+  if (hasBareGlobalFetchCall(text)) {
     return true;
   }
   // Bare WebSocket / XMLHttpRequest / EventSource identifier used as constructor-like call
-  if (/\bWebSocket\s*\(\s*["'`]/.test(text)) {
+  if (/\bWebSocket\s*\(/.test(text)) {
     return true;
   }
   if (/\bXMLHttpRequest\s*\(/.test(text)) {
     return true;
   }
-  if (/\bEventSource\s*\(\s*["'`]/.test(text)) {
+  if (/\bEventSource\s*\(/.test(text)) {
     return true;
   }
   return false;
+}
+
+/**
+ * True when source contains a bare global `fetch(...)` *call* (not a method
+ * definition and not a member call like `obj.fetch(...)`).
+ * @param {string} text
+ */
+function hasBareGlobalFetchCall(text) {
+  const re = /(?<![\w$.])\bfetch\s*\(/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const openIdx = m.index + m[0].length - 1; // '('
+    const closeIdx = skipBalancedParens(text, openIdx);
+    if (closeIdx < 0) continue;
+    let j = closeIdx + 1;
+    while (j < text.length && /\s/.test(text[j])) j++;
+    // Optional TS return type on method: ): Promise<Response> {
+    if (text[j] === ":") {
+      // method-with-return-type definition — skip
+      continue;
+    }
+    if (text[j] === "{") {
+      // Object/class method shorthand definition, not a call.
+      continue;
+    }
+    // Otherwise treat as a call (`;`, `,`, `)`, newline expression, etc.)
+    return true;
+  }
+  return false;
+}
+
+/**
+ * @param {string} text
+ * @param {number} openIdx index of '('
+ */
+function skipBalancedParens(text, openIdx) {
+  let depth = 0;
+  let i = openIdx;
+  let mode = "code";
+  while (i < text.length) {
+    const c = text[i];
+    const n = text[i + 1];
+    if (mode === "code") {
+      if (c === "/" && n === "/") {
+        mode = "line";
+        i += 2;
+        continue;
+      }
+      if (c === "/" && n === "*") {
+        mode = "block";
+        i += 2;
+        continue;
+      }
+      if (c === "'") {
+        mode = "s";
+        i++;
+        continue;
+      }
+      if (c === '"') {
+        mode = "d";
+        i++;
+        continue;
+      }
+      if (c === "`") {
+        mode = "t";
+        i++;
+        continue;
+      }
+      if (c === "(") {
+        depth++;
+        i++;
+        continue;
+      }
+      if (c === ")") {
+        depth--;
+        if (depth === 0) return i;
+        i++;
+        continue;
+      }
+      i++;
+      continue;
+    }
+    if (mode === "line") {
+      if (c === "\n") mode = "code";
+      i++;
+      continue;
+    }
+    if (mode === "block") {
+      if (c === "*" && n === "/") {
+        mode = "code";
+        i += 2;
+        continue;
+      }
+      i++;
+      continue;
+    }
+    if (mode === "s" || mode === "d") {
+      if (c === "\\") {
+        i += 2;
+        continue;
+      }
+      if ((mode === "s" && c === "'") || (mode === "d" && c === '"')) mode = "code";
+      i++;
+      continue;
+    }
+    if (mode === "t") {
+      if (c === "\\") {
+        i += 2;
+        continue;
+      }
+      if (c === "`") mode = "code";
+      i++;
+      continue;
+    }
+    i++;
+  }
+  return -1;
 }
 
 /**
@@ -474,8 +630,8 @@ function isDynamicInstallText(text) {
 }
 
 /**
- * spawn/exec/execFile forms that invoke a shell interpreter.
- * Also catches spawn("sh", ...) with double/single/backtick quotes.
+ * spawn/exec/execFile forms that invoke a shell interpreter or non-allowlisted
+ * executable. Also catches spawn("sh", ...) and shell: true.
  * @param {string} text
  */
 function hasArbitraryShellInvocation(text) {
@@ -497,6 +653,43 @@ function hasArbitraryShellInvocation(text) {
   ) {
     return true;
   }
+  // String-literal first arg to spawn/execFile family must be allowlisted.
+  // process.execPath is always accepted (dynamic Node path).
+  const spawnLit =
+    /\b(?:spawn|spawnSync|execFile|execFileSync)\s*\(\s*["'`]([^"'`]+)["'`]/gi;
+  let m;
+  while ((m = spawnLit.exec(text)) !== null) {
+    const exe = m[1];
+    if (!isAllowlistedChildProcessExecutable(exe)) {
+      return true;
+    }
+  }
+  // exec/execSync string form — only allow exact allowlisted bare commands
+  // (still reject shell metacharacters / multi-word shell lines)
+  const execLit = /\b(?:exec|execSync)\s*\(\s*["'`]([^"'`]+)["'`]/gi;
+  while ((m = execLit.exec(text)) !== null) {
+    const cmd = m[1].trim();
+    const first = cmd.split(/\s+/)[0] ?? "";
+    if (!isAllowlistedChildProcessExecutable(first)) {
+      return true;
+    }
+    if (/[;&|<>$`]/.test(cmd)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * @param {string} exe
+ */
+function isAllowlistedChildProcessExecutable(exe) {
+  if (!exe) return false;
+  // process.execPath appears as identifier, not string — string forms below
+  const base = path.basename(exe).toLowerCase().replace(/\.exe$/i, "");
+  if (CHILD_PROCESS_EXECUTABLE_ALLOWLIST.includes(base)) return true;
+  // Absolute path ending in allowlisted name
+  if (CHILD_PROCESS_EXECUTABLE_ALLOWLIST.some((a) => base === a)) return true;
   return false;
 }
 
@@ -524,6 +717,13 @@ function hasEmbeddedCredential(text, rel) {
   if (/\bAKIA[0-9A-Z]{16}\b/.test(text)) return true;
   // Slack tokens with long body
   if (/\bxox[baprs]-[A-Za-z0-9-]{20,}\b/.test(text)) return true;
+  // High-confidence GitHub PAT shapes (same family as privacy/redaction):
+  // classic ghp_… and fine-grained github_pat_…. Require concrete long bodies
+  // so redaction-source character classes / quantifiers do not false-positive.
+  if (/\bghp_[A-Za-z0-9]{20,}\b/.test(text)) return true;
+  if (/\bgithub_pat_[A-Za-z0-9_]{20,}\b/.test(text)) return true;
+  // Other high-confidence GitHub token prefixes (app/user/server/refresh).
+  if (/\b(?:gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b/.test(text)) return true;
 
   if (isPatternSource) return false;
 

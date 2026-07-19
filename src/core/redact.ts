@@ -24,6 +24,11 @@ const CREDENTIAL_SHAPES = [
   /\b(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|auth[_-]?token|password|passwd|secret|client[_-]?secret)\s*[:=]\s*\S+/gi,
   /\b(?:sk|pk|rk)-[A-Za-z0-9]{8,}\b/g,
   /\b(?:xox[baprs]-)[A-Za-z0-9-]{10,}\b/g,
+  // GitHub classic PATs (ghp_…) and fine-grained PATs (github_pat_…).
+  // High-confidence shapes only — do not match bare "github" identifiers.
+  /\bghp_[A-Za-z0-9]{20,}\b/g,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
+  /\b(?:gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b/g,
   /\bAPI[_-]?KEY\s*[:=]\s*\S+/gi,
   // Cookie / session shapes (including after NFKC of full-width forms).
   /\bSet-Cookie\s*[:=]\s*\S+/gi,
