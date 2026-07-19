@@ -2,11 +2,12 @@
 
 ## Current state
 
-- Date: 2026-07-18 Asia/Shanghai
+- Date: 2026-07-19 Asia/Shanghai
 - Track ID: `track-openai-build-week-codex-changeguard-20260717`
 - Gate B: `APPROVED`, option A
-- Current scope status: `IN_PROGRESS` (broader product; Ticket 16 is `LOCAL_COMPLETE` with Root 49/525 + R25 double-review evidence; Ticket 17 not complete; T14 platform Full and T15 real-host Full remain open)
-- Integrated HEAD (Wave 4 closeout tip): `407789ca847b984dbd935e26edf8ad58ad0cf688`
+- Current scope status: `IN_PROGRESS` (broader product remains open **only** for external/Gate C actions and honest platform Full gaps — Ticket 14 Windows Preview, Ticket 15 Linux/WSL Limited; **all 17 product tickets** are locally complete or framework-complete with truthful platform limits; Tickets 16 and 17 are both `LOCAL_COMPLETE`)
+- Integrated HEAD (Ticket 17 implementation tip): `2e5f463250c3749731418b661e1a3527bf049e62`
+- Wave 4 closeout tip (historical): `407789ca847b984dbd935e26edf8ad58ad0cf688`
 - Ticket 12 verification tip: `6083c6f3ce75acddd982c151e5c6831a79ad7b2c`
 - Ticket 01 (read-only diagnosis spine): `LOCAL_COMPLETE` / locally verified on commit `d7d917b03fc8b2ddd6b9b42b961cf58b4af4e5b2`
 - Ticket 02 (protected-process verified repair): `LOCAL_COMPLETE` / integrated through `e06e254`, verified on `c20ddc5c3b36b373e3b2c5791aa1db2678a45a8e`
@@ -23,11 +24,11 @@
 - Ticket 13 (macOS Full support): `LOCAL_COMPLETE` with receipt-scoped real-machine macOS Full harness evidence on this host (not universal macOS/Codex coverage)
 - Ticket 14 (Windows 11 validation): framework integrated; platform remains **PREVIEW** (no real Windows 11 W11-S01…S11 receipt; external JSON cannot Full; Full also requires process-local live witness)
 - Ticket 15 (Linux/WSL/enterprise): framework integrated; platform remains **Limited / Read-only** (no real host receipt; public writes disabled by default)
-- Ticket 16 (security / privacy / release gate): `LOCAL_COMPLETE` (implementation candidate **R24**; Root independently reproduced all R24 RED/GREEN probes — Ticket16 focused **49/49**, full suite **525/525**, `npm run typecheck` pass, `npm run build` pass, `npm run verify:release` `ok=true` / no failed step / `diff_check=ok`, `git diff --check` pass; R25 independent double review both PASS / `NO_P0_P1:true` — standards `worker.log` SHA256 `da262901325a2fd6bcb509b96fb58a367fd7f20dd33cb384ab48d2ad6b626a21`, spec/security `worker.log` SHA256 `70e7dca729b0c23e7d94f8b68884b0edbbb0266e089d5feb4df1211a24bac40c`; injection matrix **15** rows including official-bind absence refusal and binary-install absence). Canonical command: `npm run verify:release` → `scripts/verify-release.mjs` (never `scripts/run-verification.sh`). Does **not** complete Ticket 17 or product closeout.
-- Ticket 17: not complete
+- Ticket 16 (security / privacy / release gate): `LOCAL_COMPLETE` (implementation candidate **R24**; Root independently reproduced all R24 RED/GREEN probes — Ticket16 focused **49/49**, full suite **525/525**, `npm run typecheck` pass, `npm run build` pass, `npm run verify:release` `ok=true` / no failed step / `diff_check=ok`, `git diff --check` pass; R25 independent double review both PASS / `NO_P0_P1:true` — standards `worker.log` SHA256 `da262901325a2fd6bcb509b96fb58a367fd7f20dd33cb384ab48d2ad6b626a21`, spec/security `worker.log` SHA256 `70e7dca729b0c23e7d94f8b68884b0edbbb0266e089d5feb4df1211a24bac40c`; injection matrix **15** rows including official-bind absence refusal and binary-install absence). Canonical command: `npm run verify:release` → `scripts/verify-release.mjs` (never `scripts/run-verification.sh`).
+- Ticket 17 (competition demo + release readiness): `LOCAL_COMPLETE` on implementation commit `2e5f463250c3749731418b661e1a3527bf049e62` — **historical R13** Ticket17 focused **27/27**; full `npm test` **552/552** (0 fail); `npm run typecheck` / `npm run build` / `git diff --check` pass; post-R14 `npm run ready:local` `ok=true`, all **10/10** steps pass, `local_only=true`, all external action flags false; R13 independent double review both `PASS_NO_P0_P1` — spec `worker.log` SHA256 `0b79a2c830c640f4b1db670f2a2acff322bcbf548dcd970cf37735c596ad2962`, security `worker.log` SHA256 `09077abb7a782d82edb52983d24eb1cd652060bf431237d86aec8b8b3d394052`; late-correction trail R10–R12 as recorded in Ticket 17 closeout. **Post-R13 deterministic-tarball correction (current):** Root found nondeterministic host `tar` hashes despite stable content; R16 patch SHA256 `4c39cf3753c48edaf6081ede68b43fd3b853d743a8d82b9c84a0e39dd2f8ada4`; R18 patch SHA256 `a66bf79e863be49a480db253475b81ae91b6d0a996daefec5dced482068de08e`; R20 docs patch SHA256 `e794b83b88abd389e348b31e955e076c935c71fefebfc7be2097b386ad4045bf`; Root package-repro **9/9**; final full `npm test` **561/561** (0 fail, ~73.0s); final `ready:local` **10/10** `ok=true` with all external action flags false; two consecutive **pre-doc-finalization** package runs (not final): content SHA256 `ec05b6576731b68bd470becaf77225876220ab9046f71c0656cf4d851edb70c2`, tar SHA256 `f7b590d530797bca69a056d3b8ccafcc8583a99d33335cac7931aede09c13e80` (gzip mtime 0, OS 255; 465 files; system tar extract + demo `ok=true`, 10 steps, `network_used=false`); R19 read-only review empty `changes.patch`, `REPRO_REVIEW: PASS_NO_P0_P1`, `worker.log` SHA256 `e05479ccd1f167d1d4751666064184de98cc5c1c6262e4d4b93a98223d2f8757`. **Post-doc final freeze (R20; Root-verified two consecutive runs):** `package_content_sha256` `5b27ae6fa958521a2c57513b2e6568d06b8bc94230f43d165664d4902b1c0b5c`; `package_file_count` **465**; `tarball_sha256` `aac7723b60c6ed9c331121a0ca476b986e8bdf3de297365af212a262108d627b`; `reproducible_tarball` true; `has_node_modules` false; `has_agents_md` false; `has_handoff_md` false; `has_docs_agents` false; `has_source_maps` false; `has_license` true; `private` true; `license` MIT. Packaging: pure Node deterministic ustar+gzip, stable order/metadata, symlink/special fail-closed; reproducibility scoped to identical inputs + fixed Node toolchain (not arbitrary Node/zlib identity). Does **not** authorize Gate C / publication / registration / upload / submission.
 - Registration: `NOT_STARTED`
 - External submission: `NOT_STARTED`
-- Gate C: not authorized
+- Gate C: not authorized / `NOT_STARTED`
 - No public publication, upload, or submission has occurred
 - Real external GitHub writes: unauthorized / `NOT_STARTED`
 
@@ -37,10 +38,11 @@
 Ticket 12 meets its acceptance criteria locally and is `LOCAL_COMPLETE`, verified on
 clean commit `6083c6f3ce75acddd982c151e5c6831a79ad7b2c`
 (`fix: close Ticket 12 public wire authority seams`). Broader ChangeGuard remains
-`IN_PROGRESS`. Tickets **16, 17** remain incomplete. Gate B remains `APPROVED`,
-option A. Gate C is not authorized. Registration, publication, upload, and external
-submission remain `NOT_STARTED`. Real external GitHub writes remain unauthorized /
-`NOT_STARTED`.
+`IN_PROGRESS`. **At that historical tip**, Tickets **16, 17** were still incomplete
+(both later reached `LOCAL_COMPLETE` — see Current state and Ticket 17 closeout).
+Gate B remains `APPROVED`, option A. Gate C is not authorized. Registration,
+publication, upload, and external submission remain `NOT_STARTED`. Real external
+GitHub writes remain unauthorized / `NOT_STARTED`.
 
 ### Root integrated verification on `6083c6f` (dynamic; passed)
 
@@ -76,7 +78,8 @@ authority. Do not collapse Root dynamic proof into Grok static review.
 - Candidate supersession never downloads/installs binaries or uninstalls workarounds.
 - Gate C / registration / publication / upload / submission / real external GitHub writes
   remain unauthorized / `NOT_STARTED`.
-- Does **not** complete Tickets 16–17 or whole-product closeout.
+- **At that historical tip**, did **not** complete Tickets 16–17 or whole-product closeout
+  (Tickets 16 and 17 later reached `LOCAL_COMPLETE`; Gate C remains `NOT_STARTED`).
 
 The clean Root regression plus the two final static ACCEPT reviews above are the
 canonical final proof for Ticket 12 local closeout on `6083c6f`.
@@ -103,6 +106,9 @@ canonical final proof for Ticket 12 local closeout on `6083c6f`.
 - Ticket 13 issue record: [.scratch/changeguard/issues/13-macos-full-support.md](.scratch/changeguard/issues/13-macos-full-support.md)
 - Ticket 14 issue record: [.scratch/changeguard/issues/14-windows-11-validation.md](.scratch/changeguard/issues/14-windows-11-validation.md)
 - Ticket 15 issue record: [.scratch/changeguard/issues/15-linux-wsl-enterprise-handoff.md](.scratch/changeguard/issues/15-linux-wsl-enterprise-handoff.md)
+- Ticket 16 issue record: [.scratch/changeguard/issues/16-security-privacy-release-gate.md](.scratch/changeguard/issues/16-security-privacy-release-gate.md)
+- Ticket 17 issue record: [.scratch/changeguard/issues/17-competition-demo-release-readiness.md](.scratch/changeguard/issues/17-competition-demo-release-readiness.md)
+- Local vs Gate C release checklist: [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
 
 ## Ticket 01 local completion (canonical evidence)
 
@@ -190,10 +196,11 @@ product closeout on `c20ddc5`.
 Tickets 05, 06, 07, 08, and 09 each meet their ticket acceptance criteria locally
 and are `LOCAL_COMPLETE`, verified on integrated clean HEAD
 `5aa12c6c7370d9da84be3078c14fc63cf7e90fec` (`fix: close Wave 3 lifecycle trust gaps`).
-Broader ChangeGuard remains `IN_PROGRESS`; at Wave 3 closeout Tickets 10–17 were
+Broader ChangeGuard remains `IN_PROGRESS`; **at Wave 3 closeout** Tickets 10–17 were
 still incomplete (Ticket 10 was closed later; Tickets 11/13/14/15 were closed in
 Wave 4 — see Wave 4 closeout; Ticket 12 closed later on `6083c6f` — see Ticket 12
-closeout; Tickets 16/17 remain open). Gate B remains
+closeout; Tickets 16/17 later reached `LOCAL_COMPLETE` — see Current state and
+Ticket 17 closeout). Gate B remains
 `APPROVED`, option A. Gate C is not authorized. Registration, publication,
 upload, and external submission remain `NOT_STARTED`. Real external GitHub
 writes remain unauthorized / `NOT_STARTED`.
@@ -246,7 +253,8 @@ integrated clean HEAD `3265acd11fa260d4e2c857705a73bd36b7b002b6`
 (`test: close Ticket 10 consumer gaps`). Broader ChangeGuard remains `IN_PROGRESS`.
 At Ticket 10 closeout, Tickets 11–17 were still open; Wave 4 later closed local/framework
 status for 11/13/14/15 (see Wave 4 closeout). Ticket 12 later closed on `6083c6f`
-(see Ticket 12 closeout). Tickets **16, 17** remain incomplete.
+(see Ticket 12 closeout). **At that historical tip**, Tickets **16, 17** were incomplete
+(both later reached `LOCAL_COMPLETE` — see Current state and Ticket 17 closeout).
 Gate B remains `APPROVED`, option A. Gate C is not authorized. Registration,
 publication, upload, and external submission remain `NOT_STARTED`. Real external
 GitHub writes remain unauthorized / `NOT_STARTED`. Ticket 11 remains required for any
@@ -320,9 +328,9 @@ closeout on `3265acd`.
 Tickets 11, 13, 14, and 15 are integrated on clean main tip
 `407789ca847b984dbd935e26edf8ad58ad0cf688`
 (`fix: refuse shared temp roots for fixture repairs`). Broader ChangeGuard remains
-`IN_PROGRESS`. At Wave 4 closeout Tickets **12, 16, 17** were incomplete; Ticket 12
-later closed on `6083c6f` (see Ticket 12 closeout). Tickets **16, 17** remain
-incomplete. Gate B remains
+`IN_PROGRESS`. **At Wave 4 closeout** Tickets **12, 16, 17** were incomplete; Ticket 12
+later closed on `6083c6f` (see Ticket 12 closeout). Tickets **16 and 17** later reached
+`LOCAL_COMPLETE` (see Current state and Ticket 17 closeout). Gate B remains
 `APPROVED`, option A. Gate C is **not** authorized. Registration, publication,
 upload, and external submission remain `NOT_STARTED`. Real external GitHub writes
 remain unauthorized / `NOT_STARTED`. No public competition submission occurred.
@@ -413,12 +421,99 @@ Truthful residual claims:
 - Network compare is local-input only (`network_used: false`).
 - `platform-status` unifies T13 macOS fields, T14 Windows PREVIEW/`status`/plan/live-witness limits, and T15 capability `reports` without a second receipt truth source.
 
+## Ticket 17 closeout (competition demo + local release readiness; canonical evidence)
+
+Ticket 17 meets its acceptance criteria locally and is `LOCAL_COMPLETE` on
+implementation commit `2e5f463250c3749731418b661e1a3527bf049e62`. All 17 product
+tickets are locally complete or framework-complete with honest platform limits.
+Broader ChangeGuard remains `IN_PROGRESS` **only** for external/Gate C work and
+real-host platform Full gaps (Ticket 14 Windows Preview; Ticket 15 Linux/WSL Limited),
+**not** because Tickets 16/17 are incomplete. Gate B remains `APPROVED`, option A.
+Gate C is not authorized. Registration, publication, upload, external submission, and
+real GitHub writes remain `NOT_STARTED` / unauthorized.
+
+### Root integrated verification on `2e5f463` (historical R13; do not rewrite)
+
+Root dispatcher evidence at implementation tip (authoritative historical layer):
+
+- Ticket17 focused tests: **27/27** pass
+- Full regression: `npm test` **552/552** pass, **0** failures
+- `npm run typecheck` pass
+- `npm run build` pass
+- `git diff --check` pass
+- post-R14 `npm run ready:local`: `ok=true`, all **10** steps pass, `local_only=true`,
+  `gate_c=false`, `remote_publish=false`, `registration=false`,
+  `competition_submission=false`, `real_github_write=false`
+- Public package surface at that tip: `package_file_count` **465**;
+  `has_node_modules` false; `has_agents_md` false; `has_handoff_md` false;
+  `has_docs_agents` false; `has_source_maps` false; `has_license` true;
+  `private` true; `license` MIT
+  (do **not** treat any pre-correction host-`tar` hash as final; see post-R13 section)
+
+### Final independent static reviews (R13; historical; passed)
+
+| Artifact | SHA256 | Verdict |
+| --- | --- | --- |
+| Spec `worker.log` | `0b79a2c830c640f4b1db670f2a2acff322bcbf548dcd970cf37735c596ad2962` | `PASS_NO_P0_P1` |
+| Security `worker.log` | `09077abb7a782d82edb52983d24eb1cd652060bf431237d86aec8b8b3d394052` | `PASS_NO_P0_P1` |
+
+### Late-correction implementation artifact trail (pre-repro R10–R12)
+
+| Round | Artifact | SHA256 |
+| --- | --- | --- |
+| R10 | `changes.patch` | `85fea5c3fbcb5205b897279e67ab8b95c5a4ad7b5debb5c109428e24e8475c9e` |
+| R11 | `changes.patch` | `75329bf8d895443adc19594ac4fb238b6fcbc0f376d759f02457291b1705363c` |
+| R12 | `changes.patch` | `3da3d8ea66fb9c32b2ef46ceafa2868aabf05579a62d9c7a525427293602a030` |
+
+### Post-R13 correction / current evidence (deterministic tarball)
+
+Root found **nondeterministic host `tar` hashes** despite stable package **content**.
+Correction and current gates (clearly separated from R13 history above):
+
+| Item | Evidence |
+| --- | --- |
+| R16 implementation patch | `changes.patch` SHA256 `4c39cf3753c48edaf6081ede68b43fd3b853d743a8d82b9c84a0e39dd2f8ada4` |
+| R18 correction patch | `changes.patch` SHA256 `a66bf79e863be49a480db253475b81ae91b6d0a996daefec5dced482068de08e` |
+| R20 docs patch (public-doc finalization trail) | `changes.patch` SHA256 `e794b83b88abd389e348b31e955e076c935c71fefebfc7be2097b386ad4045bf` |
+| Root focused package-repro | **9/9** pass |
+| Final full regression | `npm test` **561/561**, 0 fail, duration ~**73.0s** |
+| Final `ready:local` | **10/10** `ok=true`; all external action flags false |
+| Pre-doc-finalization package (two consecutive runs; **not final**) | content SHA256 `ec05b6576731b68bd470becaf77225876220ab9046f71c0656cf4d851edb70c2`; tar SHA256 `f7b590d530797bca69a056d3b8ccafcc8583a99d33335cac7931aede09c13e80`; gzip mtime **0**, OS **255**; system tar extract + extracted demo `ok=true`, 10 steps, `network_used=false`, **465** files |
+| R19 final read-only review | `changes.patch` empty; EndTurn `REPRO_REVIEW: PASS_NO_P0_P1`; `worker.log` SHA256 `e05479ccd1f167d1d4751666064184de98cc5c1c6262e4d4b93a98223d2f8757` |
+| **Post-doc final freeze (R20; Root-verified two consecutive runs)** | `package_content_sha256` `5b27ae6fa958521a2c57513b2e6568d06b8bc94230f43d165664d4902b1c0b5c`; `package_file_count` **465**; `tarball_sha256` `aac7723b60c6ed9c331121a0ca476b986e8bdf3de297365af212a262108d627b`; `reproducible_tarball` **true**; `has_node_modules` false; `has_agents_md` false; `has_handoff_md` false; `has_docs_agents` false; `has_source_maps` false; `has_license` true; `private` true; `license` MIT |
+
+**Packaging contract:** pure Node deterministic **ustar + gzip**; stable member order and
+metadata; symlink / special-file paths **fail closed**. **Reproducibility scope:**
+identical package inputs plus a fixed Node toolchain — **not** identity across
+arbitrary Node/zlib versions.
+
+**Final package freeze:** the post-doc R20 dual-run values above are the Root-verified
+final package evidence. The pre-doc-finalization `ec05`/`f7b590` pair (and any obsolete
+pre-correction host-`tar` values such as former R15-era freezes) remains historical
+evidence only and is **not** the final freeze.
+
+### Residual boundaries (still truthful)
+
+- Ticket 10 packaged `upstream-preview` is a product surface, not a required step inside
+  the two-minute Ticket 17 demo path.
+- Gate C / registration / publication / upload / submission / real external GitHub writes
+  remain unauthorized / `NOT_STARTED`.
+- Ticket 14 remains Preview without real W11 host + live witness; Ticket 15 remains
+  Limited without real host receipt; Ticket 13 Full is receipt-scoped (not universal).
+- Local complete does **not** authorize public remote, Release, competition registration,
+  upload, or submission.
+
+Historical R13 proof remains 27/27 + 552/552 + ready:local 10/10 + double
+`PASS_NO_P0_P1` on `2e5f463`. Current correction proof is package-repro 9/9 +
+561/561 + ready:local 10/10 + R19 `REPRO_REVIEW: PASS_NO_P0_P1` with pure-Node
+deterministic packaging and the R20 post-doc final package freeze above.
+
 ## Next steps
 
-1. Continue open product tickets **16, 17**; Ticket 12 local closeout and Wave 4 local/framework closeout do not complete the product.
+1. All product tickets 01–17 are locally complete or framework-complete with honest platform limits; residual product work is external/Gate C and real-host platform Full gaps (T14 Windows Preview, T15 Linux/WSL Limited), not incomplete T16/T17 product tickets.
 2. Keep Gate C / registration / publication / upload / submission / real external GitHub writes blocked until separate authorization.
 3. Preserve residual boundaries: Ticket 11 no production adapter / no real external write; Ticket 12 follow-up remains preview-only / local-only / no external write; Ticket 13 Full is receipt-scoped (not universal); Ticket 14 stays Preview without real W11 host + live witness; Ticket 15 stays Limited without real host receipt; Ticket 06 version-rollback preview-only; Ticket 10 upstream preview-only / local-only / no external write.
-4. Do not treat Ticket 10, Ticket 11, or Ticket 12 local completion as authorization for real GitHub writes without a host-injected adapter and explicit user confirmation.
+4. Do not treat Ticket 10, Ticket 11, Ticket 12, Ticket 16, or Ticket 17 local completion as authorization for real GitHub writes, public remotes, Releases, registration, upload, or competition submission without separate Gate C / host-adapter authorization.
 5. Do not treat a clean source checkout as runnable before `npm ci && npm run build` (or `npm run package`).
 
 ## Boundaries

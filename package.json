@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
-  "description": "Evidence-bound Codex ChangeGuard Plugin — read-only diagnosis spine",
+  "description": "Evidence-bound Codex ChangeGuard Plugin — diagnosis, verified isolated recovery, and local release governance",
   "type": "module",
   "engines": {
     "node": ">=20"

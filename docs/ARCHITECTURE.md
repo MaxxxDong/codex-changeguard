@@ -67,7 +67,7 @@ Evidence-locked verdict + Recovery Capsule preview
 
 ### 2.1.1 Ticket 17 shared demo core and judge package
 
-Ticket 17 defines the competition demo and release-readiness **surface**. Shared demo core (CLI/MCP/Skill) and S4 package/profile smoke are implemented; **full product closeout** still requires independent review (do not mark Ticket 17/HANDOFF closed from package smoke alone).
+Ticket 17 defines the competition demo and release-readiness **surface**. Shared demo core (CLI/MCP/Skill), S4 package/profile smoke, and local closeout are **complete**: Ticket 17 is `LOCAL_COMPLETE` on implementation commit `2e5f463250c3749731418b661e1a3527bf049e62` with historical R13 Root evidence (Ticket17 focused **27/27**, full suite **552/552**, `npm run ready:local` 10/10) and independent R13 double review both `PASS_NO_P0_P1`. Post-R13 deterministic-tarball correction (current): pure Node **ustar + gzip** packaging with stable member order/metadata and symlink/special-file **fail-closed**; Root package-repro **9/9**; full suite **561/561**; final `ready:local` 10/10 `ok=true` (all external action flags false); R19 read-only `REPRO_REVIEW: PASS_NO_P0_P1`. Reproducibility is scoped to identical package inputs plus a fixed Node toolchain (not arbitrary Node/zlib identity). Gate C / publication / registration / upload / submission remain `NOT_STARTED` and are **not** authorized by this local complete status.
 
 | Requirement | Contract |
 | --- | --- |
@@ -80,7 +80,7 @@ Ticket 17 defines the competition demo and release-readiness **surface**. Shared
 | Rollback + cleanup | Authorized isolated repair demos must verify and roll back; temp state cleaned without leaving a daemon |
 | CLI/MCP equivalence | Demo-visible stable fields match across CLI and MCP for the same core outcomes |
 | Clean-profile uninstall smoke | `npm run package:clean-profile` — isolated temp HOME only; no daemon, LaunchAgent/service, shell-profile edit, global Codex config edit, credential requirement, or product-owned residue |
-| Packaged judge path | `npm run package` → self-contained tree (+ portable `.tgz`); Node >= 20; no on-host product rebuild, GitHub login, API key, or network; no source maps / `node_modules` / repo-only surfaces |
+| Packaged judge path | `npm run package` → self-contained tree (+ portable `.tgz` via pure Node deterministic ustar+gzip, stable order/metadata, symlink/special fail-closed); Node >= 20; no on-host product rebuild, GitHub login, API key, or network; no source maps / `node_modules` / repo-only surfaces |
 | Local readiness | `npm run ready:local` aggregates package structure, package demo smoke, clean-profile smoke, docs/legal/parity, boundary, tests, `verify:release`, and `git diff --check` — **local only** |
 
 Local gate `npm run verify:release` / `ready:local` measures automated readiness only; Gate C external actions remain separate (repository `docs/RELEASE_CHECKLIST.md`, not part of the five packaged public docs).
@@ -109,7 +109,7 @@ Core I/O rules:
 - surface / error class / failure phase remain applicability gates after independent measurements
 - MCP stdio uses a bounded byte-oriented NDJSON frame accumulator; frames with byte length `<= MAX_MCP_REQUEST_BYTES` are accepted, only `>` the limit is rejected, before `JSON.parse`
 - Scenario Harness owns whole-target before/after hashing, not the diagnosis core
-- Packaging: `npm run package` builds `release/codex-changeguard-plugin/` (+ portable `release/codex-changeguard-plugin.tgz`) with exact public top-level surface (`.codex-plugin`, `.mcp.json`, `LICENSE`, `README.md`, `README.zh-CN.md`, `bin`, `dist`, `docs`, `fixtures`, `hooks`, `package.json`, `schemas`, `skills`); public `docs/` is only `ARCHITECTURE.md`, `SECURITY.md`, `SUPPORT_MATRIX.md`, `TEST_PLAN.md`, and `CASE_STUDIES.md` (no `docs/agents`); packaged `README.md` / `README.zh-CN.md` omit repository-only `HANDOFF.md` links and keep mutual language links; no `node_modules`, source maps, `AGENTS.md`, `HANDOFF.md`, `src`, or `scripts`. Package smoke stages an isolated install, runs packaged `demo` from a non-repo cwd, checks DemoReceipt invariants, uninstalls, and launches MCP via packaged `.mcp.json`. Clean-profile residual smoke: `npm run package:clean-profile`. Local readiness: `npm run ready:local`. A clean source checkout is not claimed runnable before `npm ci && npm run build` (or package).
+- Packaging: `npm run package` builds `release/codex-changeguard-plugin/` (+ portable `release/codex-changeguard-plugin.tgz` produced by pure Node deterministic **ustar + gzip** with stable member order/metadata; symlink and special-file paths fail closed) with exact public top-level surface (`.codex-plugin`, `.mcp.json`, `LICENSE`, `README.md`, `README.zh-CN.md`, `bin`, `dist`, `docs`, `fixtures`, `hooks`, `package.json`, `schemas`, `skills`); public `docs/` is only `ARCHITECTURE.md`, `SECURITY.md`, `SUPPORT_MATRIX.md`, `TEST_PLAN.md`, and `CASE_STUDIES.md` (no `docs/agents`); packaged `README.md` / `README.zh-CN.md` omit repository-only `HANDOFF.md` links and keep mutual language links; no `node_modules`, source maps, `AGENTS.md`, `HANDOFF.md`, `src`, or `scripts`. Byte-identical tarball reproducibility is claimed only for identical package inputs plus a fixed Node toolchain — not across arbitrary Node/zlib versions. Package smoke stages an isolated install, runs packaged `demo` from a non-repo cwd, checks DemoReceipt invariants, uninstalls, and launches MCP via packaged `.mcp.json`. Clean-profile residual smoke: `npm run package:clean-profile`. Local readiness: `npm run ready:local`. A clean source checkout is not claimed runnable before `npm ci && npm run build` (or package).
 
 ### 2.3 Ticket 02 protected-process verified repair (isolated target)
 
@@ -676,7 +676,7 @@ Schema: `schemas/followup-result.schema.json`. Capsule/reply draft remain `previ
 - Fixture E crash-family classifier, Fixture F plugin-cache mechanisms, and Fixture G evidence-boundary case
 - disclosure manifest and repro-pack export
 - English + Chinese README parity, install/platform/judge instructions, live fixture path, tests
-- Ticket 17 shared demo core, disposable-temp demo, no-network default, rollback/cleanup, CLI/MCP equivalence, clean-profile uninstall smoke, packaged judge path, and `ready:local` aggregator (S4 local evidence; full closeout needs independent review — see §2.1.1)
+- Ticket 17 shared demo core, disposable-temp demo, no-network default, rollback/cleanup, CLI/MCP equivalence, clean-profile uninstall smoke, packaged judge path (pure Node deterministic ustar+gzip), and `ready:local` aggregator (`LOCAL_COMPLETE` + historical R13 `PASS_NO_P0_P1` + post-R13 package-repro / **561** regression / R19 `REPRO_REVIEW: PASS_NO_P0_P1`; Gate C still `NOT_STARTED` — see §2.1.1)
 
 ### Should
 

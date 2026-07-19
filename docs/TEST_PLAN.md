@@ -19,7 +19,7 @@ This document owns the ChangeGuard verification matrix. Passing a model-generate
 | Hooks / instances (Ticket 03) | first baseline, unchanged silent SessionStart, multi-instance upgrade, downgrade, PATH precedence drift, actual-instance evidence, ambiguous repair refusal, hook untrusted/skipped/failed, manual scan fallback, CLI/MCP scan equivalence, SessionStart changed/no-change duration &lt;10s, raw-path non-disclosure, symlink state refusal |
 | Platform macOS (Ticket 13) | adapter alias/operation/constraint contracts; isolation refuses active `~/.codex` and protected roots; receipt validator Full-only-with-proof + leak refusal; CLI/MCP `platform-status` / `platform-receipt-validate`; real-machine harness on darwin covers core diagnose, multi-instance, config repair, auto-rollback, explicit rollback, plugin-cache repair/rollback, KNOWN_GOOD/canary, privacy refuse, upstream zero-network, package smoke; support matrix docs |
 | Judge path | clean install; no judge API key; live matcher/probe; offline snapshot; visible evidence state; under 90 seconds |
-| Demo / Ticket 17 (S4 package/profile) | shared demo core (CLI/MCP/Skill); disposable temp only; no network default; rollback + cleanup; CLI/MCP equivalence; clean-profile install/uninstall residual smoke (`npm run package:clean-profile`); packaged prebuilt path Node >= 20 without on-host rebuild; package smoke stages install and runs `demo` from non-repo cwd; local readiness aggregator `npm run ready:local` — **S4 evidence local; full Ticket 17 closeout still needs independent review** |
+| Demo / Ticket 17 (S4 package/profile) | shared demo core (CLI/MCP/Skill); disposable temp only; no network default; rollback + cleanup; CLI/MCP equivalence; clean-profile install/uninstall residual smoke (`npm run package:clean-profile`); packaged prebuilt path Node >= 20 without on-host rebuild; pure Node deterministic ustar+gzip (stable order/metadata; symlink/special fail-closed; package-repro); package smoke stages install and runs `demo` from non-repo cwd; local readiness aggregator `npm run ready:local` — **Ticket 17 `LOCAL_COMPLETE`** (historical R13: Root 27/27 + 552/552 + ready:local 10/10; R13 both `PASS_NO_P0_P1`; post-R13: package-repro 9/9 + full **561/561** + ready:local 10/10 + R19 `REPRO_REVIEW: PASS_NO_P0_P1`); Gate C still `NOT_STARTED` |
 
 ## Fixture expectations
 
@@ -436,7 +436,7 @@ Additional static checks remain:
 
 ## Ticket 17 — competition demo and release-readiness surface
 
-Ticket 17 is **not** claimed product-complete by the S4 package/profile slice alone (independent review still owns closeout). Local verification themes:
+Ticket 17 is **`LOCAL_COMPLETE`** for the competition-demo and local release-readiness surface on implementation commit `2e5f463250c3749731418b661e1a3527bf049e62` (historical R13 Root: Ticket17 focused **27/27**, full suite **552/552**, `npm run ready:local` 10/10; independent R13 double review both `PASS_NO_P0_P1`). Post-R13 deterministic-tarball correction (current): pure Node **ustar + gzip** with stable order/metadata and symlink/special fail-closed; Root package-repro **9/9**; full suite **561/561** (0 fail, ~73.0s); final `ready:local` 10/10 `ok=true` (all external action flags false); R19 read-only `REPRO_REVIEW: PASS_NO_P0_P1`. Reproducibility is scoped to identical package inputs plus a fixed Node toolchain — not arbitrary Node/zlib identity. Gate C / publication / registration / upload / submission remain `NOT_STARTED`. Local verification themes:
 
 | Theme | Required evidence |
 | --- | --- |
@@ -449,11 +449,12 @@ Ticket 17 is **not** claimed product-complete by the S4 package/profile slice al
 | Rollback + cleanup | Isolated repair demo path: backup → apply → verify → rollback/cleanup; failed verify cannot claim `RESOLVED_VERIFIED` |
 | CLI/MCP equivalence | Stable-field match for demo-visible diagnose/repair outcomes |
 | Clean-profile uninstall | `npm run package:clean-profile`: isolated temp HOME only; after uninstall no daemon, LaunchAgent/service, shell-profile edit, global Codex config edit, credential requirement, background process, or product-owned residue |
-| Packaged judge path | `npm run package` → self-contained tree (+ `.tgz`); `npm run package:smoke` stages install, runs packaged `demo` from non-repo cwd, checks 10 ordered steps + security_evidence + rollback invariants, uninstalls |
+| Packaged judge path | `npm run package` → self-contained tree (+ `.tgz` via pure Node deterministic ustar+gzip); `npm run package:smoke` stages install, runs packaged `demo` from non-repo cwd, checks 10 ordered steps + security_evidence + rollback invariants, uninstalls |
+| Deterministic package repro | package-repro focused tests (**9/9**); stable content + tar hashes under identical inputs + fixed Node toolchain; gzip mtime 0 / OS 255; symlink/special fail-closed; system tar extract + extracted demo ok |
 | Local readiness aggregator | `npm run ready:local` — package structure, package smoke, clean-profile smoke, docs/legal/parity, boundary, tests, `verify:release`, `git diff --check`; **local only** (no remote/Gate C) |
 | Local vs Gate C | `npm run verify:release` / `ready:local` = local automated readiness only; public remote / Release / registration / upload / submission remain Gate C / `NOT_STARTED` |
 
-Do not mark Ticket 17 / HANDOFF closed from package smoke alone.
+Ticket 17 / HANDOFF local closeout is complete with historical R13 Root + post-R13 correction evidence above; package smoke alone was never sufficient — Gate C items stay unchecked.
 
 ## Ticket 12 — maintainer follow-up / upstream fix
 

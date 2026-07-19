@@ -183,7 +183,7 @@ Never:
 
 ## Ticket 17 demo / uninstall security requirements
 
-These are **Ticket 17** contracts for the competition demo and clean-profile surface. S4 package/profile smoke exercises them locally; whole-ticket closeout still needs independent review.
+These are **Ticket 17** contracts for the competition demo and clean-profile surface. S4 package/profile smoke, historical R13 Root local gates (Ticket17 **27/27**, full suite **552/552**, `ready:local` 10/10), independent R13 double review (`PASS_NO_P0_P1`), and post-R13 deterministic-tarball correction (package-repro **9/9**, full suite **561/561**, final `ready:local` 10/10, R19 `REPRO_REVIEW: PASS_NO_P0_P1`) support Ticket 17 `LOCAL_COMPLETE`. Gate C / publication / registration / upload / submission remain `NOT_STARTED`.
 
 - **Shared demo core:** CLI, MCP, and Skill must invoke the same non-model cores; demo must not be a pre-rendered mock that bypasses probes.
 - **Disposable temp only:** demo and repair paths mutate only proven disposable temp targets; active primary Codex/Profile and protected roots fail closed. Disposable-root proofs use product isolation APIs only — never by reading or hashing the user's live home/profile.
@@ -194,5 +194,5 @@ These are **Ticket 17** contracts for the competition demo and clean-profile sur
 - **Rollback + cleanup:** authorized isolated repair demos must restore original bytes on failure or explicit rollback; session temp state is cleaned without a leftover daemon.
 - **No daemon / no global config claims:** install and uninstall must not start a background agent or claim mutation of global OS configuration. Prove with `npm run package:clean-profile` (isolated temp HOME only; never mutates real home/profile/global config).
 - **CLI/MCP equivalence:** demo-visible outcomes share stable fields; neither surface may export secrets, raw home paths, or disposable clone paths.
-- **Package surface:** judge package ships MIT `LICENSE` and compiled JS without source maps that leak local paths; no `node_modules`, secrets, or Git metadata.
+- **Package surface:** judge package ships MIT `LICENSE` and compiled JS without source maps that leak local paths; no `node_modules`, secrets, or Git metadata. Portable `.tgz` is pure Node deterministic **ustar + gzip** with stable member order/metadata; symlink and special-file packaging paths **fail closed**. Reproducibility is scoped to identical package inputs plus a fixed Node toolchain — not arbitrary Node/zlib version identity.
 - **Publication non-claim:** MIT license text and local `npm run verify:release` / `ready:local` readiness do not authorize public remote, Release, registration, upload, submission, or real external GitHub writes (Gate C / `NOT_STARTED` until separate authorization).
