@@ -74,6 +74,18 @@ Hard boundaries for the demo and product judge path:
 | No live Codex install mutation | Never patch the judge’s active primary Codex/Profile; disposable temp targets only |
 | no daemon | No background agent, continuous logger, or install-time service |
 
+### How we used Codex
+
+Codex was the primary development and verification environment for ChangeGuard. We used it to turn the product principles into a specification and ticketed implementation, build the Plugin, Skill, MCP, and CLI surfaces, create adversarial fixtures, run security-boundary and packaging checks, test clean-profile installation, and inspect real platform receipts.
+
+The product is intentionally Codex-native: users can invoke the guided Skill, call 18 structured MCP tools from an agent workflow, or run the same verified core through the CLI. It does not require a separate dashboard.
+
+### How we used GPT-5.6
+
+GPT-5.6 is used where model reasoning helps: compiling sanitized local facts into testable hypotheses, ranking compatible candidates after deterministic hard filters, and explaining Impact Contracts or recovery hypotheses in clear language.
+
+GPT-5.6 is deliberately not the source of truth. It cannot create evidence edges, overwrite probe results, promote a user report to an official cause, or authorize a repair. Deterministic code and allowlisted probes decide what becomes evidence. The demo includes adversarial attempts to upgrade model output into evidence; every attempt is refused and the evidence graph remains unchanged.
+
 ## 4. Developer install vs packaged judge install
 
 ### Packaged judge install (evaluation)
@@ -197,12 +209,12 @@ High-level rules:
 - Experimental repair stays isolated, authorized, verified, and roll-backable.
 - Do not treat documentation status as Gate C publication authority.
 
-## 9. License and publication non-claim
+## 9. License and publication status
 
 - License text: repository root `LICENSE` (MIT).
 - `package.json` declares `"license": "MIT"`. The package remains `"private": true` in this repository slice.
-- MIT on disk means the **intended** open-source license for an authorized future release.
-- **This repository does not claim that a public release, remote, upload, or competition submission has already occurred.** External publication remains Gate C / `NOT_STARTED` until separately authorized.
+- This source repository is publicly available under the MIT License. `"private": true` prevents accidental npm publication; it does not change the repository license.
+- A public repository is not an OpenAI endorsement, an official support channel, or proof that a Devpost submission has been finalized. Competition status is determined by the Devpost portal.
 
 ---
 
