@@ -97,6 +97,40 @@ All scan seams return the same structured `ScanResult`. Raw install paths are ne
 5. If status is `first_baseline`, explicitly say the already-completed historical update **cannot** be reconstructed from missing old bytes and that the baseline is now retained for the next update.
 6. Treat time-budget / gap incomplete measurement as explicit incomplete evidence — never as unchanged content.
 
+## Manual staged local-update comparison (spatial; not SessionStart)
+
+When the user has **downloaded but not yet installed** a Codex Desktop update (or official patch notes are missing / version-unbound), use this **manual** seam — do **not** fold staged scanning into SessionStart.
+
+### Public seams (same core)
+
+1. Rescue CLI: `changeguard compare-local-update [--format=json|markdown]`
+   - repository wrapper: `node bin/changeguard.js compare-local-update`
+2. MCP tool: `changeguard_compare_local_update` with `{}` only (`additionalProperties: false`)
+
+JSON is canonical. Markdown labels three truth sections. Production discovery is macOS-only under the allowlisted Sparkle Installation cache; Windows/Linux return an honest unsupported state.
+
+### Truth model (keep separate)
+
+1. **`official_evidence`** — offline bundled items that are **actually version-bound** to the staged version, or explicit `version_unbound` / `unavailable`. Never infer global absence of patch notes from a local snapshot miss.
+2. **`local_observations`** — facts measured from installed-vs-staged named artifacts (`info_plist`, `app_asar`, `codex_binary`, `code_resources`) plus bounded ASAR header component summary. Path-free aliases only.
+3. **`inference_and_unknowns`** — conservative implications and unknowns. **Do not** claim behavior, fixes, regressions, impact, or affected users from filenames/hashes alone.
+
+### Safety / interpretation
+
+- Read-only: never install, activate, delete, quarantine, mutate, or repair either app.
+- Never write staged packages into instance state, artifact baselines, or SessionStart.
+- Never describe the staged app as installed, active, affected, repaired, or safe to install.
+- This is **spatial** install-vs-staged comparison — **not** the temporal `local_artifact_diff` baseline mechanism.
+- Ambiguous multiple candidates are reported explicitly; do not silently pick one and hide ambiguity.
+- Time-budget / partial ASAR header failures are explicit gaps; named artifact comparison still returns when possible.
+
+### Orchestration
+
+1. Prefer `compare-local-update` when the user asks what changed in a **downloaded local update** before install.
+2. Present the three sections separately; do not merge official evidence with local hashes or model inference.
+3. If official notes are version-unbound, say so while still reporting local named-artifact facts.
+4. Do not run this path as part of SessionStart or claim it mutates baselines.
+
 ## Ticket 04 — official evidence + Impact Card
 
 ### Public seams (same core)

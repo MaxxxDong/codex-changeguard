@@ -19,6 +19,7 @@
  *   changeguard platform-status [--probe-host=true|false] [--receipt=<path>] [--plan] [--adapter=<id>]
  *   changeguard platform-receipt-validate <receipt.json>
  *   changeguard demo [--budget-ms=<positive-int>]
+ *   changeguard compare-local-update [--format=json|markdown]
  *
  * Ticket 11 production seams inject no real gh/browser adapter (capability unavailable).
  * Ticket 12 follow-up is local-only (no network/daemon; external_write:false; no live witness serialization).
@@ -26,6 +27,7 @@
  * Ticket 14 Windows support remains PREVIEW without a real Windows 11 host receipt.
  * Ticket 15 Linux/WSL capability matrix is Limited/Read-only without a real-machine receipt.
  * Ticket 17 demo is product-local: shared runDemo core only; disposable OS-temp; no network/live profile.
+ * compare-local-update is manual read-only spatial install-vs-staged comparison (not SessionStart).
  */
 import fs from "node:fs";
 import { diagnose } from "../core/diagnose.js";
@@ -55,6 +57,11 @@ import type { DisclosureDecision } from "../evidence/types.js";
 import type { ImpactAssessmentResult } from "../impact/types.js";
 import { scanInstances } from "../instances/scan.js";
 import { unavailableLocalArtifactDiff } from "../instances/artifact-diff.js";
+import {
+  compareLocalUpdate,
+  formatLocalUpdateCompareMarkdown,
+  type LocalUpdateCompareResult,
+} from "../instances/local-update/index.js";
 import type { HookTrustState, ScanResult } from "../instances/types.js";
 import { runSessionStart } from "../hooks/session-start.js";
 import { analyzePage } from "../page/analyze.js";
@@ -133,7 +140,7 @@ function usageDiagnosis(): DiagnosisResult {
     evidence: [],
     error_code: "USAGE",
     error_message:
-      "Usage: changeguard diagnose|impact|analyze-page|upstream-preview|upstream-action-preview|upstream-action-confirm|repair-preview|repair-apply|verify|rollback|scan|scan-system|session-start|lifecycle|followup|platform-status|platform-receipt-validate …",
+      "Usage: changeguard diagnose|impact|analyze-page|upstream-preview|upstream-action-preview|upstream-action-confirm|repair-preview|repair-apply|verify|rollback|scan|scan-system|session-start|lifecycle|followup|platform-status|platform-receipt-validate|compare-local-update|demo …",
     network_used: false,
     target_mutated: false,
     repair_applied: false,
@@ -563,6 +570,210 @@ function runDemoCli(rest: string[]): void {
     parsed.budget_ms !== undefined ? { budget_ms: parsed.budget_ms } : {},
   );
   printJson(receipt, receipt.ok ? 0 : 1);
+}
+
+/**
+ * Manual spatial compare of installed ChatGPT.app vs Sparkle staged update.
+ * JSON is canonical; Markdown is a labeled three-section view.
+ * Never mutates state, baselines, or either app.
+ */
+function runCompareLocalUpdate(rest: string[]): void {
+  let format: "json" | "markdown" = "json";
+  for (const a of rest) {
+    if (a === "--format=json" || a === "--json") {
+      format = "json";
+      continue;
+    }
+    if (a === "--format=markdown" || a === "--markdown" || a === "--md") {
+      format = "markdown";
+      continue;
+    }
+    if (a.startsWith("-")) {
+      const usage: LocalUpdateCompareResult = {
+        schema_version: 1,
+        command: "compare-local-update",
+        ok: false,
+        status: "error",
+        summary: "Invalid arguments.",
+        official_evidence: {
+          status: "not_applicable",
+          label: "Usage error",
+          snapshot_id: null,
+          snapshot_content_sha256: null,
+          version_bound_item_digests: [],
+          version_bound_item_count: 0,
+          notes: [],
+        },
+        local_observations: {
+          status: "error",
+          installed: null,
+          staged_candidates: [],
+          selected_staged: null,
+          selection_reason: "usage",
+          version_relation: "unknown",
+          named_artifacts: [],
+          asar_component_diff: {
+            status: "skipped",
+            reason: "usage",
+            installed_file_count: null,
+            staged_file_count: null,
+            stable_path_changes: [],
+            node_basename_changes: [],
+            aggregate_buckets: [],
+            truncation: {
+              stable_paths_truncated: false,
+              node_basenames_truncated: false,
+              buckets_truncated: false,
+              nodes_capped: false,
+              depth_capped: false,
+            },
+          },
+          native_module_diff: {
+            status: "skipped",
+            reason: "usage",
+            added: [],
+            removed: [],
+            truncation: { entries_capped: false },
+            installed_dir_present: null,
+            staged_dir_present: null,
+          },
+          discovery: {
+            platform: "unknown",
+            staged_root_available: false,
+            sessions_inspected: 0,
+            sessions_capped: false,
+            download_dirs_inspected: 0,
+            download_dirs_capped: false,
+            candidates_accepted: 0,
+            candidates_capped: false,
+            rejection_counts: {},
+          },
+          safety: {
+            network_used: false,
+            target_mutated: false,
+            staged_written_to_state: false,
+            session_start_scanned: false,
+            install_attempted: false,
+          },
+          notes: [
+            "Usage: changeguard compare-local-update [--format=json|markdown]",
+          ],
+        },
+        inference_and_unknowns: {
+          status: "conservative",
+          implications: [],
+          unknowns: [],
+          do_not_claim: [
+            "Do not claim the staged app is installed or safe to install.",
+          ],
+        },
+        error_code: "USAGE",
+        error_message:
+          "Usage: changeguard compare-local-update [--format=json|markdown]",
+        network_used: false,
+        target_mutated: false,
+        repair_applied: false,
+      };
+      printJson(usage, 2);
+    }
+  }
+
+  try {
+    const result = compareLocalUpdate();
+    if (format === "markdown") {
+      const md = assertNoLeakPaths(
+        redactText(formatLocalUpdateCompareMarkdown(result)),
+      );
+      process.stdout.write(md);
+      if (!md.endsWith("\n")) process.stdout.write("\n");
+      process.exit(result.ok ? 0 : 1);
+    }
+    printJson(result, result.ok ? 0 : 1);
+  } catch {
+    const fail: LocalUpdateCompareResult = {
+      schema_version: 1,
+      command: "compare-local-update",
+      ok: false,
+      status: "error",
+      summary: "Comparison failed safely.",
+      official_evidence: {
+        status: "unavailable",
+        label: "Unavailable after error",
+        snapshot_id: null,
+        snapshot_content_sha256: null,
+        version_bound_item_digests: [],
+        version_bound_item_count: 0,
+        notes: [],
+      },
+      local_observations: {
+        status: "error",
+        installed: null,
+        staged_candidates: [],
+        selected_staged: null,
+        selection_reason: "error",
+        version_relation: "unknown",
+        named_artifacts: [],
+        asar_component_diff: {
+          status: "unavailable",
+          reason: "error",
+          installed_file_count: null,
+          staged_file_count: null,
+          stable_path_changes: [],
+          node_basename_changes: [],
+          aggregate_buckets: [],
+          truncation: {
+            stable_paths_truncated: false,
+            node_basenames_truncated: false,
+            buckets_truncated: false,
+            nodes_capped: false,
+            depth_capped: false,
+          },
+        },
+        native_module_diff: {
+          status: "unavailable",
+          reason: "error",
+          added: [],
+          removed: [],
+          truncation: { entries_capped: false },
+          installed_dir_present: null,
+          staged_dir_present: null,
+        },
+        discovery: {
+          platform: "unknown",
+          staged_root_available: false,
+          sessions_inspected: 0,
+          sessions_capped: false,
+          download_dirs_inspected: 0,
+          download_dirs_capped: false,
+          candidates_accepted: 0,
+          candidates_capped: false,
+          rejection_counts: {},
+        },
+        safety: {
+          network_used: false,
+          target_mutated: false,
+          staged_written_to_state: false,
+          session_start_scanned: false,
+          install_attempted: false,
+        },
+        notes: [],
+      },
+      inference_and_unknowns: {
+        status: "conservative",
+        implications: [],
+        unknowns: ["Internal comparison error; no mutation occurred."],
+        do_not_claim: [
+          "Do not claim the staged app is installed or safe to install.",
+        ],
+      },
+      error_code: "INTERNAL",
+      error_message: "Comparison failed.",
+      network_used: false,
+      target_mutated: false,
+      repair_applied: false,
+    };
+    printJson(fail, 1);
+  }
 }
 
 function parseHookTrust(args: string[]): HookTrustState {
@@ -1712,6 +1923,11 @@ export function runCli(argv: string[]): void {
 
     if (cmd === "demo") {
       runDemoCli(rest);
+      return;
+    }
+
+    if (cmd === "compare-local-update") {
+      runCompareLocalUpdate(rest);
       return;
     }
 

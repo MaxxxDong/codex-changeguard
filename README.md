@@ -131,6 +131,9 @@ Implemented public commands (repository wrapper: `node bin/changeguard.js …`):
 | Instances | `scan` / `scan-system` / `session-start` | `changeguard_scan` / `changeguard_scan_system` / `changeguard_session_start` |
 | Upstream actions | `upstream-action-preview` / `upstream-action-confirm` | `changeguard_upstream_action_*` |
 | Platform status | `platform-status` / `platform-receipt-validate` | `changeguard_platform_status` / `changeguard_platform_receipt_validate` |
+| **Local staged update** | `compare-local-update [--format=json\|markdown]` | `changeguard_compare_local_update` |
+
+**`compare-local-update`** (manual, read-only): spatial comparison of the installed macOS `ChatGPT.app` versus a Sparkle-staged updater app under the allowlisted Installation cache. Returns three separate truth sections — `official_evidence` (offline version-bound only), `local_observations` (measured bytes/metadata), `inference_and_unknowns` (conservative). Never installs, mutates, or writes staged packages into instance/SessionStart state; not the temporal `local_artifact_diff` baseline. Windows/Linux default to an honest unsupported discovery state.
 
 Skill orchestration: `skills/changeguard/SKILL.md` (includes `/changeguard demo`).
 

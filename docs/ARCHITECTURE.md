@@ -48,7 +48,7 @@ Evidence-locked verdict + Recovery Capsule preview
 ### 2.1 Plugin surfaces
 
 - `skills/changeguard/`: user-facing orchestration instructions (includes `/changeguard demo` via the shared Ticket 17 demo core)
-- `.mcp.json`: MCP server (`changeguard_diagnose`, `changeguard_impact`, `changeguard_analyze_page`, recovery tools, `changeguard_scan`, `changeguard_scan_system`, `changeguard_session_start`, `changeguard_lifecycle`, `changeguard_followup`, `changeguard_demo` → shared core)
+- `.mcp.json`: MCP server (`changeguard_diagnose`, `changeguard_impact`, `changeguard_analyze_page`, recovery tools, `changeguard_scan`, `changeguard_scan_system`, `changeguard_session_start`, `changeguard_lifecycle`, `changeguard_followup`, `changeguard_demo`, `changeguard_compare_local_update` → shared core)
 - `bin/changeguard.js` / `dist/cli/main.js`: Rescue CLI (`diagnose|impact|analyze-page|repair-*|verify|rollback|scan|scan-system|session-start|lifecycle|followup|demo|…`)
 - `src/core/diagnose.ts`: single shared diagnosis core used by CLI and MCP
 - `src/core/crash-family.ts`: Ticket 09 Desktop Browser crash-family classifier (deterministic gates; Fixture E)

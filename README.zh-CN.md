@@ -131,6 +131,19 @@ node bin/changeguard.js diagnose fixtures/negative-control
 | 实例 | `scan` / `scan-system` / `session-start` | `changeguard_scan` / `changeguard_scan_system` / `changeguard_session_start` |
 | 上游动作 | `upstream-action-preview` / `upstream-action-confirm` | `changeguard_upstream_action_*` |
 | 平台状态 | `platform-status` / `platform-receipt-validate` | `changeguard_platform_status` / `changeguard_platform_receipt_validate` |
+| **本地暂存更新对比** | `compare-local-update [--format=json\|markdown]` | `changeguard_compare_local_update` |
+
+**`compare-local-update`**（手动、只读）：对已安装的 macOS `ChatGPT.app` 与 Sparkle 暂存（staged）更新包做**空间**对比（非 SessionStart 的时间轴 `local_artifact_diff`）。输出三个独立真值分区：`official_evidence`（仅离线且版本绑定的官方证据，或明确不可用/未绑定）、`local_observations`（从已安装 vs 暂存字节与元数据测得的事实）、`inference_and_unknowns`（保守推断与未知项）。**永不**安装/激活/删除/修复任一应用；**永不**把暂存包写入实例状态、工件基线或 SessionStart。Windows/Linux 默认为诚实的不支持/无发现状态。
+
+用法示例：
+
+```bash
+node bin/changeguard.js compare-local-update
+node bin/changeguard.js compare-local-update --format=markdown
+# MCP: changeguard_compare_local_update（无参数）
+```
+
+解释边界：勿仅凭文件名/哈希声称行为、修复、回归或影响用户；勿把 staged 描述为已安装、正在使用或可以安全安装。
 
 Skill 编排：`skills/changeguard/SKILL.md`（含 `/changeguard demo`）。
 

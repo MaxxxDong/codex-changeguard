@@ -12,6 +12,7 @@
  * + Ticket 14 Windows 11 support status (PREVIEW without real-machine host receipt)
  * + Ticket 15 Linux/WSL/enterprise capability matrix (Limited/Read-only without real-machine receipt).
  * + Ticket 17 deterministic product-local demo (shared runDemo; disposable OS-temp only).
+ * + Manual compare-local-update (spatial installed-vs-staged; never SessionStart/state).
  *
  * Wire protocol: newline-delimited JSON-RPC 2.0 over stdio.
  * Request frames are accumulated as bounded bytes (not unbounded readline).
@@ -41,6 +42,10 @@ import { assessImpact } from "../impact/assess.js";
 import type { ImpactAssessmentResult } from "../impact/types.js";
 import type { DisclosureDecision } from "../evidence/types.js";
 import { scanInstances } from "../instances/scan.js";
+import {
+  compareLocalUpdate,
+  type LocalUpdateCompareResult,
+} from "../instances/local-update/index.js";
 import type { HookTrustState, ScanResult } from "../instances/types.js";
 import { runSessionStart } from "../hooks/session-start.js";
 import { analyzePage } from "../page/analyze.js";
@@ -109,6 +114,7 @@ const TOOL_FOLLOWUP = "changeguard_followup";
 const TOOL_PLATFORM_STATUS = "changeguard_platform_status";
 const TOOL_PLATFORM_RECEIPT = "changeguard_platform_receipt_validate";
 const TOOL_DEMO = "changeguard_demo";
+const TOOL_COMPARE_LOCAL_UPDATE = "changeguard_compare_local_update";
 
 const KNOWN_TOOLS = new Set([
   TOOL_DIAGNOSE,
@@ -129,6 +135,7 @@ const KNOWN_TOOLS = new Set([
   TOOL_PLATFORM_STATUS,
   TOOL_PLATFORM_RECEIPT,
   TOOL_DEMO,
+  TOOL_COMPARE_LOCAL_UPDATE,
 ]);
 
 /** Extra top-level tools/call params beyond name/arguments are refused. */
@@ -612,6 +619,16 @@ function toolSchemas() {
         },
       },
     },
+    {
+      name: TOOL_COMPARE_LOCAL_UPDATE,
+      description:
+        "Manual read-only spatial comparison of the active installed ChatGPT.app versus a staged Sparkle updater ChatGPT.app (macOS). Returns three separate truth sections: official_evidence (version-bound offline only), local_observations (measured bytes/metadata), inference_and_unknowns (conservative). Never installs, mutates, or writes staged packages into instance/SessionStart state. Not the temporal local_artifact_diff baseline. Windows/Linux default to unsupported discovery.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+    },
   ];
 }
 
@@ -646,6 +663,7 @@ function handleToolsCall(params: unknown): {
     | PlatformStatusResult
     | ReceiptValidationResult
     | DemoReceipt
+    | LocalUpdateCompareResult
     | (PlatformStatusResult & {
         status: unknown;
         plan: unknown;
@@ -1305,6 +1323,17 @@ function handleToolsCall(params: unknown): {
     const payload: DemoReceipt = runDemo(
       budget_ms !== undefined ? { budget_ms } : {},
     );
+    return { payload, ok: payload.ok };
+  }
+
+  if (p.name === TOOL_COMPARE_LOCAL_UPDATE) {
+    // No arguments — production discovery only (no path injection via MCP).
+    if (Object.keys(a).length > 0) {
+      throw Object.assign(new Error("Unknown or extra arguments."), {
+        code: "EXTRA_ARGS",
+      });
+    }
+    const payload: LocalUpdateCompareResult = compareLocalUpdate();
     return { payload, ok: payload.ok };
   }
 
