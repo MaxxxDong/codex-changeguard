@@ -762,6 +762,15 @@ try {
 } catch {
   fail("Packaged hooks/hooks.json is not valid JSON.");
 }
+const allowedHookManifestKeys = new Set(["description", "hooks"]);
+const unknownHookManifestKeys = Object.keys(hooksManifest ?? {}).filter(
+  (key) => !allowedHookManifestKeys.has(key),
+);
+if (unknownHookManifestKeys.length > 0) {
+  fail(
+    `hooks.json contains unsupported top-level fields: ${unknownHookManifestKeys.join(", ")}`,
+  );
+}
 const sessionStart = hooksManifest?.hooks?.SessionStart;
 if (!Array.isArray(sessionStart) || sessionStart.length < 1) {
   fail("hooks.json must declare SessionStart hooks.");

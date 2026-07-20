@@ -1,4 +1,5 @@
 {
+  "description": "Optional trusted SessionStart version-fingerprint check. Uses PLUGIN_ROOT and writable PLUGIN_DATA, stores state only under PLUGIN_DATA, emits no stdout when unchanged, and keeps manual scan/scan-system fallbacks available.",
   "hooks": {
     "SessionStart": [
       {
@@ -13,13 +14,5 @@
         ]
       }
     ]
-  },
-  "notes": [
-    "SessionStart is optional and must be explicitly trusted by the host.",
-    "Plugin hooks receive PLUGIN_ROOT and writable PLUGIN_DATA; they run with session cwd and JSON on stdin.",
-    "Version-fingerprint state is stored under PLUGIN_DATA (never the project/session cwd).",
-    "On unchanged fingerprint the hook exits 0 with no stdout; on change it may emit SessionStart additionalContext.",
-    "Manual fallbacks: changeguard scan <inventory-root> (fixture adapter) and changeguard scan-system (registered system adapter).",
-    "MCP: changeguard_scan (fixture) and changeguard_scan_system (system)."
-  ]
+  }
 }
