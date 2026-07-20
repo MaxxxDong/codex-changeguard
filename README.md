@@ -13,6 +13,8 @@ Evidence-bound Codex Plugin for update impact analysis, incident localization, a
 
 ChangeGuard maps official Codex changes to redacted local facts, assigns explicit evidence levels, and refuses false precision when an Issue cannot be confirmed locally. It is not a generic changelog summarizer, Issue chatbot, environment doctor, or automatic community-patch installer.
 
+When the installed Codex build is newer than published notes, ChangeGuard still records a **path-free local installed-artifact baseline/diff** (`ScanResult.local_artifact_diff`) so “what changed in my current Codex version?” can separate **official evidence**, **observed local named-component deltas**, and **inferences**. Real installs use `scan-system` (or packaged SessionStart); fixture `scan` is for explicit inventories. Named-artifact measurement always runs under size caps and a SessionStart wall-clock budget (~4 s default) with explicit gap status when incomplete — full measurement is not deferred until after a change is detected. A missing changelog is not an excuse to invent history: first baselines are honest, and official feature-level notes can be unavailable while a local component delta is still verified.
+
 ChangeGuard is independent of OpenAI. Names, branding, and docs must not imply official ownership or endorsement.
 
 ## 2. Five-minute judge path (prebuilt package)

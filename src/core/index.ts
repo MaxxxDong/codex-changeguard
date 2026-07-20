@@ -35,12 +35,26 @@ export {
 export type { RepairResult, RepairCapsule } from "./recovery/index.js";
 
 // Ticket 03 re-exports (shared core surface for CLI/MCP consumers).
-export { scanInstances, bindRepairTarget } from "../instances/index.js";
+export {
+  scanInstances,
+  bindRepairTarget,
+  classifyLocalArtifactDiff,
+  measureInstanceArtifactBaselines,
+  overallArtifactDigest,
+} from "../instances/index.js";
 export type {
   ScanResult,
   ScanOptions,
   InstanceIdentity,
   RepairTargetBinding,
   RepairTargetRequest,
+  LocalArtifactDiff,
+  LocalArtifactDiffEntry,
+  LocalArtifactDiffStatus,
+  LocalArtifactEntry,
+  InstanceArtifactBaseline,
+  VersionFingerprintState,
+  ArtifactKind,
+  ArtifactReadStatus,
 } from "../instances/types.js";
 export { runSessionStart } from "../hooks/session-start.js";

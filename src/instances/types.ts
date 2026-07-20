@@ -73,6 +73,107 @@ export type HealthClassificationReason =
 
 export type ScanMode = "manual_scan" | "session_start";
 
+/** Logical kind of a named installed artifact (path-free). */
+export type ArtifactKind =
+  | "executable"
+  | "plist"
+  | "asar"
+  | "code_resources"
+  | "manifest"
+  | "metadata"
+  | "other";
+
+/**
+ * Read/gap status for one named artifact measurement.
+ * Oversize and refusals never produce truncated digests.
+ */
+export type ArtifactReadStatus =
+  | "read_ok"
+  | "missing"
+  | "symlink_refused"
+  | "out_of_root"
+  | "oversize"
+  | "not_file"
+  | "io_error"
+  /** Named target not measured because wall-clock measurement budget was exhausted. */
+  | "time_budget_exceeded";
+
+/**
+ * Path-free local artifact entry. Never contains absolute paths or file bodies.
+ */
+export interface LocalArtifactEntry {
+  /** Stable logical key (e.g. executable, info_plist, app_asar). */
+  key: string;
+  /** Bounded public alias (instance path_alias + key). */
+  alias: string;
+  kind: ArtifactKind;
+  /** Hex SHA-256 when status is read_ok; otherwise null. */
+  sha256: string | null;
+  /** Byte size when status is read_ok; otherwise null. */
+  size: number | null;
+  status: ArtifactReadStatus;
+}
+
+/** Per-instance artifact baseline (persisted under state schema v2). */
+export interface InstanceArtifactBaseline {
+  instance_id: string;
+  path_hash: string;
+  path_alias: string;
+  entries: LocalArtifactEntry[];
+  /** Digest of sorted path-free entries for this instance. */
+  baseline_digest: string;
+}
+
+export type LocalArtifactDiffStatus =
+  | "first_baseline"
+  | "unchanged"
+  | "content_changed"
+  | "partial"
+  | "unavailable";
+
+export type LocalArtifactChangeClass =
+  | "added"
+  | "removed"
+  | "hash_changed"
+  | "gap_changed";
+
+/** One path-free artifact delta row (facts only). */
+export interface LocalArtifactDiffEntry {
+  instance_id: string | null;
+  path_alias: string | null;
+  key: string;
+  alias: string;
+  kind: ArtifactKind;
+  change: LocalArtifactChangeClass;
+  previous_sha256: string | null;
+  current_sha256: string | null;
+  previous_status: ArtifactReadStatus | null;
+  current_status: ArtifactReadStatus | null;
+  previous_size: number | null;
+  current_size: number | null;
+}
+
+/**
+ * Deterministic ScanResult truth surface for installed-artifact baseline/diff.
+ * Separate axis from version transitions; never invents historical bytes.
+ */
+export interface LocalArtifactDiff {
+  status: LocalArtifactDiffStatus;
+  previous_baseline_digest: string | null;
+  current_baseline_digest: string | null;
+  added: LocalArtifactDiffEntry[];
+  removed: LocalArtifactDiffEntry[];
+  hash_changed: LocalArtifactDiffEntry[];
+  gap_changed: LocalArtifactDiffEntry[];
+  entry_counts: {
+    measured: number;
+    read_ok: number;
+    gaps: number;
+  };
+  /** Bounded sorted public keys/aliases for SessionStart context. */
+  keys: string[];
+}
+
 /** Public, path-free instance identity. */
 export interface InstanceIdentity {
   instance_id: string;
@@ -123,11 +224,23 @@ export interface HealthCheckResult {
   classification_reason: HealthClassificationReason;
 }
 
+/**
+ * Version-fingerprint + artifact baseline state.
+ * Written as schema_version 2; load remains backward-readable from v1
+ * (v1 yields empty artifact baselines → first_baseline, never invents history).
+ */
 export interface VersionFingerprintState {
-  schema_version: 1;
+  schema_version: 1 | 2;
   updated_at: string;
   overall_fingerprint: string;
   instances: InstanceIdentity[];
+  /**
+   * Path-free artifact baselines keyed by instance. Empty array when migrating
+   * from v1 or when no measurements were retained. Never invents historical rows.
+   */
+  artifact_baselines: InstanceArtifactBaseline[];
+  /** Overall digest of artifact baselines (v2); null on pure v1 material until measured. */
+  overall_artifact_digest: string | null;
 }
 
 export interface ScanResult {
@@ -160,6 +273,11 @@ export interface ScanResult {
   repair_applied: false;
   error_code: string | null;
   error_message: string | null;
+  /**
+   * Path-free installed-artifact baseline/diff (facts only).
+   * Separate axis from primary_transition / version identity.
+   */
+  local_artifact_diff: LocalArtifactDiff;
   /**
    * Ticket 15 optional platform capability block (additive).
    * Present on scan-system / platform-aware paths; omitted on legacy fixtures.
@@ -271,6 +389,14 @@ export interface ScanOptions {
   now?: () => Date;
   /** Health-check budget in ms (default 10000). */
   healthBudgetMs?: number;
+  /**
+   * Wall-clock budget (ms) for named-artifact measurement.
+   * SessionStart defaults to ~4s so the 10s hook timeout retains headroom.
+   * Manual scan leaves this undefined (no wall-clock cap) unless injected.
+   */
+  artifactTimeBudgetMs?: number;
+  /** Injectable monotonic clock for artifact time-budget tests (ms). */
+  artifactNowMs?: () => number;
   /**
    * Injectable system-enumeration capabilities (platform/env/fs).
    * Production defaults inspect only known Codex locations and PATH entries.

@@ -54,6 +54,7 @@ import type { RepairResult } from "../core/recovery/types.js";
 import type { DisclosureDecision } from "../evidence/types.js";
 import type { ImpactAssessmentResult } from "../impact/types.js";
 import { scanInstances } from "../instances/scan.js";
+import { unavailableLocalArtifactDiff } from "../instances/artifact-diff.js";
 import type { HookTrustState, ScanResult } from "../instances/types.js";
 import { runSessionStart } from "../hooks/session-start.js";
 import { analyzePage } from "../page/analyze.js";
@@ -469,6 +470,7 @@ function scanUsageError(
         : kind === "scan-system"
           ? "Usage: changeguard scan-system [--state-dir=<dir>]"
           : "Usage: changeguard session-start <inventory-root> [--hook-trust=trusted|untrusted|skipped|failed]",
+    local_artifact_diff: unavailableLocalArtifactDiff(),
   };
   printJson(result, 2);
 }

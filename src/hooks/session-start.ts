@@ -2,6 +2,7 @@
  * Trusted SessionStart path: run only when overall fingerprint changed.
  * Untrusted / skipped / failed hook states are explicit; manual scan remains equivalent.
  */
+import { unavailableLocalArtifactDiff } from "../instances/artifact-diff.js";
 import { scanInstances } from "../instances/scan.js";
 import type {
   HookTrustState,
@@ -22,6 +23,7 @@ export interface SessionStartOptions
  * - failed: explicit status
  * - trusted + unchanged: silent success
  * - trusted + changed: bounded read-only health check via shared scan core
+ *   (artifact-only baseline establish is non-silent but does not claim content_changed)
  */
 export function runSessionStart(opts: SessionStartOptions): ScanResult {
   const { hookTrust, forceFailure, ...rest } = opts;
@@ -52,6 +54,7 @@ export function runSessionStart(opts: SessionStartOptions): ScanResult {
         hookTrust === "untrusted"
           ? "SessionStart hook is untrusted; use manual scan."
           : "SessionStart hook skipped; use manual scan.",
+      local_artifact_diff: unavailableLocalArtifactDiff(),
     };
   }
 
@@ -78,6 +81,7 @@ export function runSessionStart(opts: SessionStartOptions): ScanResult {
       repair_applied: false,
       error_code: "HOOK_FAILED",
       error_message: "SessionStart hook failed; use manual scan.",
+      local_artifact_diff: unavailableLocalArtifactDiff(),
     };
   }
 

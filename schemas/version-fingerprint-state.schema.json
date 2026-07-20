@@ -2,83 +2,229 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.invalid/codex-changeguard/version-fingerprint-state.schema.json",
   "title": "VersionFingerprintState",
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-    "schema_version",
-    "updated_at",
-    "overall_fingerprint",
-    "instances"
-  ],
-  "properties": {
-    "schema_version": { "const": 1 },
-    "updated_at": { "type": "string", "maxLength": 64 },
-    "overall_fingerprint": {
-      "type": "string",
-      "pattern": "^[a-f0-9]{64}$"
+  "description": "Persisted multi-instance version fingerprint plus optional path-free local artifact baselines. Load is backward-readable from schema_version 1 (empty baselines; never invent historical artifact rows). Writers persist schema_version 2.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "updated_at",
+        "overall_fingerprint",
+        "instances"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "updated_at": { "type": "string", "maxLength": 64 },
+        "overall_fingerprint": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "instances": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/instanceIdentity" }
+        }
+      }
     },
-    "instances": {
-      "type": "array",
-      "maxItems": 64,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "instance_id",
-          "path_hash",
-          "path_alias",
-          "surface",
-          "install_source",
-          "platform",
-          "arch",
-          "profile_root_alias",
-          "config_root_alias",
-          "version",
-          "build",
-          "version_provenance",
-          "path_precedence"
-        ],
-        "properties": {
-          "instance_id": { "type": "string", "maxLength": 128 },
-          "path_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-          "path_alias": { "type": "string", "maxLength": 64 },
-          "surface": { "enum": ["desktop", "cli", "unknown"] },
-          "install_source": {
-            "enum": [
-              "desktop_bundled",
-              "path",
-              "package_manager",
-              "windows_msix",
-              "wsl",
-              "unknown"
-            ]
-          },
-          "platform": {
-            "enum": ["macos", "windows", "linux", "wsl", "unknown"]
-          },
-          "arch": { "type": "string", "maxLength": 64 },
-          "profile_root_alias": { "type": ["string", "null"], "maxLength": 128 },
-          "config_root_alias": { "type": ["string", "null"], "maxLength": 128 },
-          "version": { "type": ["string", "null"], "maxLength": 128 },
-          "build": { "type": ["string", "null"], "maxLength": 128 },
-          "version_provenance": {
-            "enum": [
-              "package_json",
-              "plist_metadata",
-              "msix_manifest",
-              "version_file",
-              "fixture_declared",
-              "unavailable"
-            ]
-          },
-          "path_precedence": {
-            "type": ["integer", "null"],
-            "minimum": 0
-          },
-          "runtime_domain": {
-            "type": ["string", "null"],
-            "maxLength": 64
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "updated_at",
+        "overall_fingerprint",
+        "instances",
+        "artifact_baselines",
+        "overall_artifact_digest"
+      ],
+      "properties": {
+        "schema_version": { "const": 2 },
+        "updated_at": { "type": "string", "maxLength": 64 },
+        "overall_fingerprint": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "instances": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/instanceIdentity" }
+        },
+        "artifact_baselines": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/instanceArtifactBaseline" }
+        },
+        "overall_artifact_digest": {
+          "description": "Required on v2. Must be a 64-hex digest when artifact_baselines is non-empty; may be null only when baselines are empty (pre-measure). Parser recomputes digests from entries and fails closed on mismatch.",
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "instanceIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instance_id",
+        "path_hash",
+        "path_alias",
+        "surface",
+        "install_source",
+        "platform",
+        "arch",
+        "profile_root_alias",
+        "config_root_alias",
+        "version",
+        "build",
+        "version_provenance",
+        "path_precedence"
+      ],
+      "properties": {
+        "instance_id": { "type": "string", "maxLength": 128 },
+        "path_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "path_alias": { "type": "string", "maxLength": 64 },
+        "surface": { "enum": ["desktop", "cli", "unknown"] },
+        "install_source": {
+          "enum": [
+            "desktop_bundled",
+            "path",
+            "package_manager",
+            "windows_msix",
+            "wsl",
+            "unknown"
+          ]
+        },
+        "platform": {
+          "enum": ["macos", "windows", "linux", "wsl", "unknown"]
+        },
+        "arch": { "type": "string", "maxLength": 64 },
+        "profile_root_alias": { "type": ["string", "null"], "maxLength": 128 },
+        "config_root_alias": { "type": ["string", "null"], "maxLength": 128 },
+        "version": { "type": ["string", "null"], "maxLength": 128 },
+        "build": { "type": ["string", "null"], "maxLength": 128 },
+        "version_provenance": {
+          "enum": [
+            "package_json",
+            "plist_metadata",
+            "msix_manifest",
+            "version_file",
+            "fixture_declared",
+            "unavailable"
+          ]
+        },
+        "path_precedence": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "runtime_domain": {
+          "type": ["string", "null"],
+          "maxLength": 64
+        }
+      }
+    },
+    "localArtifactEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "alias", "kind", "sha256", "size", "status"],
+      "properties": {
+        "key": { "type": "string", "maxLength": 64 },
+        "alias": { "type": "string", "maxLength": 512 },
+        "kind": {
+          "enum": [
+            "executable",
+            "plist",
+            "asar",
+            "code_resources",
+            "manifest",
+            "metadata",
+            "other"
+          ]
+        },
+        "sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "size": { "type": ["integer", "null"], "minimum": 0 },
+        "status": {
+          "enum": [
+            "read_ok",
+            "missing",
+            "symlink_refused",
+            "out_of_root",
+            "oversize",
+            "not_file",
+            "io_error",
+            "time_budget_exceeded"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "read_ok" } } },
+          "then": {
+            "properties": {
+              "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+              "size": { "type": "integer", "minimum": 0 }
+            }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "missing",
+                  "symlink_refused",
+                  "out_of_root",
+                  "oversize",
+                  "not_file",
+                  "io_error",
+                  "time_budget_exceeded"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "sha256": { "type": "null" },
+              "size": { "type": "null" }
+            }
+          }
+        }
+      ]
+    },
+    "instanceArtifactBaseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instance_id",
+        "path_hash",
+        "path_alias",
+        "entries",
+        "baseline_digest"
+      ],
+      "properties": {
+        "instance_id": { "type": "string", "maxLength": 128 },
+        "path_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "path_alias": { "type": "string", "maxLength": 64 },
+        "entries": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/localArtifactEntry" }
+        },
+        "baseline_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
         }
       }
     }

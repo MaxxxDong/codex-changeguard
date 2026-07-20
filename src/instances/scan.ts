@@ -1,10 +1,22 @@
 /**
  * Shared multi-instance scan core used by CLI, MCP, and SessionStart.
  * Single decision path — no duplicate transition logic at the edges.
+ *
+ * Version identity and local artifact baselines are separate axes.
+ * fingerprint_changed when either overall identity fingerprint or
+ * overall artifact baseline digest changes.
  */
 import path from "node:path";
 import { assertNoLeakPaths, redactText } from "../core/redact.js";
 import { runReadOnlyHealthCheck } from "../hooks/health-check.js";
+import {
+  classifyLocalArtifactDiff,
+  unavailableLocalArtifactDiff,
+} from "./artifact-diff.js";
+import {
+  measureInstanceArtifactBaselines,
+  overallArtifactDigest,
+} from "./artifacts.js";
 import { classifyTransitions } from "./compare.js";
 import { loadInventory, InventoryError } from "./enumerate.js";
 import {
@@ -12,14 +24,22 @@ import {
   overallFingerprintOf,
   toIdentity,
 } from "./identity.js";
+import { DEFAULT_SESSION_START_ARTIFACT_TIME_BUDGET_MS } from "./limits.js";
 import { resolveAffectedInstance } from "./resolve.js";
-import { loadState, saveState, StateError } from "./state.js";
+import {
+  loadState,
+  priorArtifactBaselinesOrNull,
+  saveState,
+  StateError,
+} from "./state.js";
 import { buildCapabilityReport } from "../platform/capability.js";
 import type { AdapterId } from "../platform/types.js";
 import { enumerateSystemCandidates } from "./system-adapter.js";
 import type {
+  DiscoveredCandidate,
   HookTrustState,
   InstanceIdentity,
+  LocalArtifactDiff,
   PlatformId,
   ScanOptions,
   ScanResult,
@@ -81,21 +101,25 @@ function fail(
     error_message: partial.error_message
       ? assertNoLeakPaths(redactText(partial.error_message))
       : null,
+    local_artifact_diff: unavailableLocalArtifactDiff(),
   };
 }
 
 function buildIdentities(opts: ScanOptions): {
   instances: InstanceIdentity[];
   observed: ScanOptions["observed"];
+  candidates: DiscoveredCandidate[];
 } {
   if (opts.candidates && opts.candidates.length > 0) {
-    const raw = opts.candidates.map((c) => {
+    const candidates = opts.candidates;
+    const raw = candidates.map((c) => {
       const ev = readVersionEvidence(c, opts.inventoryRoot);
       return toIdentity(c, ev.version, ev.build, ev.provenance);
     });
     return {
       instances: assignPathAliases(raw),
       observed: opts.observed,
+      candidates,
     };
   }
 
@@ -110,6 +134,7 @@ function buildIdentities(opts: ScanOptions): {
     return {
       instances: assignPathAliases(raw),
       observed: opts.observed,
+      candidates,
     };
   }
 
@@ -117,13 +142,15 @@ function buildIdentities(opts: ScanOptions): {
     throw new InventoryError("INVALID_ROOT", "Invalid inventory root.");
   }
   const inv = loadInventory(opts.inventoryRoot);
-  const raw = inv.candidates.map((c) => {
+  const candidates = inv.candidates;
+  const raw = candidates.map((c) => {
     const ev = readVersionEvidence(c, opts.inventoryRoot);
     return toIdentity(c, ev.version, ev.build, ev.provenance);
   });
   return {
     instances: assignPathAliases(raw),
     observed: opts.observed ?? inv.observed,
+    candidates,
   };
 }
 
@@ -136,7 +163,8 @@ function resolveStateDir(opts: ScanOptions): string {
 }
 
 /**
- * Deterministic multi-instance scan + fingerprint compare + optional health check.
+ * Deterministic multi-instance scan + fingerprint compare + artifact baseline
+ * + optional health check.
  */
 export function scanInstances(opts: ScanOptions): ScanResult {
   const mode = opts.mode ?? "manual_scan";
@@ -145,7 +173,7 @@ export function scanInstances(opts: ScanOptions): ScanResult {
 
   try {
     const stateDir = resolveStateDir(opts);
-    const { instances, observed } = buildIdentities(opts);
+    const { instances, observed, candidates } = buildIdentities(opts);
     const overall = overallFingerprintOf(instances);
 
     let previous: VersionFingerprintState | null = null;
@@ -170,14 +198,57 @@ export function scanInstances(opts: ScanOptions): ScanResult {
       previous ? previous.instances : null,
       instances,
     );
-    const fingerprint_changed =
+
+    // SessionStart: default ~4s wall-clock artifact budget (injectable for tests).
+    // Manual scan: no wall-clock cap unless caller injects artifactTimeBudgetMs.
+    const timeBudgetMs =
+      typeof opts.artifactTimeBudgetMs === "number"
+        ? opts.artifactTimeBudgetMs
+        : mode === "session_start"
+          ? DEFAULT_SESSION_START_ARTIFACT_TIME_BUDGET_MS
+          : undefined;
+    const currentBaselines = measureInstanceArtifactBaselines(
+      instances,
+      candidates,
+      {
+        inventoryRoot: opts.inventoryRoot,
+        timeBudgetMs,
+        nowMs: opts.artifactNowMs,
+      },
+    );
+    const currentArtifactDigest = overallArtifactDigest(currentBaselines);
+    const priorArtifacts = priorArtifactBaselinesOrNull(previous);
+    const local_artifact_diff: LocalArtifactDiff = classifyLocalArtifactDiff(
+      priorArtifacts,
+      currentBaselines,
+    );
+
+    const identityChanged =
       previous === null || previous.overall_fingerprint !== overall;
+    // Derive artifact axis from validated local diff + recomputed digests so
+    // public fields cannot contradict each other (e.g. fingerprint_changed=false
+    // while local_artifact_diff.status=content_changed).
+    const priorArtifactDigest =
+      priorArtifacts === null ? null : overallArtifactDigest(priorArtifacts);
+    // Incomplete wall-clock measurement (time_budget_exceeded on current) must
+    // never look like silent equality even when digests match prior gaps.
+    const currentTimeBudgetIncomplete = currentBaselines.some((b) =>
+      b.entries.some((e) => e.status === "time_budget_exceeded"),
+    );
+    const artifactChanged =
+      priorArtifacts === null
+        ? // No prior baseline history (v1 / first scan): establish is a change.
+          true
+        : priorArtifactDigest !== currentArtifactDigest ||
+          local_artifact_diff.status === "content_changed" ||
+          local_artifact_diff.status === "partial" ||
+          currentTimeBudgetIncomplete;
+    const fingerprint_changed = identityChanged || artifactChanged;
 
     const affected = resolveAffectedInstance(instances, observed);
-
     const platform_capability = capabilityBlockForScan(opts, instances);
 
-    // SessionStart: silent when unchanged.
+    // SessionStart: silent when both identity and artifact baselines unchanged.
     if (mode === "session_start" && !fingerprint_changed) {
       return {
         schema_version: 1,
@@ -201,17 +272,19 @@ export function scanInstances(opts: ScanOptions): ScanResult {
         repair_applied: false,
         error_code: null,
         error_message: null,
+        local_artifact_diff,
         platform_capability,
       };
     }
 
     let health_check = null;
-    if (mode === "session_start" && fingerprint_changed) {
+    // Health only when identity axis changed (artifact-only baseline establish
+    // remains a light notice without re-running health).
+    if (mode === "session_start" && identityChanged) {
       health_check = runReadOnlyHealthCheck(instances, {
         budgetMs: opts.healthBudgetMs ?? 10_000,
       });
-    } else if (mode === "manual_scan" && fingerprint_changed) {
-      // Manual scan remains equivalent: optional lightweight health summary.
+    } else if (mode === "manual_scan" && identityChanged) {
       health_check = runReadOnlyHealthCheck(instances, {
         budgetMs: opts.healthBudgetMs ?? 10_000,
       });
@@ -222,10 +295,12 @@ export function scanInstances(opts: ScanOptions): ScanResult {
     if (persist && fingerprint_changed) {
       const now = opts.now?.() ?? new Date();
       const next: VersionFingerprintState = {
-        schema_version: 1,
+        schema_version: 2,
         updated_at: now.toISOString(),
         overall_fingerprint: overall,
         instances,
+        artifact_baselines: currentBaselines,
+        overall_artifact_digest: currentArtifactDigest,
       };
       saveState(stateDir, next);
       state_updated = true;
@@ -253,6 +328,7 @@ export function scanInstances(opts: ScanOptions): ScanResult {
       repair_applied: false,
       error_code: null,
       error_message: null,
+      local_artifact_diff,
       platform_capability,
     };
   } catch (e) {

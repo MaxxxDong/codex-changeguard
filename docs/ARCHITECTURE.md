@@ -430,9 +430,36 @@ Comparing current identities to local version-fingerprint state classifies:
 - `newly_discovered` / `removed`
 - `path_precedence_drift` (PATH order changes without collapsing instances)
 
+**Separate axis — local installed-artifact baseline/diff.** Version transitions never invent component-level content claims. `ScanResult.local_artifact_diff` is a path-free facts surface that classifies:
+
+- `first_baseline` (no prior artifact baseline — including honest v1→v2 migration; does **not** claim content changed)
+- `unchanged`
+- `content_changed` (hash membership deltas on named components)
+- `partial` (gap-status transitions, or content plus gap; incomplete evidence is never labeled clean equality)
+- `unavailable` (no usable read_ok material, or integrity impossibilities after validation)
+
+It lists stably sorted `added` / `removed` / `hash_changed` / `gap_changed` rows and exposes current/previous baseline digests. Observed facts stay separate from hypotheses. Digest-only disagreement with zero entry deltas is impossible after validation and fails closed rather than inventing `content_changed`.
+
 ### 9.4 Version-fingerprint state
 
-Local state is versioned JSON (`schema_version: 1`) under an isolated state directory:
+Local state is versioned JSON under an isolated state directory. **Writers persist `schema_version: 2`.** Load remains **backward-readable from v1**: a v1 file yields empty `artifact_baselines` and does **not** invent historical artifact rows; the next successful scan establishes a v2 baseline atomically (`first_baseline` / baseline-established, never `content_changed` for missing history).
+
+v2 adds path-free `LocalArtifactBaseline` entries per `InstanceIdentity` (stable logical key/alias, kind, sha256, size, read/gap status only). Absolute paths and file bodies are never persisted. On **v2 load**, the parser **recomputes every `baseline_digest` from entries** and **recomputes `overall_artifact_digest` from validated baselines**, then refuses corrupt state fail-closed (existing `SCHEMA` / state error path — no silent trust or normalize). Bindings are an exact **one-to-one** map between `artifact_baselines` and `instances` by `instance_id` / `path_hash` / `path_alias` (reject duplicates, missing, extra, or binding mismatches). When baselines are non-empty, `overall_artifact_digest` must be a required 64-hex string.
+
+Measurement rules:
+
+- exact named candidates only — no recursive install-tree or home traversal; never execute a discovered binary
+- every instance: exact candidate executable/file plus existing registered `version_metadata_abs` / fixture metadata
+- macOS desktop `.app`: exact `Contents/Info.plist`, `Contents/Resources/app.asar`, `Contents/Resources/codex`, `Contents/_CodeSignature/CodeResources` when present under the registered real app root
+- Windows desktop/MSIX: exact existing manifest/metadata and candidate executable; optional exact `resources/app.asar` only under an already registered trusted root
+- generic CLI/package/WSL: exact candidate and existing registered metadata only
+- dedupe identical real named files; refuse symlinks and out-of-root paths; missing files are explicit gaps
+- streaming SHA-256 is read-only and stores only digests (never copies signed files); per-file cap **512 MiB**, per-scan cap **1 GiB**; over-cap is an explicit gap (never a truncated hash)
+- **wall-clock measurement budget** (monotonic; packaged SessionStart default **~4 s**, injectable for tests): checked before each named target **and inside the streaming read loop** (per chunk and before `read_ok`); once exhausted mid-file, partial hash material is discarded and the path-free gap is `time_budget_exceeded` (never a truncated digest/size). Remaining targets also emit the same gap. Incomplete current measurement (including repeated identical time-budget gaps) is honestly `partial` / `unavailable` and non-silent — never silent “unchanged”. Size/mtime alone never claim content equality
+
+`fingerprint_changed` / state update is derived from the **validated local artifact diff** and **recomputed** overall digests together with the identity overall fingerprint. Identity and artifact remain independent axes, but public fields cannot contradict each other (e.g. `fingerprint_changed=false` while `local_artifact_diff.status=content_changed`).
+
+Other persistence rules:
 
 - atomic safe write (temp sibling + rename)
 - strict schema, size bound, and no-symlink handling
@@ -441,10 +468,23 @@ Local state is versioned JSON (`schema_version: 1`) under an isolated state dire
 ### 9.5 SessionStart and manual scan
 
 - Packaged plugin `SessionStart` uses a dedicated entrypoint `dist/hooks/session-start-entry.js` invoked with POSIX `$PLUGIN_ROOT` and Windows `commandWindows` `%PLUGIN_ROOT%` (see `hooks/hooks.json`). Codex runs hooks with session `cwd`, supplies `PLUGIN_ROOT` / `PLUGIN_DATA`, and JSON on stdin. Version-fingerprint state is stored under `PLUGIN_DATA`, never the project/session cwd. Stdin is parsed under a size bound; `cwd` is observed context only.
-- Trusted packaged SessionStart runs the **system** enumeration + shared scan core only when the **overall** fingerprint changed, then completes a bounded read-only health check under 10 seconds.
-- With no fingerprint change, the packaged hook exits **0 with no stdout** (and `silent: true` on the internal result). On change it may emit valid SessionStart JSON (`hookSpecificOutput.additionalContext`) without raw paths.
+- Trusted packaged SessionStart always runs **system** enumeration + shared scan core (including named-artifact measurement under the wall-clock budget). When the overall identity fingerprint **or** artifact baseline changed, it may emit non-silent context; a bounded read-only health check under 10 seconds runs when the **identity** axis changed. A pure v1→v2 artifact baseline establish may emit one non-silent baseline-established notice without claiming content changed.
+- Pure **artifact** drift (identity/version transition unchanged) headlines as **local installed-artifact fingerprint/baseline changed**, not “version fingerprint changed”. When both axes change, both are named. Detail lines include `local_artifact_gap_changed` counts.
+- Identity unchanged + incomplete/unavailable artifact measurement (e.g. repeated `time_budget_exceeded`) headlines as **local installed-artifact measurement incomplete/unavailable** — never “version fingerprint changed”. Identity changed + unavailable measurement states version change **and** incomplete local artifact measurement.
+- With no identity/artifact change, the packaged hook exits **0 with no stdout** (and `silent: true` on the internal result). On change it may emit valid SessionStart JSON (`hookSpecificOutput.additionalContext`) without raw paths, including bounded `local_artifact_*` status/counts/keys when relevant.
 - Hook timeout remains **10 seconds**. Untrusted / skipped / failed behavior is enforced by Codex hook trust; manual paths still represent those states for tests (`changeguard session-start … --hook-trust=`).
-- Manual scan paths: fixture `changeguard scan` / `changeguard_scan`, and production `changeguard scan-system` / `changeguard_scan_system`. All share one `ScanResult` shape without duplicate decision logic.
+- Manual scan paths: fixture inventory `changeguard scan` / `changeguard_scan` (explicit inventory/fixtures), and production `changeguard scan-system` / `changeguard_scan_system` (real installed instances). Packaged SessionStart uses the system adapter. All share one `ScanResult` shape without duplicate decision logic.
+
+### 9.5.1 Answering “what changed in my current Codex version?”
+
+Skill orchestration order (facts only; production CLI/MCP stay offline):
+
+1. Scan **real registered** Codex instances with `scan-system` (or packaged SessionStart) and read `local_artifact_diff`. Use fixture `scan` only for explicit inventory fixtures / tests — not as the live-install path.
+2. Gather official changelog/release/source-diff evidence and relevant GitHub Issues through the Codex host where available (not via production network code in this plugin).
+3. Present three separate sections: **Official evidence**, **Observed local artifact delta**, **Inferences/issue candidates** (keep inference clearly separate from official and local facts).
+4. If official notes are absent but a local delta exists, do **not** label the update itself `INCONCLUSIVE`; say official feature-level notes are unavailable while the named component delta is locally verified.
+5. If status is `first_baseline`, state explicitly that the already-completed historical update cannot be reconstructed from missing old bytes and that the baseline is now retained for the next update.
+6. Incomplete measurement (time budget / gaps) is explicit incomplete evidence — never silent equality.
 
 ### 9.6 Repair-target binding
 

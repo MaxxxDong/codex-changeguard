@@ -363,7 +363,7 @@ function toolSchemas() {
     {
       name: TOOL_SCAN,
       description:
-        "Deterministic multi-instance / version-fingerprint scan over an isolated inventory fixture. Returns ScanResult. Never executes discovered binaries for version, never exposes raw paths, never uses the network.",
+        "Deterministic multi-instance / version-fingerprint + path-free local artifact baseline/diff scan over an isolated inventory fixture. Returns ScanResult (includes local_artifact_diff). Never executes discovered binaries, never exposes raw paths, never uses the network.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -380,7 +380,7 @@ function toolSchemas() {
     {
       name: TOOL_SCAN_SYSTEM,
       description:
-        "Production registered system adapter: enumerates bounded known Codex candidates (Desktop, PATH, package roots, MSIX, WSL) without executing them. Returns ScanResult with hashes/aliases only. Requires state_dir (or PLUGIN_DATA).",
+        "Production registered system adapter: enumerates bounded known Codex candidates (Desktop, PATH, package roots, MSIX, WSL) without executing them. Returns ScanResult with path hashes/aliases and path-free local_artifact_diff only. Requires state_dir (or PLUGIN_DATA).",
       inputSchema: {
         type: "object",
         additionalProperties: false,

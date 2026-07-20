@@ -105,15 +105,146 @@ export function readStdinSyncBounded(maxBytes = MAX_STDIN_BYTES): string {
 }
 
 /**
- * Format a path-free additionalContext summary for SessionStart version change.
+ * Format a path-free additionalContext summary for SessionStart version/artifact change.
+ * Includes bounded artifact status/counts/keys when relevant; never raw paths.
+ *
+ * Headline truth table (identity vs measurement honesty):
+ * - baselineEstablished (previous_fingerprint === null) is distinct from version change
+ * - identityChanged only when a prior fingerprint exists and differs, or a real
+ *   non-unchanged transition is observed (never baseline establishment alone)
+ * - unavailable / gap-only partial are measurement honesty claims, not content change
+ * - partial with hash/added/removed deltas reports content change plus incomplete measurement
+ * - no generic fallback claims version change without an actual identity transition
  */
 export function formatSessionStartContext(result: ScanResult): string {
+  const art = result.local_artifact_diff;
+  // Baseline establishment is not a version transition observation.
+  const baselineEstablished = result.previous_fingerprint === null;
+  // Actual identity/version change: prior fingerprint present and differs, or a
+  // non-unchanged transition after a prior baseline (not first-seen establishment).
+  const identityChanged =
+    result.previous_fingerprint !== null &&
+    (result.previous_fingerprint !== result.overall_fingerprint ||
+      (result.primary_transition !== "unchanged" &&
+        result.primary_transition !== "first_baseline"));
+
+  const artifactAxis =
+    !!art &&
+    (art.status === "first_baseline" ||
+      art.status === "content_changed" ||
+      art.status === "partial");
+
+  // Incomplete / unavailable measurement is not a content claim and must not
+  // fall through to generic "version/artifact changed" wording.
+  const measurementUnavailable = !!art && art.status === "unavailable";
+  // Gap-only partial (including first/repeated timeouts) is incomplete evidence,
+  // not a content-change claim — gap_changed alone does not make it content.
+  const measurementIncompleteOnly =
+    !!art &&
+    art.status === "partial" &&
+    art.hash_changed.length === 0 &&
+    art.added.length === 0 &&
+    art.removed.length === 0;
+  const measurementPartialWithContent =
+    !!art &&
+    art.status === "partial" &&
+    (art.hash_changed.length > 0 ||
+      art.added.length > 0 ||
+      art.removed.length > 0);
+
+  let headline: string;
+  if (art && art.status === "first_baseline") {
+    // Truth table for art.status first_baseline:
+    // 1) baselineEstablished → first-ever scan: version + artifact baseline established
+    // 2) !baselineEstablished && identityChanged → version changed; artifact baseline newly established
+    //    (e.g. v1→v2 migration with a real identity/version change; prior fingerprint non-null)
+    // 3) !baselineEstablished && !identityChanged → artifact baseline only (e.g. pure v1 migration)
+    if (baselineEstablished) {
+      headline =
+        "ChangeGuard version fingerprint / artifact baseline established.";
+    } else if (identityChanged) {
+      headline =
+        "ChangeGuard version fingerprint changed; local installed-artifact baseline established.";
+    } else {
+      headline =
+        "ChangeGuard local installed-artifact fingerprint/baseline established.";
+    }
+  } else if (measurementUnavailable) {
+    if (baselineEstablished) {
+      headline =
+        "ChangeGuard version fingerprint baseline established; local installed-artifact measurement unavailable.";
+    } else if (identityChanged) {
+      headline =
+        "ChangeGuard version fingerprint changed; local installed-artifact measurement unavailable.";
+    } else {
+      headline =
+        "ChangeGuard local installed-artifact measurement unavailable.";
+    }
+  } else if (measurementIncompleteOnly) {
+    if (baselineEstablished) {
+      headline =
+        "ChangeGuard version fingerprint baseline established; local installed-artifact measurement incomplete.";
+    } else if (identityChanged) {
+      headline =
+        "ChangeGuard version fingerprint changed; local installed-artifact measurement incomplete.";
+    } else {
+      headline =
+        "ChangeGuard local installed-artifact measurement incomplete.";
+    }
+  } else if (measurementPartialWithContent) {
+    if (baselineEstablished) {
+      headline =
+        "ChangeGuard version fingerprint baseline established; local installed-artifact change was detected but measurement is incomplete.";
+    } else if (identityChanged) {
+      headline =
+        "ChangeGuard version fingerprint changed; local installed-artifact change was detected but measurement is incomplete.";
+    } else {
+      headline =
+        "ChangeGuard local installed-artifact change was detected but measurement is incomplete.";
+    }
+  } else if (identityChanged && artifactAxis) {
+    headline =
+      "ChangeGuard version fingerprint and local installed-artifact fingerprint/baseline changed.";
+  } else if (artifactAxis && !identityChanged) {
+    headline =
+      "ChangeGuard local installed-artifact fingerprint/baseline changed.";
+  } else if (identityChanged) {
+    headline = "ChangeGuard version fingerprint changed.";
+  } else if (baselineEstablished) {
+    headline = "ChangeGuard version fingerprint baseline established.";
+  } else {
+    // No actual version transition observed; never claim version change here.
+    headline =
+      "ChangeGuard local installed-artifact fingerprint/baseline changed.";
+  }
+
   const lines = [
-    "ChangeGuard version fingerprint changed.",
+    headline,
     `primary_transition=${result.primary_transition}`,
     `instances=${result.instances.length}`,
     `overall_fingerprint=${result.overall_fingerprint.slice(0, 16)}…`,
   ];
+  if (art) {
+    lines.push(
+      `local_artifact_status=${art.status}`,
+      `local_artifact_measured=${art.entry_counts.measured}`,
+      `local_artifact_read_ok=${art.entry_counts.read_ok}`,
+      `local_artifact_gaps=${art.entry_counts.gaps}`,
+      `local_artifact_hash_changed=${art.hash_changed.length}`,
+      `local_artifact_added=${art.added.length}`,
+      `local_artifact_removed=${art.removed.length}`,
+      `local_artifact_gap_changed=${art.gap_changed.length}`,
+    );
+    if (art.keys.length > 0) {
+      const keyPreview = art.keys.slice(0, 24).join(",");
+      lines.push(`local_artifact_keys=${keyPreview}`);
+    }
+    if (art.status === "first_baseline") {
+      lines.push(
+        "artifact_note=historical_update_not_reconstructable;baseline_retained_for_next_scan",
+      );
+    }
+  }
   if (result.health_check) {
     lines.push(
       `health_check_ok=${result.health_check.ok}`,
